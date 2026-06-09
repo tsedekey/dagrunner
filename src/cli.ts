@@ -15,7 +15,8 @@ import {
   resolveConfig,
 } from "./xdg.js";
 import { releaseLock } from "./lock.js";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { generateReport } from "./report.js";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { assertAuth } from "./launcher.js";
@@ -279,10 +280,25 @@ function cmdCleanup(argv: string[]): void {
 function cmdReport(argv: string[]): void {
   const runId = argv[0];
   if (runId === undefined) {
-    process.stderr.write(`dagrun report: missing <run-id> argument.\n`);
+    process.stderr.write(`dagrun: report requires <run-id>\n`);
     process.exit(1);
   }
-  process.stdout.write(`report not yet wired to engine (Block 8)\n`);
+  const homeDir = resolveHome();
+  const runDir = join(homeDir, "runs", runId);
+  const stateFile = join(runDir, "state.json");
+  if (!existsSync(stateFile)) {
+    process.stderr.write(`dagrun: run "${runId}" not found\n`);
+    process.exit(1);
+  }
+  const state = readState(stateFile);
+  const frictionFile = join(runDir, "friction.jsonl");
+  const frictionLines = existsSync(frictionFile)
+    ? readFileSync(frictionFile, "utf8").trim().split("\n").filter(Boolean)
+    : [];
+  const html = generateReport(state, frictionLines);
+  const outPath = join(runDir, "report.html");
+  writeFileSync(outPath, html, "utf8");
+  process.stdout.write(`dagrun: report written to ${outPath}\n`);
 }
 
 function cmdLogs(argv: string[]): void {
