@@ -23,6 +23,10 @@ export type NodeLaunchEnv = {
   /** Absolute path to <runDir>/<nodeId>/ */
   DAGRUN_ARTIFACTS: string;
   DAGRUN_WORKTREE: string;
+  /** The current node's id — used by stop-schema.sh and session-end.sh */
+  DAGRUN_NODE_ID: string;
+  /** Absolute path to the run directory (runs/<run-id>/) — used by session-end.sh */
+  DAGRUN_RUN_DIR: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -47,6 +51,8 @@ export function buildNodeEnv(
     DAGRUN_RUN_ID: runId,
     DAGRUN_ARTIFACTS: join(runDir, nodeId),
     DAGRUN_WORKTREE: worktreePath,
+    DAGRUN_NODE_ID: nodeId,
+    DAGRUN_RUN_DIR: runDir,
   };
 }
 
@@ -64,6 +70,8 @@ export function applyNodeEnv(env: NodeLaunchEnv): void {
   process.env["DAGRUN_RUN_ID"] = env.DAGRUN_RUN_ID;
   process.env["DAGRUN_ARTIFACTS"] = env.DAGRUN_ARTIFACTS;
   process.env["DAGRUN_WORKTREE"] = env.DAGRUN_WORKTREE;
+  process.env["DAGRUN_NODE_ID"] = env.DAGRUN_NODE_ID;
+  process.env["DAGRUN_RUN_DIR"] = env.DAGRUN_RUN_DIR;
 }
 
 // ---------------------------------------------------------------------------
