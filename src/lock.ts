@@ -42,7 +42,14 @@ export function acquireLock(homeDir: string, runId: string): void {
 
   if (existsSync(path)) {
     const existing = readLock(homeDir);
-    if (existing !== null && existing.runId !== runId) {
+    if (existing === null) {
+      // File exists but is unparseable — fatal; don't silently overwrite.
+      process.stderr.write(
+        `dagrun: active.lock at "${path}" is corrupt or unreadable — remove it manually.\n`,
+      );
+      process.exit(1);
+    }
+    if (existing.runId !== runId) {
       process.stderr.write(
         `dagrun: active run: ${existing.runId} (pid ${existing.pid}), use --force to override.\n`,
       );
