@@ -1,0 +1,28 @@
+# Build output
+dist/
+*.tsbuildinfo
+
+# Dependencies
+node_modules/
+
+# Runtime / state (dagrunner XDG home is outside the repo, but never commit local state)
+*.log
+.env
+.env.*
+!.env.example
+
+# Private / synced context (must never be committed to a project repo)
+CLAUDE.local.md
+**/CLAUDE.local.md
+.devharness/
+
+# Build-agent autonomy artifacts (regenerated each run)
+DECISIONS.md
+BUILD-REPORT.md
+
+# OS / editor noise
+.DS_Store
+*.swp
+.idea/
+.vscode/*
+!.vscode/extensions.json

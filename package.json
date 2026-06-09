@@ -1,0 +1,32 @@
+{
+  "name": "dagrunner",
+  "version": "0.1.0",
+  "description": "A thin DAG runner that orchestrates Claude Code (Agent SDK) across git worktrees, with checkpoint-and-exit conversation-led gates. Owns only what has no native Claude Code primitive that survives across processes/worktrees; reuses Claude Code for everything else.",
+  "type": "module",
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "bin": {
+    "dagrun": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "watch": "tsc -p tsconfig.json --watch",
+    "test": "node --test --import tsx ./src/**/*.test.ts",
+    "test:unit": "node --test --import tsx ./src/**/*.test.ts",
+    "smoke": "node --import tsx ./test/smoke/smoke.ts",
+    "dagrun": "node --import tsx ./src/cli.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "$comment": "dagrunner BUILD harness settings. Written during Phase 0 (pre-sleep) so it is never authored mid-run (writing .claude/settings.json would prompt and hang even under bypass). The SDK only loads this when query() is given settingSources: ['project'].",
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "disallowedTools": [
+      "Bash(sudo:*)",
+      "Bash(rm -rf /*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(curl:* | sh)",
+      "Bash(curl:* | bash)",
+      "WebFetch"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/deny-guard.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx prettier --write \"$CLAUDE_FILE_PATHS\" 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}
