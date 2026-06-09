@@ -1,0 +1,137 @@
+/**
+ * Shared TypeScript types for dagrunner workflow definitions.
+ *
+ * This file has ZERO runtime dependencies — no SDK, no Node built-ins.
+ * It is the contract layer: precise unions over string/any everywhere.
+ */
+
+// ---------------------------------------------------------------------------
+// Model tiers (validated at load time)
+// ---------------------------------------------------------------------------
+
+export type ModelTier = "haiku" | "sonnet";
+
+// ---------------------------------------------------------------------------
+// Artifact accessor context (passed to `when` predicates)
+// ---------------------------------------------------------------------------
+
+/**
+ * Read-only accessor for upstream node artifacts. Artifacts are the ONLY
+ * cross-node channel — no in-memory upstream returns, no shared state.
+ */
+export type Ctx = {
+  /** Parse and return the JSON artifact produced by nodeId. */
+  json(nodeId: string): unknown;
+  /** Read a named text artifact produced by nodeId. */
+  read(nodeId: string, file: string): string;
+  /** Return the artifact directory path for nodeId. */
+  dir(nodeId: string): string;
+};
+
+// ---------------------------------------------------------------------------
+// Gate config
+// ---------------------------------------------------------------------------
+
+export type GateConfig = {
+  /** Max human-review iterations before a forced terminal choice. Default 10. */
+  maxIterations?: number;
+  /**
+   * On reject: revise-self (default) or re-run a specific prior node.
+   * Template literal enforces `rerun:<id>` shape at the type level.
+   */
+  onReject?: "revise-self" | `rerun:${string}`;
+};
+
+// ---------------------------------------------------------------------------
+// Loop config
+// ---------------------------------------------------------------------------
+
+export type LoopConfig = {
+  /** Hard ceiling on loop iterations. */
+  maxIterations: number;
+  /** Shell command string; exit 0 = loop passes. */
+  until: string;
+  /**
+   * Behaviour when maxIterations is exhausted without the shell gate passing.
+   * Default 'gate'.
+   */
+  onExhausted?: "fail" | "gate" | "continue";
+};
+
+// ---------------------------------------------------------------------------
+// Join rule
+// ---------------------------------------------------------------------------
+
+export type JoinRule = "none-failed-min-one-success";
+
+// ---------------------------------------------------------------------------
+// Node definition
+// ---------------------------------------------------------------------------
+
+export type Node = {
+  /** Unique node identifier within the workflow. */
+  id: string;
+  /** IDs of nodes that must complete before this node is eligible to run. */
+  dependsOn?: string[];
+  /** Predicate evaluated at scheduling time; false → node is skipped. */
+  when?: (ctx: Ctx) => boolean;
+  /**
+   * Slash command or skill reference, e.g. "/expand-guide" or "skill:review".
+   */
+  command: string;
+  /** Model tier. Omit = unpinned (opusplan chooses). */
+  model?: ModelTier;
+  /** Tool names auto-allowed for this node's SDK session. */
+  allowedTools?: string[];
+  /** JSON schema for structured output (classify node etc.). */
+  outputSchema?: Record<string, unknown>;
+  /** Artifact files this node must produce; verified post-run by the runner. */
+  produces?: string[];
+  /** When true the node must emit valid JSON; runner verifies. */
+  producesJson?: boolean;
+  /** Human-review gate config. */
+  gate?: GateConfig;
+  /** Autonomous loop config (stop-hook driven). */
+  loop?: LoopConfig;
+  /** When true, a failed run degrades this node to 'skipped' instead of 'failed'. */
+  optional?: boolean;
+  /** How to proceed when joining from multiple parallel predecessors. */
+  joinRule?: JoinRule;
+  /** Max infra/transient retries before marking the node failed. Default 2. */
+  maxRetries?: number;
+  /** Per-node spend ceiling in USD (for unpinned/Opus-eligible nodes). */
+  maxBudget?: number;
+  /** Per-node hook scripts. */
+  hooks?: { stop?: string };
+};
+
+// ---------------------------------------------------------------------------
+// Workflow definition
+// ---------------------------------------------------------------------------
+
+export type Workflow = {
+  /** Human-readable workflow name (e.g. "feature-pipeline"). */
+  name: string;
+  /** Ordered list of node definitions. */
+  nodes: Node[];
+  /** Max concurrent SDK sessions. Default 6. */
+  maxParallel?: number;
+};
+
+// ---------------------------------------------------------------------------
+// classify.json schema
+// ---------------------------------------------------------------------------
+
+/**
+ * Shape of the structured JSON object that the `classify` node emits.
+ * Runner writes this from SDK `structured_output`; downstream `when` predicates
+ * read it via `ctx.json('classify')`.
+ */
+export type ClassifyOutput = {
+  touches_public_api: boolean;
+  touches_runtime: boolean;
+  perf_sensitive: boolean;
+  touches_schema_or_proto: boolean;
+  needs_runtime: boolean;
+  risk: "low" | "med" | "high";
+};
