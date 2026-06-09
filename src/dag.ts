@@ -79,6 +79,7 @@ export function computeReadyNodes(
 
         if (depStatus === "done") continue;
         if (depStatus === "failed" && isOptional) continue; // optional fail → treat as skipped, non-blocking for deps check
+        if (depStatus === "skipped" && isOptional) continue; // optional skipped dep is terminal and non-blocking
         // Any other non-done status (pending, running, awaiting-gate, skipped, failed-required) blocks.
         blocked = true;
         break;
@@ -183,13 +184,23 @@ export async function runDag(
   // Main scheduling loop.
   while (!allTerminal()) {
     // Evaluate when predicates: skip pending nodes whose predicate returns false.
+    // Only evaluate when all deps are terminal — ctx.json() may not be safe otherwise.
+    const terminalStatuses: ReadonlySet<NodeStatus> = new Set([
+      "done",
+      "skipped",
+      "failed",
+      "awaiting-gate",
+    ]);
     for (const node of workflow.nodes) {
       const ns = run.nodes[node.id];
-      if (
-        ns?.status === "pending" &&
-        node.when !== undefined &&
-        !node.when(ctx)
-      ) {
+      if (ns?.status !== "pending" || node.when === undefined) continue;
+      // Guard: all deps must be terminal before evaluating the when predicate.
+      const deps = node.dependsOn ?? [];
+      const depsTerminal = deps.every((d) =>
+        terminalStatuses.has(statusMap()[d] ?? "pending"),
+      );
+      if (!depsTerminal) continue;
+      if (!node.when(ctx)) {
         updateNode(node.id, {
           status: "skipped",
           endedAt: new Date().toISOString(),
@@ -240,20 +251,16 @@ export async function runDag(
       }),
     );
 
-    // Process results one by one.
+    // Process results in two passes to avoid losing sibling results when a gate is hit.
+    // Pass 1: process all non-gate results (done, failed, retry); also short-circuit on hard failures.
+    let gateResult: (typeof results)[number] | undefined;
     for (const { id, node, result } of results) {
       const now = new Date().toISOString();
 
       if (result.status === "awaiting-gate") {
-        updateNode(id, {
-          status: "awaiting-gate",
-          sessionId: result.sessionId,
-          iteration: result.iteration,
-          endedAt: now,
-        });
-        run = { ...run, status: "paused" };
-        save();
-        return run; // Checkpoint-and-exit at first gate.
+        // Defer gate handling to pass 2; continue processing siblings.
+        gateResult = { id, node, result };
+        continue;
       }
 
       if (result.status === "done") {
@@ -294,7 +301,7 @@ export async function runDag(
             endedAt: now,
           });
         } else {
-          // Non-optional, terminal failure.
+          // Non-optional, terminal failure — short-circuit immediately.
           updateNode(id, {
             status: "failed",
             error: result.error,
@@ -308,7 +315,39 @@ export async function runDag(
 
       save();
     }
+
+    // Pass 2: if any awaiting-gate result was found, checkpoint-and-exit now.
+    if (gateResult !== undefined) {
+      const { id, result } = gateResult;
+      const now = new Date().toISOString();
+      // result is narrowed to awaiting-gate by the gateResult assignment above.
+      const gateRes = result as Extract<
+        typeof result,
+        { status: "awaiting-gate" }
+      >;
+      updateNode(id, {
+        status: "awaiting-gate",
+        sessionId: gateRes.sessionId,
+        iteration: gateRes.iteration,
+        endedAt: now,
+      });
+      run = { ...run, status: "paused" };
+      save();
+      return run; // Checkpoint-and-exit.
+    }
   }
+
+  // Bug 2: mark any remaining pending nodes as skipped (blocked-by-skipped-dep chains).
+  // These are nodes that can never become ready because their only path was cut off.
+  for (const [id, ns] of Object.entries(run.nodes)) {
+    if (ns.status === "pending") {
+      updateNode(id, {
+        status: "skipped",
+        endedAt: new Date().toISOString(),
+      });
+    }
+  }
+  save();
 
   // Check final run status.
   const anyFailed = Object.values(run.nodes).some(

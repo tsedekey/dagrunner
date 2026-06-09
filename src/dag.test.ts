@@ -533,3 +533,28 @@ test("[expected-fail until Block4] Test 6 — reconcile: running node becomes fa
     "stale lockfile must be gone after engine releases it",
   );
 });
+
+// ---------------------------------------------------------------------------
+// Test 7 — Bug 1: optional dep skipped → downstream ready (default join rule)
+// ---------------------------------------------------------------------------
+
+test("[expected-fail until Block4] Test 7 — optional dep skipped → downstream ready", async () => {
+  const { computeReadyNodes } = (await import(DAG_MODULE)) as {
+    computeReadyNodes: (nodes: Node[], statuses: NodeStatusMap) => string[];
+  };
+
+  // 'a' is optional and has been degraded to 'skipped'.
+  // 'b' depends on 'a' (default join rule, no joinRule override).
+  // Because 'a' is optional, its skipped status is non-blocking — 'b' must be ready.
+  const nodes: Node[] = [
+    { id: "a", command: "/a", optional: true },
+    { id: "b", command: "/b", dependsOn: ["a"] },
+  ];
+
+  const statuses: NodeStatusMap = { a: "skipped", b: "pending" };
+  const ready = computeReadyNodes(nodes, statuses);
+  assert.ok(
+    ready.includes("b"),
+    "b must be ready when its only dep (optional 'a') is skipped",
+  );
+});
