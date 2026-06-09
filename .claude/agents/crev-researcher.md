@@ -11,8 +11,9 @@ for dagrunner's "thin binary + Claude Code primitives" philosophy. Your job is t
 concrete, borrowable patterns so the coordinator copies proven designs instead of reinventing them.
 
 ## Your task
+
 1. Locate and read, in the `camunda/crev` repo: `docs/plan.md`, `AGENTS.md`, and the CLI entrypoint
-   + hook scripts if present. Use Grep/Glob to find them; do not read the entire repo.
+   - hook scripts if present. Use Grep/Glob to find them; do not read the entire repo.
 2. Extract ONLY these patterns, with file/line references where you can:
    - **Thin-binary boundary**: what lives in the binary vs. iterable config (agents/hooks/prompts).
    - **Stop-hook deterministic gate**: how crev validates coordinator JSON output against a schema
@@ -29,12 +30,14 @@ concrete, borrowable patterns so the coordinator copies proven designs instead o
      DIVERGES (it mutates code, so it needs gates + worktree isolation crev never needed).
 
 ## Output contract
+
 Return a single markdown summary titled "crev borrowable patterns" with one short section per pattern
 above: what crev does, the file reference, and the one-line implication for dagrunner. Keep it tight
 — this summary goes into the coordinator's context, so no raw file dumps. If a pattern cannot be
 found, say so explicitly rather than guessing.
 
 ## Hard rules
+
 - **Read-only.** You have Bash for `git`/`grep` navigation only — never edit, never commit, never
   write to the crev repo or anywhere else.
 - Do not speculate about crev internals you did not read. Cite or say "not found".

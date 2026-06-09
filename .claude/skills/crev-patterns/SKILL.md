@@ -61,13 +61,13 @@ scripts) and confirm/refresh the specifics below before they are relied on.
 
 ## Borrow/diverge cheat sheet
 
-| Dimension | crev | dagrunner | Verdict |
-|---|---|---|---|
-| Binary weight | thin (~500 LoC) | thin | borrow |
-| Language | Go | TS | diverge (justified) |
-| Parallel specialists | subagents in one session | first-class DAG nodes | diverge |
-| Deterministic gate | Stop hook + ajv schema | Stop hook convergence/schema | borrow mechanism |
-| Re-run on new commits | `--since <run-id>` | phase-2 ci-babysit | borrow (phase 2) |
-| Cost cap | `--max-budget-usd` | per-run + per-node | borrow |
-| Home layout | XDG + CREV_HOME | XDG + DAGRUNNER_HOME | borrow |
-| Mutation | review-only | write-and-gate | diverge (reason to exist) |
+| Dimension             | crev                     | dagrunner                    | Verdict                   |
+| --------------------- | ------------------------ | ---------------------------- | ------------------------- |
+| Binary weight         | thin (~500 LoC)          | thin                         | borrow                    |
+| Language              | Go                       | TS                           | diverge (justified)       |
+| Parallel specialists  | subagents in one session | first-class DAG nodes        | diverge                   |
+| Deterministic gate    | Stop hook + ajv schema   | Stop hook convergence/schema | borrow mechanism          |
+| Re-run on new commits | `--since <run-id>`       | phase-2 ci-babysit           | borrow (phase 2)          |
+| Cost cap              | `--max-budget-usd`       | per-run + per-node           | borrow                    |
+| Home layout           | XDG + CREV_HOME          | XDG + DAGRUNNER_HOME         | borrow                    |
+| Mutation              | review-only              | write-and-gate               | diverge (reason to exist) |

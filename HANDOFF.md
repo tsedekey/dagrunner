@@ -1,7 +1,7 @@
 # HANDOFF.md — dagrunner v1 Build Plan
 
 > You are the **coordinating agent** for an unattended overnight build of **dagrunner v1**.
-> Read this file first, in full. It is the task plan and sequencing — the *design decisions*
+> Read this file first, in full. It is the task plan and sequencing — the _design decisions_
 > live in the `architecture-spec` skill (theme-chunked). Load spec slices on demand per task block.
 > You **delegate and verify**; you do **not** write implementation code yourself.
 
@@ -20,6 +20,7 @@ v1 ships when ALL of the following are green:
    6. Kill the process mid-`implement`, `dagrun resume` → reconciles (running→failed) → re-runs cleanly.
 2. **Tier-1 unit tests pass** (DAG core, schema validation, state I/O, reconcile) via the mock executor — no SDK calls.
 3. **`dagrun report <run-id>`** renders a self-contained static HTML snapshot from `state.json`.
+4. The build is done only when npm run verify-baseline exits 0
 
 If you cannot reach all three, the run is still a success if you **maximize completed blocks**,
 isolate blockers, commit progress, and leave a clear `BUILD-REPORT.md` (see §4).
@@ -59,18 +60,18 @@ wheels — lean on Claude Code; build only the cross-process gaps.**
 Each block: load the named spec slice → dispatch to the named subagent with a tight brief →
 receive summary + artifacts → run the block's acceptance gate → `git commit` → next.
 
-| Phase | Block | Owner subagent | Depends on | Spec slice |
-|---|---|---|---|---|
-| 0 | Harness already in place (this scaffold). Verify settings.json loads, Context7 + LSP on. | coordinator | — | Theme 0 (harness) |
-| 1 | Read `camunda/crev` (`docs/plan.md`, `AGENTS.md`) + Agent SDK docs; report borrowable patterns | `crev-researcher`, `sdk-researcher` | 0 | crev-patterns skill |
-| 2 | Typed workflow schema + load-time validation | `types-author` | 1 | Themes 3, 9 |
-| 3 | Mock executor + tier-1 unit tests (test-FIRST) | `test-author` | 2 | Theme 14 |
-| 4 | DAG core (topo, readiness, join, when-skip, retry) | `engine-author` | 2, 3 | Themes 3, 6, 10 |
-| 5 | Launcher + env-propagation + XDG bootstrap (`init`) | `engine-author` | 4 | Themes 7, 13 |
-| 6 | Hooks (SessionStart sync, Stop verifier/schema, PostToolUse format, SessionEnd capture) | `hooks-author` | 5 | Theme 8 |
-| 7 | Thin-slice nodes (`classify`→`expand-guide`→`implement`) + gate/resume + state | `engine-author` | 6 | Themes 4, 5, 11 |
-| 8 | `dagrun report` static HTML snapshot | `engine-author` | 7 | Theme 10, UI decision |
-| 9 | 6-step smoke test, captured green | `test-author` | 7, 8 | Theme 14 |
+| Phase | Block                                                                                          | Owner subagent                      | Depends on | Spec slice            |
+| ----- | ---------------------------------------------------------------------------------------------- | ----------------------------------- | ---------- | --------------------- |
+| 0     | Harness already in place (this scaffold). Verify settings.json loads, Context7 + LSP on.       | coordinator                         | —          | Theme 0 (harness)     |
+| 1     | Read `camunda/crev` (`docs/plan.md`, `AGENTS.md`) + Agent SDK docs; report borrowable patterns | `crev-researcher`, `sdk-researcher` | 0          | crev-patterns skill   |
+| 2     | Typed workflow schema + load-time validation                                                   | `types-author`                      | 1          | Themes 3, 9           |
+| 3     | Mock executor + tier-1 unit tests (test-FIRST)                                                 | `test-author`                       | 2          | Theme 14              |
+| 4     | DAG core (topo, readiness, join, when-skip, retry)                                             | `engine-author`                     | 2, 3       | Themes 3, 6, 10       |
+| 5     | Launcher + env-propagation + XDG bootstrap (`init`)                                            | `engine-author`                     | 4          | Themes 7, 13          |
+| 6     | Hooks (SessionStart sync, Stop verifier/schema, PostToolUse format, SessionEnd capture)        | `hooks-author`                      | 5          | Theme 8               |
+| 7     | Thin-slice nodes (`classify`→`expand-guide`→`implement`) + gate/resume + state                 | `engine-author`                     | 6          | Themes 4, 5, 11       |
+| 8     | `dagrun report` static HTML snapshot                                                           | `engine-author`                     | 7          | Theme 10, UI decision |
+| 9     | 6-step smoke test, captured green                                                              | `test-author`                       | 7, 8       | Theme 14              |
 
 **Ordering note — test-before-engine is deliberate:** Phase 3 (mock executor + tests) precedes
 Phase 4 (engine) so the engine is built against a runnable spec and is provable the moment it exists.
@@ -93,10 +94,11 @@ Phase 4 (engine) so the engine is built against a runnable spec and is provable 
 - **Budget ceiling.** Honor the run-level `--max-budget-usd`. On hit: checkpoint-and-exit with state
   intact and the resume command in the report. Never burn unbounded.
 - **Fresh-model verification** on the two load-bearing blocks (DAG core, launcher): after the author
-  subagent finishes, dispatch a *different* subagent instance to try to **refute** correctness (flag
+  subagent finishes, dispatch a _different_ subagent instance to try to **refute** correctness (flag
   correctness gaps only, not style). Over-engineering is a defect — keep it minimal.
 - **Morning report.** Final step: write `BUILD-REPORT.md` — blocks done/blocked, assumptions from
   `DECISIONS.md`, smoke-test result, total cost, and the exact resume command for anything incomplete.
+  Run npm run verify-baseline last and record its exit status + failing gate (if any) in BUILD-REPORT.md
 
 ---
 
@@ -141,7 +143,7 @@ Resolution order is documented and **fails loud** with the exact paths checked. 
 reconcile; `dagrun report` static HTML; the 6-step smoke test.
 
 **Phase 2 (spec only, do NOT build):** the remaining feature nodes (reviewers fan-out, synthesize-and-fix,
-verify-seed, pr, reflect, apply-reflection are *config additions* on the proven engine — but only the
+verify-seed, pr, reflect, apply-reflection are _config additions_ on the proven engine — but only the
 thin slice is required for v1 done); `ci-babysit` + `review-triage` scheduled workflows; `--since`
 incremental; cross-run `store/` learning; live `dagrun ui` (Node-http + SSE + vanilla HTML).
 

@@ -41,9 +41,9 @@ the closest spec-aligned choice.
 - **run-id = `<issue>-<slug>`** (e.g. `4521-job-priority`), mirrors branch `feature/<issue>-<slug>`;
   re-run appends counter. Run dir = `~/.local/share/dagrunner/runs/<run-id>/`.
 - **state.json shape:** top-level `runId, workflow, createdAt, updatedAt, status
-  (running|paused|done|failed), worktreePath, branch, sourcePlanPath`; per-node `status
-  (pending|running|done|skipped|failed|awaiting-gate), startedAt, endedAt, artifacts[], model,
-  iteration, sessionId, cost`, and for gates a `gateHistory[]` (decision + typed comment + timestamp).
+(running|paused|done|failed), worktreePath, branch, sourcePlanPath`; per-node `status
+(pending|running|done|skipped|failed|awaiting-gate), startedAt, endedAt, artifacts[], model,
+iteration, sessionId, cost`, and for gates a `gateHistory[]` (decision + typed comment + timestamp).
 - **CLI:** `start <workflow> --plan <file>|--issue <n>`, `resume <run-id>` (PRIMARY re-entry; prints
   awaiting artifact then prompts inline), `status [<run-id>]`, `list`, `abort <run-id>`,
   `cleanup <run-id>`, `report <run-id>`. Gate ergonomics: one ergonomic door on `resume` PLUS
@@ -58,6 +58,7 @@ the closest spec-aligned choice.
 `Node` fields: `id; dependsOn?; when?(ctx)→bool; command (slash cmd/skill ref); model?('haiku'|'sonnet',
 omit=unpinned); allowedTools?; outputSchema?; produces?/producesJson?; gate?; loop?; optional?;
 joinRule?; maxRetries?; maxBudget?; hooks?{stop?}`.
+
 - `GateConfig: { maxIterations? (~10); onReject?: 'revise-self'|'rerun:<id>' (default revise-self) }`.
 - `LoopConfig: { maxIterations; until (shell gate); onExhausted?: 'fail'|'gate'|'continue' (default 'gate') }`.
 - `Ctx` = artifact-only accessors: `ctx.json(node)`, `ctx.read(node,file)`, `ctx.dir(node)`. No in-memory upstream returns.
@@ -172,7 +173,7 @@ convergence)→ 11 verify-seed(haiku, when needs_runtime, **verify gate** rerun:
 edits worktree .claude/** only). Three gates, sequential, never concurrent. classify.json flags
 `{touches_public_api, touches_runtime, perf_sensitive, touches_schema_or_proto, needs_runtime: bool;
 risk: low|med|high}` drive all conditional reviewers + verify-seed.
-**v1 cut line = nodes 1→2→3 + the review gate.** Nodes 4-14 are phase-2 config additions.
+**v1 cut line = nodes 1→2→3 + the review gate.\*\* Nodes 4-14 are phase-2 config additions.
 apply-reflection targets worktree-private gitignored files only — never a Camunda PR.
 
 ## Theme 12 — Self-improving loop
@@ -216,7 +217,8 @@ correctness PROVABLE and is the permanent fast feedback loop. **v1-done gate = t
 (init → start→awaiting-gate → status → reject→revise-same-session → approve→implement→done → kill→
 reconcile→resume). NOT tested in v1: model output QUALITY (human judgment), load/concurrency,
 live 6-way reviewer run. Mirror crev's ajv-style schema tests. Deliver acceptance as a RUNNABLE script
-+ captured transcript, not prose.
+
+- captured transcript, not prose.
 
 ## Theme 15 — Handover format & decomposition
 
@@ -233,11 +235,12 @@ Build harness: Sonnet coordinator (Opus advisory) delegating to 6 tool-restricte
 researchers kept separate); short CLAUDE.md; 3 skills (spec/testing/crev-patterns); build-time hooks
 (format + secret deny-guard); one MCP (Context7); TS LSP on. Avoid Agent Teams (token-heavy),
 semantic search, plugin packaging, extra MCP. Unattended posture: `permissionMode: "bypassPermissions"`
-+ `settingSources: ["project"]`, guarded by fail-closed PreToolUse deny hook + `disallowedTools`;
-settings.json written in Phase 0 pre-sleep (writing it mid-run would prompt+hang); per-block git
-commits; continue-on-ambiguity (log to DECISIONS.md, never wait); **isolate-and-continue** on failure
-(retry once → mark blocked → commit safe → next independent block); run-level budget cap; morning
-BUILD-REPORT.md. Scoped working dir + deny hook = blast-radius control (no Docker).
+
+- `settingSources: ["project"]`, guarded by fail-closed PreToolUse deny hook + `disallowedTools`;
+  settings.json written in Phase 0 pre-sleep (writing it mid-run would prompt+hang); per-block git
+  commits; continue-on-ambiguity (log to DECISIONS.md, never wait); **isolate-and-continue** on failure
+  (retry once → mark blocked → commit safe → next independent block); run-level budget cap; morning
+  BUILD-REPORT.md. Scoped working dir + deny hook = blast-radius control (no Docker).
 
 ## UI decision
 

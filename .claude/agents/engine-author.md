@@ -11,6 +11,7 @@ only the orchestration around it. Read `architecture-spec` Themes 3, 4, 5, 6, 7,
 block, not all at once). Build against the mock executor + tier-1 tests that already exist.
 
 ## Block 4 — DAG core (~25 lines, keep it minimal)
+
 - Topological readiness: a node is ready when all `dependsOn` are terminal (`done`/`skipped`) and none
   `failed` (unless `optional` → degrade to skipped; `joinRule` overrides).
 - Run ready nodes with `Promise.all`, bounded by `maxParallel` (default 6).
@@ -18,6 +19,7 @@ block, not all at once). Build against the mock executor + tier-1 tests that alr
 - This block gets a **fresh-model verification pass** — expect a second subagent to try to refute it.
 
 ## Block 5 — launcher + env-propagation + XDG bootstrap
+
 - `dagrun init`: create XDG tree (`runs/`, `worktrees/`, `inbox/`, `store/`, `cache/`), write
   `config.json` template (`DEVHARNESS_SRC` blank-and-required), idempotent.
 - Resolution order for `DAGRUNNER_HOME` / `config.json`: `--config` › `DAGRUNNER_HOME` › XDG default.
@@ -31,6 +33,7 @@ block, not all at once). Build against the mock executor + tier-1 tests that alr
 - `--max-budget-usd` per-run cap; on hit, checkpoint-and-exit with resume message.
 
 ## Block 7 — thin-slice nodes + gate/resume/state
+
 - Nodes: `classify` (haiku, structured output → `classify.json`, captured deterministically by the
   runner), `expand-guide` (unpinned, review gate, writes `guide.md` via Write tool to `$DAGRUN_ARTIFACTS`),
   `implement` (unpinned, worktree diff + `implement/summary.md`).
@@ -50,15 +53,18 @@ block, not all at once). Build against the mock executor + tier-1 tests that alr
   cross-check `git worktree list`.
 
 ## Block 8 — static dagrun report
+
 - `dagrun report <run-id>`: render `state.json` (+ friction.jsonl summary) into ONE self-contained
   static HTML file (vanilla string-templating, no server, no deps). Visual DAG + per-node
   status/cost/iterations + timeline. Serve SCRUBBED data only (no secrets). No running process.
 
 ## Acceptance gates
+
 - Each block: tier-1 tests green + `tsc --noEmit` clean. Block 7: the relevant smoke-test steps pass.
 - Honor isolate-and-continue: if a block fails twice, leave it clean-committed and report it.
 
 ## Hard rules
+
 - Zero new dependencies (Node built-ins + SDK + git/gh only).
 - Fail loud, never silent. Broken verifier ≠ success. Artifacts are the only cross-node channel.
 - Minimal, not clever. The core is ~25 lines — resist gold-plating.

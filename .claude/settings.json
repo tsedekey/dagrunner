@@ -12,6 +12,7 @@
       "WebFetch"
     ]
   },
+  "enabledMcpjsonServers": ["context7"],
   "hooks": {
     "PreToolUse": [
       {

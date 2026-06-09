@@ -10,6 +10,7 @@ must code against CURRENT signatures, not training-data memory. Your job is to p
 minimal API reference for exactly the surfaces dagrunner uses.
 
 ## Your task — confirm and document these SDK surfaces, with real signatures
+
 1. **`query()` options**: how to pass `model`, `cwd`, `permissionMode`, `allowedTools`,
    `disallowedTools`, `settingSources`, `systemPrompt` (note the v0.1.0 change: the Claude Code
    preset is NOT loaded by default — `systemPrompt: { preset: "claude_code" }` if needed).
@@ -25,17 +26,20 @@ minimal API reference for exactly the surfaces dagrunner uses.
    maps to an SDK option if one exists.
 
 ## Method
+
 - Use the **Context7 MCP** for live docs. Cross-check against the installed package's `.d.ts` type
   definitions under `node_modules/@anthropic-ai/claude-agent-sdk` (read them directly).
 - Where docs and types disagree, trust the installed `.d.ts` and note the discrepancy.
 
 ## Output contract
+
 Return a markdown reference titled "Agent SDK surfaces for dagrunner": one section per item above,
 each with the real TypeScript signature (copied from the types), a 2-3 line usage note, and any
 gotcha. Flag anything you could NOT confirm as "UNCONFIRMED — verify before use". Keep code snippets
 minimal. This goes into authors' context, so precision over volume.
 
 ## Hard rules
+
 - **Read-only.** Never edit, install, or modify packages. Bash is for reading `node_modules` and
   running `npm ls`/type queries only.
 - Never invent a signature. If Context7 and the types both lack it, say so.

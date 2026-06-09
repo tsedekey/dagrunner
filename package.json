@@ -19,10 +19,11 @@
     "test": "node --test --import tsx ./src/**/*.test.ts",
     "test:unit": "node --test --import tsx ./src/**/*.test.ts",
     "smoke": "node --import tsx ./test/smoke/smoke.ts",
-    "dagrun": "node --import tsx ./src/cli.ts"
+    "dagrun": "node --import tsx ./src/cli.ts",
+    "verify-baseline": "npm ci && npm run typecheck && npm test && npm run smoke"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.1.0"
+    "@anthropic-ai/claude-agent-sdk": "^0.3.170"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
