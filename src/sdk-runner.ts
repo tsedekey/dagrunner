@@ -59,7 +59,14 @@ export function makeSDKRunner(
       const latest = feedbacks[feedbacks.length - 1];
       if (latest !== undefined) {
         const feedbackPath = join(ctx.artifactsDir, latest);
-        prompt = readFileSync(feedbackPath, "utf8");
+        const feedbackText = readFileSync(feedbackPath, "utf8").trim();
+        // Wrap with an explicit rewrite instruction so the model uses Write tool
+        // rather than acknowledging the feedback verbally without updating the file.
+        const primaryArtifact = node.produces?.[0] ?? "artifact";
+        const artifactFullPath = join(ctx.artifactsDir, primaryArtifact);
+        prompt =
+          `<reviewer-feedback>\n${feedbackText}\n</reviewer-feedback>\n\n` +
+          `Incorporate this feedback and rewrite ${artifactFullPath} completely with the changes applied.`;
       }
     }
 
