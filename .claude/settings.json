@@ -1,6 +1,6 @@
 {
-  "$comment": "dagrunner BUILD harness settings. Written during Phase 0 (pre-sleep) so it is never authored mid-run (writing .claude/settings.json would prompt and hang even under bypass). The SDK only loads this when query() is given settingSources: ['project'].",
   "permissions": {
+    "allow": ["Edit(*.*)", "Edit(/src/**)"],
     "defaultMode": "bypassPermissions",
     "disallowedTools": [
       "Bash(sudo:*)",
@@ -70,5 +70,6 @@
         ]
       }
     ]
-  }
+  },
+  "$comment": "dagrunner BUILD harness settings. Written during Phase 0 (pre-sleep) so it is never authored mid-run (writing .claude/settings.json would prompt and hang even under bypass). The SDK only loads this when query() is given settingSources: ['project']."
 }

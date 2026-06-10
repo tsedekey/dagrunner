@@ -65,16 +65,16 @@ DEST_CLAUDE="${DAGRUN_WORKTREE}/.claude"
 
 if [[ -d "${SRC_CLAUDE}" ]]; then
   # rsync: src .claude/ → worktree .claude/
-  # --ignore-existing: existing worktree files win (never silently overwrite committed content)
-  # Failure is non-fatal only if rsync is missing; actual sync errors should not be swallowed.
+  # No --ignore-existing: DEVHARNESS_SRC commands override dagrunner's seeded defaults,
+  # allowing users to customise classify/expand-guide/implement for their own repo.
   if command -v rsync >/dev/null 2>&1; then
-    rsync -a --ignore-existing "${SRC_CLAUDE}/" "${DEST_CLAUDE}/" \
+    rsync -a "${SRC_CLAUDE}/" "${DEST_CLAUDE}/" \
       || block "SessionStart: rsync of .claude/ failed (exit $?)"
   else
-    # Fallback: cp -n (no-clobber) for systems without rsync
+    # Fallback: cp (overwrite) for systems without rsync
     mkdir -p "${DEST_CLAUDE}"
-    cp -rn "${SRC_CLAUDE}/." "${DEST_CLAUDE}/" 2>/dev/null \
-      || true  # cp -n exits non-zero when files are skipped on some platforms; ignore
+    cp -r "${SRC_CLAUDE}/." "${DEST_CLAUDE}/" 2>/dev/null \
+      || true
   fi
 fi
 

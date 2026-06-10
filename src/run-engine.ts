@@ -113,6 +113,70 @@ export async function startRun(opts: {
     stdio: "inherit",
   });
 
+  // Seed the worktree's .claude/ with dagrunner's bundled commands + hooks + a
+  // node-run settings.json. Without this, a source repo with no .claude/commands/
+  // causes /classify (and siblings) to return immediately with cost=0 and no
+  // structured output — the SDK treats unknown slash commands as no-ops.
+  const dagrunnerRoot = new URL("../", import.meta.url).pathname;
+  const destClaude = join(worktreePath, ".claude");
+  mkdirSync(join(destClaude, "commands"), { recursive: true });
+  mkdirSync(join(destClaude, "hooks"), { recursive: true });
+  const srcCommands = join(dagrunnerRoot, ".claude", "commands");
+  const srcHooks = join(dagrunnerRoot, ".claude", "hooks");
+  if (existsSync(srcCommands)) {
+    cpSync(srcCommands, join(destClaude, "commands"), { recursive: true });
+  }
+  if (existsSync(srcHooks)) {
+    cpSync(srcHooks, join(destClaude, "hooks"), { recursive: true });
+  }
+  // Node-run settings: hooks only — no build-harness deny-guard.
+  writeFileSync(
+    join(destClaude, "settings.json"),
+    JSON.stringify(
+      {
+        hooks: {
+          SessionStart: [
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh",
+                },
+              ],
+            },
+          ],
+          Stop: [
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: "$CLAUDE_PROJECT_DIR/.claude/hooks/stop-verifier.sh",
+                },
+                {
+                  type: "command",
+                  command: "$CLAUDE_PROJECT_DIR/.claude/hooks/stop-schema.sh",
+                },
+              ],
+            },
+          ],
+          SessionEnd: [
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: "$CLAUDE_PROJECT_DIR/.claude/hooks/session-end.sh",
+                },
+              ],
+            },
+          ],
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
   const state: RunState = {
     runId,
     workflow: workflow.name,
