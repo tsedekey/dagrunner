@@ -26,3 +26,6 @@ BUILD-REPORT.md
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Smoke test: toy-repo is provisioned at runtime, not committed
+test/smoke/fixtures/toy-repo/
