@@ -101,7 +101,7 @@ export function makeSDKRunner(
     let finalSessionId = "";
     let totalCost = 0;
     let structuredOutput: unknown = undefined;
-    let budgetExceeded = false;
+    let sdkError: string | null = null;
 
     for await (const msg of q) {
       if (msg.type === "result") {
@@ -110,17 +110,17 @@ export function makeSDKRunner(
         if (msg.subtype === "success" && "structured_output" in msg) {
           structuredOutput = msg.structured_output;
         }
-        if (msg.subtype === "error_max_budget_usd") {
-          budgetExceeded = true;
+        if (msg.subtype !== "success") {
+          sdkError = msg.subtype;
         }
       }
     }
 
-    if (budgetExceeded) {
+    if (sdkError !== null) {
       return {
         status: "failed",
-        error: "budget cap reached",
-        retryable: false,
+        error: `SDK error: ${sdkError}`,
+        retryable: sdkError !== "error_max_budget_usd",
       };
     }
 

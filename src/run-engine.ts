@@ -107,8 +107,9 @@ export async function startRun(opts: {
   mkdirSync(join(runDir, "plan"), { recursive: true });
   cpSync(planPath, join(runDir, "plan", "plan.md"));
 
-  // Create git worktree.
+  // Create git worktree from DEVHARNESS_SRC (must run in that repo's root).
   execSync(`git worktree add "${worktreePath}" -b "feature/${runId}"`, {
+    cwd: config.DEVHARNESS_SRC,
     stdio: "inherit",
   });
 

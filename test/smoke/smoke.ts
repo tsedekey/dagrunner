@@ -39,9 +39,23 @@ const TOY_REPO_PATH = join(__dirname, "fixtures", "toy-repo");
 // Step 0 — auth guard (FIRST executable statement)
 // ---------------------------------------------------------------------------
 
-if (!process.env["ANTHROPIC_API_KEY"] && !process.env["ANTHROPIC_AUTH_TOKEN"]) {
+// Accept API key, auth token, or claude.ai subscription auth (claude binary has its own credentials)
+const hasApiKey =
+  !!process.env["ANTHROPIC_API_KEY"] || !!process.env["ANTHROPIC_AUTH_TOKEN"];
+const hasClaudeAuth = (() => {
+  try {
+    const out = execSync(
+      "claude auth status --json 2>/dev/null || claude auth status",
+      { encoding: "utf8", timeout: 5000 },
+    );
+    return out.includes('"loggedIn": true') || out.includes('"loggedIn":true');
+  } catch {
+    return false;
+  }
+})();
+if (!hasApiKey && !hasClaudeAuth) {
   process.stderr.write(
-    "smoke test requires ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN\n",
+    "smoke test requires ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or claude.ai subscription login\n",
   );
   process.exit(1);
 }

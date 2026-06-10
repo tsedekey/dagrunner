@@ -10,6 +10,7 @@
  * Block 7 calls applyNodeEnv(buildNodeEnv(...)) per node before spawning query().
  */
 
+import { execSync } from "node:child_process";
 import { join } from "node:path";
 import type { DagrunnerConfig } from "./xdg.js";
 
@@ -91,10 +92,22 @@ export function assertAuth(): void {
     typeof process.env["ANTHROPIC_AUTH_TOKEN"] === "string" &&
     process.env["ANTHROPIC_AUTH_TOKEN"] !== "";
 
-  if (!hasKey && !hasToken) {
-    process.stderr.write(
-      `dagrun: authentication required: set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN.\n`,
-    );
-    process.exit(1);
+  if (hasKey || hasToken) return;
+
+  // Accept claude.ai subscription auth (the SDK's claude binary uses its own session)
+  try {
+    const out = execSync("claude auth status 2>/dev/null", {
+      encoding: "utf8",
+      timeout: 5000,
+    });
+    if (out.includes('"loggedIn": true') || out.includes('"loggedIn":true'))
+      return;
+  } catch {
+    // claude not found or not logged in — fall through to hard fail
   }
+
+  process.stderr.write(
+    `dagrun: authentication required: set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN, or run \`claude login\`.\n`,
+  );
+  process.exit(1);
 }
