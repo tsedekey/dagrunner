@@ -345,15 +345,13 @@ let RUN_ID = "";
     readFileSync(join(killedRunDir, "state.json"), "utf8"),
   ) as { nodes: Record<string, { status: string }> };
 
-  // After reconcile, implement must never stay 'running' — it must be failed or done.
+  // After reconcile, implement must be 'failed' — reconcileRunningNodes sets
+  // running→failed, and runDag finds all nodes terminal, never re-queues.
   const implementStatus = reconciledRaw.nodes["implement"]?.status;
-  assert.ok(
-    implementStatus === "failed" || implementStatus === "done",
-    `reconcile must mark running->failed (or complete), got: ${String(implementStatus)}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
-  );
-  assert.ok(
-    implementStatus !== "running",
-    "reconcile must not leave implement in 'running' status",
+  assert.strictEqual(
+    implementStatus,
+    "failed",
+    `reconcile must mark running->failed, got: ${String(implementStatus)}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
   );
 
   console.log(
