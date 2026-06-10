@@ -42,6 +42,7 @@ export type NodeExecResult =
       iteration: number;
       sessionId: string;
       artifactPath: string;
+      cost: number;
     };
 
 export type ExecutionCtx = {
@@ -162,6 +163,7 @@ export function createMockExecutor(scenarios: ScenarioMap = {}): NodeExecutor {
           iteration: 1,
           sessionId: ctx.sessionId ?? MOCK_SESSION_ID,
           artifactPath,
+          cost: 0,
         };
       }
 

@@ -329,6 +329,7 @@ export async function runDag(
         status: "awaiting-gate",
         sessionId: gateRes.sessionId,
         iteration: gateRes.iteration,
+        cost: (run.nodes[id]?.cost ?? 0) + gateRes.cost,
         endedAt: now,
       });
       run = { ...run, status: "paused" };

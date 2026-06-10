@@ -149,6 +149,7 @@ export function makeSDKRunner(
         iteration: feedbackCount,
         sessionId: finalSessionId,
         artifactPath: join(ctx.artifactsDir, primaryProduces),
+        cost: totalCost,
       };
     }
 
