@@ -59,22 +59,27 @@ if [[ ! -d "${DAGRUN_WORKTREE}" ]]; then
   block "SessionStart: DAGRUN_WORKTREE '${DAGRUN_WORKTREE}' does not exist"
 fi
 
-# --- sync private .claude/ files ---------------------------------------------
+# --- sync .claude/commands/ only — never touch settings.json ----------------
+#
+# We only sync the commands/ subdirectory from DEVHARNESS_SRC so users can
+# override the seeded classify/expand-guide/implement prompts with their own.
+# We deliberately EXCLUDE settings.json: dagrunner seeds a minimal node-run
+# settings.json (hooks only, no build-harness deny-guard) and that file must
+# survive untouched. A blanket sync of all of .claude/ would overwrite it with
+# whatever the source repo has, pulling in hooks/permissions never intended for
+# node runs.
 
 SRC_CLAUDE="${DEVHARNESS_SRC}/.claude"
 DEST_CLAUDE="${DAGRUN_WORKTREE}/.claude"
 
-if [[ -d "${SRC_CLAUDE}" ]]; then
-  # rsync: src .claude/ → worktree .claude/
-  # No --ignore-existing: DEVHARNESS_SRC commands override dagrunner's seeded defaults,
-  # allowing users to customise classify/expand-guide/implement for their own repo.
+if [[ -d "${SRC_CLAUDE}/commands" ]]; then
+  mkdir -p "${DEST_CLAUDE}/commands"
   if command -v rsync >/dev/null 2>&1; then
-    rsync -a "${SRC_CLAUDE}/" "${DEST_CLAUDE}/" \
-      || block "SessionStart: rsync of .claude/ failed (exit $?)"
+    rsync -a "${SRC_CLAUDE}/commands/" "${DEST_CLAUDE}/commands/" \
+      || block "SessionStart: rsync of .claude/commands/ failed (exit $?)"
   else
     # Fallback: cp (overwrite) for systems without rsync
-    mkdir -p "${DEST_CLAUDE}"
-    cp -r "${SRC_CLAUDE}/." "${DEST_CLAUDE}/" 2>/dev/null \
+    cp -r "${SRC_CLAUDE}/commands/." "${DEST_CLAUDE}/commands/" 2>/dev/null \
       || true
   fi
 fi
