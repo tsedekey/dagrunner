@@ -81,7 +81,7 @@ export function makeSDKRunner(
     };
 
     if (node.model === "haiku") {
-      options.model = "claude-haiku-4-5";
+      options.model = "claude-haiku-4-5-20251001";
     } else if (node.model === "sonnet") {
       options.model = "claude-sonnet-4-6";
     }
