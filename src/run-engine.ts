@@ -172,7 +172,7 @@ export async function startRun(opts: {
                 {
                   type: "command",
                   command:
-                    'npx prettier --write "$CLAUDE_FILE_PATHS" 2>/dev/null || true',
+                    "$CLAUDE_PROJECT_DIR/.claude/hooks/post-tool-use-format.sh",
                 },
               ],
             },

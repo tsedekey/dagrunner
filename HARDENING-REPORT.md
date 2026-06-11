@@ -48,65 +48,90 @@ repo that carries its own `.claude/settings.json`.
 
 ---
 
-## Item 4 — Confirm SDK loads seeded worktree hooks (runtime proof)
+## Item 4 — Confirm SDK loads seeded worktree hooks (runtime proof + formatter fix)
 
 **Commits:** `1e8e7dd` (PostToolUse added to seeded settings.json);
-Item 4 proof run: no dagrunner code change committed — sentinel was temporary.
+formatter-fix commit: hook script + run-engine.ts update + toy-repo dirty file.
 
-**Gap closed:** The hardening pass had confirmed `settingSources: ["project"]` and
-`cwd: worktreePath` were present, and had added the missing `PostToolUse` entry to the seeded
-`settings.json`. But a typecheck cannot exercise a runtime hook. This proof demonstrates the
-hook actually fires.
+**Gap closed (original):** Confirmed `settingSources: ["project"]` and `cwd: worktreePath` are
+applied, and the `PostToolUse` entry exists in the seeded `settings.json`. Hook fires at runtime.
+
+**Secondary defect fixed:** `$CLAUDE_FILE_PATHS` is not populated by Claude Code in the hook
+environment — the old inline `npx prettier --write "$CLAUDE_FILE_PATHS"` was a silent no-op.
+Fixed: the hook now reads `tool_input.file_path` from stdin JSON via `jq`. Moved to a dedicated
+script `.claude/hooks/post-tool-use-format.sh` (consistent with all other hooks).
+
+### Fix: `post-tool-use-format.sh`
+
+Parses the edited file path from the PostToolUse stdin JSON payload (`tool_input.file_path`),
+confirmed against Claude Code hook documentation. Covers Write, Edit, and MultiEdit (MultiEdit
+operates on a single target file — `tool_input.file_path` applies uniformly). Fail-soft: missing
+`jq`, missing `prettier`, absent/non-existent path → exit 0, never blocks a node run.
 
 ### Proof procedure
 
-1. Added `.claude/settings.json` to the toy-repo (no `PostToolUse` entry) and committed it
-   to the toy-repo's git. This mirrors the real monorepo case and makes the Item 3 sync
-   protection load-bearing: if the source repo's settings overwrote the seeded one, the
-   `PostToolUse` hook would disappear and the proof would fail.
+1. Added `.claude/settings.json` (no `PostToolUse`) and a dirty `src/badly-formatted.ts`
+   (single quotes, no semicolons, no spaces around operators) to the toy-repo's git. Changed
+   the implement command to Edit the pre-seeded dirty file (prepend a `// reviewed` comment)
+   rather than Write a new file — this guarantees dirty content reaches the hook regardless
+   of whether Haiku normalizes its own Write output.
 
-2. Temporarily instrumented the seeded settings.json's inline `PostToolUse` command in
-   `run-engine.ts` to append a sentinel line to `$DAGRUN_ARTIFACTS/hook-fired.log` after the
-   prettier invocation.
+2. Temporarily instrumented `post-tool-use-format.sh` to log path, before-SHA, prettier
+   version, after-SHA, and `changed=yes/no` to `$DAGRUN_ARTIFACTS/hook-format.log`.
 
-3. Ran the full thin slice from `/tmp` (outside the dagrunner repo dir, re-confirming Item 5's
-   package-root resolution):
+3. Ran the full thin slice from outside the dagrunner repo dir:
    - `dagrun start feature --plan toy-plan.md` → classify → expand-guide → awaiting-gate
+   - Confirmed dirty file on disk in worktree before resume (SHA `601f717f...`)
    - `dagrun resume <run-id> --approve` → implement → done
 
-4. Checked evidence and reverted sentinel. `npm run verify-baseline` exits 0 after revert.
+4. Checked evidence, reverted instrumentation. `npm run verify-baseline` exits 0.
 
 ### Runtime evidence
 
-**Sentinel (hook-fired.log in implement artifacts):**
+**Before (pre-seeded dirty file in worktree, SHA `601f717f...`):**
+
+```text
+const greeting = 'hello world'
+const add=(a:number,b:number)=>a+b
+export {greeting,add}
+```
+
+**hook-format.log (implement artifacts):**
 
 ```
-[POSTTOOLUSE FIRED]  Thu 11 Jun 2026 23:26:22 EAT
-[POSTTOOLUSE FIRED]  Thu 11 Jun 2026 23:26:31 EAT
+[FORMAT HOOK] path=/private/tmp/.../worktrees/toy-plan-1781211033562/src/badly-formatted.ts before=34144783261dc41d6202f9ad7b8ea8e62d0c6fb0dcb9e22e9b85709ad1a1bedd prettier=3.8.4
+[FORMAT HOOK] after=d8003a4cbcf0d487aef999fc177e2d080119fb96a5ee4975cfe7de3ad64ad1ae changed=yes
 ```
 
-The hook fired **twice** — once per Write call the implement node made (summary.md and
-src/badly-formatted.ts). The 9-second gap between entries matches the time between writes.
+**After (on-disk in worktree, SHA `d8003a4c...`):**
+
+```typescript
+// reviewed
+const greeting = "hello world";
+const add = (a: number, b: number) => a + b;
+export { greeting, add };
+```
+
+`changed=yes` — before SHA ≠ after SHA. The hook:
+
+- Received the real absolute path in `tool_input.file_path` (not empty — root defect fixed)
+- Found prettier 3.8.4 via `npx`
+- Reformatted: single→double quotes, added semicolons, spaced operators, spaced export braces
 
 **Seeded settings.json survived (Item 3 holds):**
 The worktree's `.claude/settings.json` after the full run was dagrunner's seeded version
 containing `PostToolUse`, `SessionStart`, `Stop`, and `SessionEnd` hooks with no deny-guard.
-The toy-repo's own `.claude/settings.json` (committed to the toy-repo with only a `permissions`
-block and no `PostToolUse`) was NOT copied over it — confirming the scoped sync protection.
+The toy-repo's own `.claude/settings.json` was NOT copied over it.
 
-**Secondary finding — `CLAUDE_FILE_PATHS` is empty in hook env:**
-The double-space between `FIRED]` and the date in the sentinel shows `$CLAUDE_FILE_PATHS` was
-unexpanded (empty). This means the prettier invocation `npx prettier --write ""` ran as a
-no-op. The hook fires correctly; the formatting step is inert. For the real camunda run,
-prettier will not actually format files via this mechanism. This is a follow-up finding, not a
-blocker for the proof requirement (hook fires = proven).
+**Proof run started from outside the dagrunner repo dir** — package-root resolution correct.
 
 ### Confirm
 
-- `DAGRUN_ARTIFACTS` IS correctly inherited by the hook process (it wrote the log there).
+- `DAGRUN_ARTIFACTS` IS correctly inherited by the hook process (log written there).
 - The SDK IS loading the seeded `settings.json` via `settingSources: ["project"]`.
-- The `PostToolUse` matcher (`Write|Edit|MultiEdit`) IS being matched and the hook IS executing.
-- Proof run started from `/tmp` (outside dagrunner repo) — package-root resolution correct.
+- `PostToolUse` matcher (`Write|Edit|MultiEdit`) IS being matched and the hook IS executing.
+- `tool_input.file_path` from stdin JSON IS the correct mechanism (not `$CLAUDE_FILE_PATHS`).
+- Prettier IS reachable (`npx prettier --version` = 3.8.4) and IS formatting dirty content.
 
 ---
 
