@@ -159,6 +159,18 @@ export async function startRun(opts: {
               ],
             },
           ],
+          PostToolUse: [
+            {
+              matcher: "Write|Edit|MultiEdit",
+              hooks: [
+                {
+                  type: "command",
+                  command:
+                    'npx prettier --write "$CLAUDE_FILE_PATHS" 2>/dev/null || true',
+                },
+              ],
+            },
+          ],
           SessionEnd: [
             {
               hooks: [
