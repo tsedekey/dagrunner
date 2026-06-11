@@ -123,12 +123,18 @@ export async function startRun(opts: {
   mkdirSync(join(destClaude, "hooks"), { recursive: true });
   const srcCommands = join(dagrunnerRoot, ".claude", "commands");
   const srcHooks = join(dagrunnerRoot, ".claude", "hooks");
-  if (existsSync(srcCommands)) {
-    cpSync(srcCommands, join(destClaude, "commands"), { recursive: true });
+  if (!existsSync(srcCommands)) {
+    throw new Error(
+      `dagrun: bundled commands not found at ${srcCommands} — package installation may be broken`,
+    );
   }
-  if (existsSync(srcHooks)) {
-    cpSync(srcHooks, join(destClaude, "hooks"), { recursive: true });
+  if (!existsSync(srcHooks)) {
+    throw new Error(
+      `dagrun: bundled hooks not found at ${srcHooks} — package installation may be broken`,
+    );
   }
+  cpSync(srcCommands, join(destClaude, "commands"), { recursive: true });
+  cpSync(srcHooks, join(destClaude, "hooks"), { recursive: true });
   // Node-run settings: hooks only — no build-harness deny-guard.
   writeFileSync(
     join(destClaude, "settings.json"),
