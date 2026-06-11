@@ -250,7 +250,9 @@ function cmdCleanup(argv: string[]): void {
     process.exit(1);
   }
 
+  const configFlag = flagValue(argv, "--config");
   const homeDir = resolveHome();
+  const config = resolveConfig(homeDir, configFlag);
   const stateFile = join(homeDir, "runs", runId, "state.json");
 
   if (!existsSync(stateFile)) {
@@ -262,7 +264,9 @@ function cmdCleanup(argv: string[]): void {
   const worktreePath = state.worktreePath;
 
   try {
+    // Must run in the source repo so git can find the worktree registration.
     execSync(`git worktree remove "${worktreePath}" --force`, {
+      cwd: config.DEVHARNESS_SRC,
       stdio: "inherit",
     });
   } catch (err) {
