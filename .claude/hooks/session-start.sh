@@ -39,7 +39,8 @@ if [[ -z "${DEVHARNESS_SRC:-}" ]]; then
 fi
 
 if [[ -z "${DAGRUN_WORKTREE:-}" ]]; then
-  block "SessionStart: DAGRUN_WORKTREE is not set — cannot sync private files"
+  # Not running inside a dagrunner worktree — nothing to sync, allow the session.
+  exit 0
 fi
 
 # --- validate DEVHARNESS_SRC is accessible ------------------------------------
