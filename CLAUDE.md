@@ -53,7 +53,8 @@ artifact writes. Also: the SDK does NOT load `.claude/settings.json` (hooks/deny
 
 ## Autonomy (this is an unattended overnight run)
 
-- **Never block on ambiguity.** Pick the spec-aligned default, log it to `DECISIONS.md`, proceed.
+- **NEVER stop to ask the user anything.** On ANY ambiguity, choose the spec-aligned default, append
+  to `DECISIONS.md`, and continue. Returning a question instead of a result is a protocol failure.
 - **Commit after every passing block.** `git commit -m "block N: <name>"`.
 - **Isolate-and-continue on failure.** Retry once; if still failing, mark blocked, commit safe work,
   move to the next independent block. Never halt the whole run for one block.
