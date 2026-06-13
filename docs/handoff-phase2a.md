@@ -1,7 +1,7 @@
 # dagrunner — Phase 2a Build Handoff (review + fix)
 
 Status: Active brief. Self-contained. Read `dagrunner-master-architecture.md` (in-repo) as the canonical source of truth; this brief is the Phase 2a work order built on top of it.
-Date: 2026-06-12
+Date: 2026-06-12 (rev 2 — classify retired; review self-triages the diff; verifier gated by finding count; verify is a human election)
 Supersedes: handoff-phase1-ARCHIVE.md (Phase 1 only — historical).
 
 ---
@@ -12,10 +12,10 @@ Phase 2a is done when, on a real source repo with a substantive change:
 
 1. `dagrun preflight` runs before the graph and fails loud on any misconfiguration (branch, git state, DEVHARNESS_SRC, sandbox, config, network allowlist, artifact dir).
 2. Each node runs under the seeded runtime permission/sandbox/network model: free inside the worktree, read anywhere, mutation/network outside the project hard-blocked, NO permission prompts before a gate.
-3. `review` runs a read-only parallel subagent fan-out over the bounded reviewer set (+ adversarial verifier when classify says so), and writes ONE schema-valid `findings.json`.
+3. `review` self-triages the diff to select reviewers, runs a read-only parallel subagent fan-out over the bounded reviewer set (+ adversarial verifier when findings count > threshold N), and writes ONE schema-valid `findings.json`.
 4. `fix` consumes `findings.json`, mutates the worktree, self-verifies (addressed-each-finding checklist + build/test post-condition), and pauses at a conversation-led accept/reject gate.
 5. Rejecting the fix gate with a comment revises in the SAME session and re-pauses; approving proceeds.
-6. `npm run verify-baseline` exits 0; the full slice (classify -> expand-guide -> implement -> review -> fix) runs green end to end with state/resume intact.
+6. `npm run verify-baseline` exits 0; the full slice (expand-guide -> implement -> review -> fix) runs green end to end with state/resume intact.
 
 Deliver runnable proof (captured transcript + the produced findings.json + a before/after worktree diff), not prose assertions.
 
@@ -34,7 +34,9 @@ Deliver runnable proof (captured transcript + the produced findings.json + a bef
 - The feature pipeline is **fully static** — no dynamic workflows inside it. Dynamic workflows (`/pr-review`) and the siblings are Phase 3, out of scope here.
 - A new **runtime permission/sandbox/network model** replaces the build-time `bypassPermissions` posture.
 - A new **preflight check** ("Prepare") runs before the graph.
-- classify gains two outputs: `run_adversarial_verifier` (depth dial) and `recommend_pr_review` (advisory only).
+- **classify-as-a-node is RETIRED** (returns in Phase 5/6 for task-TYPE routing — see master doc §7). Its only live job was change-AREA detection to select reviewers; that is now a cheap **diff-triage first step INSIDE the review node** (haiku), reading the actual diff rather than predicting from the plan. The current pipeline starts at expand-guide. Do NOT build a classify node.
+- The **adversarial verifier is triggered by a RUNTIME finding-count threshold** inside the review node (run only when findings > N, N tunable) — NOT a classify flag.
+- **Runtime verification is a HUMAN election** after the fix gate (y/n), not a classify `needs_runtime` prediction (this is Phase 2b; just do not reintroduce needs_runtime here).
 
 ---
 
@@ -100,8 +102,9 @@ Behavior to achieve: inside-project auto (acceptEdits + worktree cwd); Read glob
 ### Deliverable 2: `review` node (read-only, static subagent fan-out)
 
 - **Depends on:** implement. **Read-only** — must NOT modify the worktree.
-- **Reviewer set (bounded, known):** correctness (always), test-adequacy (always), api-stability (when `classify.touches_public_api`), distributed-systems (when `classify.touches_runtime`), performance (when `classify.perf_sensitive`), migration-safety (when `classify.touches_schema_or_proto`).
-- **Mechanism:** ONE static DAG node that dispatches the selected reviewers as NATIVE SUBAGENTS (isolated context each, per-reviewer model tier), then runs an **adversarial verifier** subagent (when `classify.run_adversarial_verifier`) that skeptically checks the findings against the actual diff (grounds each finding to a real (file, line); drops ungrounded ones), then synthesizes.
+- **Diff-triage first step (replaces classify):** the review node's FIRST action is a cheap haiku pass that reads the actual diff and sets the area flags `touches_public_api / touches_runtime / perf_sensitive / touches_schema_or_proto`. These flags select which reviewers run — derived from the real diff, not predicted upfront. There is no classify node.
+- **Reviewer set (bounded, known), selected by the diff-triage flags:** correctness (always), test-adequacy (always), api-stability (when touches_public_api), distributed-systems (when touches_runtime), performance (when perf_sensitive), migration-safety (when touches_schema_or_proto).
+- **Mechanism:** ONE static DAG node that runs diff-triage, then dispatches the selected reviewers as NATIVE SUBAGENTS (isolated context each, per-reviewer model tier), then — ONLY IF the total findings count exceeds a tunable threshold N — runs an **adversarial verifier** subagent that skeptically checks the findings against the actual diff (grounds each finding to a real (file, line); drops/downgrades ungrounded ones), then synthesizes. The verifier trigger is the runtime finding count, NOT a classify flag.
 - **Reviewer specialist definitions** live as `.claude/agents/*.md` (shared assets — reused later by `/pr-review`). Author the six with Camunda-specific focus. Tool allowlist: read-only.
   - **Start from crev's specialists as the template.** The `camunda/crev` repo already ships battle-tested reviewer specialist definitions (8 specialists, each a `.md` with frontmatter + system prompt + read-only tool allow-list) plus the `mcp-camunda-knowledge` server. The `review-author` subagent should READ crev's specialist `.md` files and `mcp-camunda-knowledge` first and adapt them to our six dimensions and findings schema — do NOT author from scratch. This keeps one source of truth for "what correctness/distributed-systems/etc. review means" across crev, our in-pipeline review, and the future `/pr-review`. Confirm crev's specialist set against our six and note any dimension crev covers that we drop, or vice versa, in DECISIONS.md.
 - **Model tiers:** correctness/distributed-systems/performance unpinned; test-adequacy/api-stability/migration-safety sonnet. Validated at load.
@@ -128,7 +131,7 @@ Behavior to achieve: inside-project auto (acceptEdits + worktree cwd); Read glob
 }
 ```
 
-**Acceptance:** on a flawed change, review runs the correct subset by classify flags, writes schema-valid findings with grounded high-confidence items, degrades gracefully if a reviewer fails, and never touches the worktree (verify: clean `git status` in worktree except the implement diff).
+**Acceptance:** on a flawed change, review runs the correct subset by the diff-triage flags, writes schema-valid findings with grounded high-confidence items, degrades gracefully if a reviewer fails, and never touches the worktree (verify: clean `git status` in worktree except the implement diff).
 
 ### Deliverable 3: `fix` node (mutating, gated, self-verifying)
 
@@ -188,4 +191,4 @@ Do not build ahead into these. Phase 2a is preflight+permissions, review, fix �
 
 ## 7. Done criteria recap
 
-All three deliverables committed (separate commits) with runnable proof; `npm run verify-baseline` exits 0; the slice classify -> expand-guide -> implement -> review -> fix runs green with the runtime permission model active and zero pre-gate prompts; a HARDENING-style report summarizes each deliverable's evidence. Then Phase 2a is complete and we move to 2b (verify-seed + pr + reflect).
+All three deliverables committed (separate commits) with runnable proof; `npm run verify-baseline` exits 0; the slice expand-guide -> implement -> review -> fix runs green with the runtime permission model active and zero pre-gate prompts; a HARDENING-style report summarizes each deliverable's evidence. Then Phase 2a is complete and we move to 2b (verify-seed + pr + reflect).
