@@ -364,15 +364,15 @@ export async function resumeRun(opts: {
 
   const workflow = workflowFromState(state);
 
-  // Optional nodes that were running when the process was interrupted become
-  // failed after reconcile. Because failed+optional = silently skipped in the
-  // DAG, they would be bypassed on the next runDag call rather than retried.
-  // Reset them to pending so the DAG picks them up again.
+  // Any node that was running when the process was interrupted is marked
+  // failed by reconcileRunningNodes. Reset ALL such nodes to pending so
+  // they are retried — not just optional ones. For optional nodes the risk
+  // is silent skip cascade; for required nodes the risk is the run ending
+  // as "failed" even though the node only stopped because of Ctrl+C.
   for (const [id, ns] of Object.entries(state.nodes)) {
     if (
       ns.status === "failed" &&
-      ns.error === "process interrupted — reconciled on resume" &&
-      workflow.nodes.find((n) => n.id === id)?.optional === true
+      ns.error === "process interrupted — reconciled on resume"
     ) {
       // Omit error/endedAt via destructuring — exactOptionalPropertyTypes
       // forbids explicit `undefined` on optional properties.

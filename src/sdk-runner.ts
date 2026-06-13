@@ -21,6 +21,7 @@ import {
   existsSync,
 } from "node:fs";
 import { join, basename } from "node:path";
+import { tmpdir } from "node:os";
 import type {
   NodeExecutor,
   NodeExecResult,
@@ -126,8 +127,11 @@ export function makeSDKRunner(
           allowAllUnixSockets: true,
         },
         filesystem: {
-          allowWrite: ["/tmp"],
-          allowRead: ["/tmp"],
+          // /tmp is the conventional path; tmpdir() is the actual macOS
+          // session temp dir (/var/folders/…/T/) used by Maven, spotless,
+          // exec-maven-plugin, and jansi for native lib extraction.
+          allowWrite: ["/tmp", tmpdir()],
+          allowRead: ["/tmp", tmpdir()],
         },
       };
     }
