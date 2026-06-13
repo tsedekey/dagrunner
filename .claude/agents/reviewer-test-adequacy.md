@@ -19,7 +19,7 @@ Your job: read the diff and the test files, and identify concrete gaps in test c
 
 ## Method
 
-1. Run `git diff HEAD~1..HEAD` (or `git diff main...HEAD`) to see the diff.
+1. Run `git diff HEAD` to see all uncommitted changes (staged + unstaged vs HEAD). Also run `git status --short` to find any new untracked files and read them directly.
 2. Read each changed source file and its corresponding test file(s).
 3. For each gap found, record: file (the TEST file path where the case is missing), line (the line in the test file nearest to where the case should be added, or 1 if the test file is new/missing), a one-sentence claim describing exactly what scenario is untested.
 

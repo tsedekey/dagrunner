@@ -38,7 +38,7 @@ Your job: verify that schema and data migrations in the diff are safe to apply u
 
 ## Method
 
-1. Run `git diff HEAD~1..HEAD` to see the diff.
+1. Run `git diff HEAD` to see all uncommitted changes (staged + unstaged vs HEAD). Also run `git status --short` to find any new untracked files and read them directly.
 2. Read migration files and schema definitions in full.
 3. For each safety issue found: file path, line number, one-sentence claim.
 

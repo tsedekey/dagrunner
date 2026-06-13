@@ -28,7 +28,7 @@ Your job: identify breaking changes to public interfaces introduced by the diff.
 
 ## Method
 
-1. Run `git diff HEAD~1..HEAD` to see the diff.
+1. Run `git diff HEAD` to see all uncommitted changes (staged + unstaged vs HEAD). Also run `git status --short` to find any new untracked files and read them directly.
 2. Read the full changed file(s) for context — especially to confirm whether a method/class is genuinely `public` (not package-private or internal).
 3. For each breaking change found, record: the file path, the line number of the changed signature, a one-sentence claim stating exactly what changed and why it breaks callers.
 

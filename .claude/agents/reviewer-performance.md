@@ -39,7 +39,7 @@ Your job: identify concrete performance regressions introduced by the diff — n
 
 ## Method
 
-1. Run `git diff HEAD~1..HEAD` to see the diff.
+1. Run `git diff HEAD` to see all uncommitted changes (staged + unstaged vs HEAD). Also run `git status --short` to find any new untracked files and read them directly.
 2. Read the changed file(s) for context.
 3. For each concrete regression: file path, line number, one-sentence claim.
 

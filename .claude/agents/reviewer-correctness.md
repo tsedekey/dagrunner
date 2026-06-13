@@ -20,7 +20,7 @@ Your job: read the diff in the worktree and identify concrete correctness bugs â
 
 ## Method
 
-1. Run `git diff HEAD~1..HEAD` (or `git diff main...HEAD` if HEAD~1 fails) in the worktree to see the actual diff.
+1. Run `git diff HEAD` in the worktree to see all uncommitted changes (staged + unstaged vs HEAD). Also run `git status --short` to spot any new untracked files and read them directly.
 2. Read each changed file in full for context.
 3. For every concrete bug found, record: the file path, the line number of the defect, a one-sentence claim stating exactly what is wrong and what the correct behaviour should be.
 4. Assign severity: `blocker` (data corruption, crash, security) / `major` (wrong result under reachable inputs) / `minor` (wrong result only on edge cases) / `nit` (cosmetic).

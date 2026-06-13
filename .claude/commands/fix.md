@@ -22,7 +22,7 @@ For each actionable finding in order:
 
 1. Read the cited file at the cited line to understand the context.
 2. Apply the minimal correct fix — only the code needed to address the finding. Do not refactor beyond the scope of the issue.
-3. After each fix, verify the file still compiles / parses (run `npx tsc --noEmit` for TypeScript files, `./mvnw compile -q` for Java files if a pom.xml is present).
+3. After each fix, verify the file still compiles / parses (run `npx tsc --noEmit` for TypeScript files in the `ts/` directory; run `cd java && ./mvnw compile -q` for Java files if a `java/pom.xml` is present).
 
 ---
 
@@ -49,8 +49,8 @@ Write the checklist to `$DAGRUN_ARTIFACTS/addressed-checklist.md`:
 **b) Build/test post-condition:**
 Run the project's tests to confirm nothing is broken:
 
-- If a `ts/package.json` is present: `cd ts && npm test`
-- If a `java/pom.xml` is present: `cd java && ./mvnw test -q`
+- If a `ts/package.json` is present: `npm --prefix ts test`
+- If a `java/pom.xml` is present: `cd java && ./mvnw test -q` (this pattern is allow-listed)
 - If a root `package.json` is present with a `test` script: `npm test`
 - For any other project type: run the standard test command from the README
 

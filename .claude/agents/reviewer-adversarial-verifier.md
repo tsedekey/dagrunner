@@ -9,7 +9,7 @@ You are the **adversarial verifier** for a dagrunner review pipeline.
 You receive:
 
 1. A JSON array of findings from the reviewers (passed in the prompt).
-2. The actual diff via `git diff HEAD~1..HEAD` (or `git diff main...HEAD`).
+2. The actual diff via `git diff HEAD` (all uncommitted working-tree changes vs HEAD).
 
 Your job: skeptically check each finding against reality. Mark it `grounded: true` only if the claim is supported by actual code in the diff. Drop or mark `grounded: false` any finding that:
 
@@ -19,7 +19,7 @@ Your job: skeptically check each finding against reality. Mark it `grounded: tru
 
 ## Method
 
-1. Run `git diff HEAD~1..HEAD` to retrieve the actual diff.
+1. Run `git diff HEAD` to retrieve the actual diff (all uncommitted changes vs HEAD). Also run `git status --short` to spot any new untracked files.
 2. For each finding in the input array:
    a. Look up the cited (file, line) in the diff.
    b. Read the surrounding context in the actual file.

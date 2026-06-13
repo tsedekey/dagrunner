@@ -158,12 +158,11 @@ export async function startRun(opts: {
           allow: [
             "Read",
             "Bash(git *)",
-            "Bash(npm run *)",
-            "Bash(npm test *)",
-            "Bash(npm ci *)",
+            "Bash(npm *)",
             "Bash(npx tsc *)",
             "Bash(npx prettier *)",
             "Bash(./mvnw *)",
+            "Bash(cd java && ./mvnw *)",
           ],
           deny: [
             "Bash(rm -rf *)",

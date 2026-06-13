@@ -39,7 +39,7 @@ Your job: identify correctness issues specific to distributed execution in the d
 
 ## Method
 
-1. Run `git diff HEAD~1..HEAD` to see the diff.
+1. Run `git diff HEAD` to see all uncommitted changes (staged + unstaged vs HEAD). Also run `git status --short` to find any new untracked files and read them directly.
 2. Read the changed file(s) in full for distributed-execution context.
 3. For each issue found: file path, line number, one-sentence claim.
 
