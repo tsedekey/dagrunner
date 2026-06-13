@@ -20,7 +20,7 @@ import {
   existsSync,
 } from "node:fs";
 import { join, basename } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import type { Workflow } from "./types.js";
 import type { DagrunnerConfig } from "./xdg.js";
 import { readState, writeState } from "./state.js";
@@ -159,13 +159,24 @@ export async function startRun(opts: {
   // DISTINCT from the build-harness settings.json (bypassPermissions).
   // additionalDirectories includes runDir so all node artifact subdirs are
   // accessible without prompting (artifacts live outside the worktree).
+  //
+  // verify-seed requirements:
+  //   - /tmp and os.tmpdir() added so Maven can write temp files (sandbox filesystem fix)
+  //   - ~/.docker added so Docker CLI can reach the Docker Desktop socket
+  //   - Docker, docker-compose, java, curl, kill, lsof added to allow list
   writeFileSync(
     join(destClaude, "settings.json"),
     JSON.stringify(
       {
         permissions: {
           defaultMode: "acceptEdits",
-          additionalDirectories: [runDir, join(homedir(), ".m2")],
+          additionalDirectories: [
+            runDir,
+            join(homedir(), ".m2"),
+            join(homedir(), ".docker"),
+            "/tmp",
+            tmpdir(),
+          ],
           allow: [
             "Read",
             "Bash(git *)",
@@ -174,6 +185,17 @@ export async function startRun(opts: {
             "Bash(npx prettier *)",
             "Bash(./mvnw *)",
             "Bash(cd java && ./mvnw *)",
+            "Bash(mvn *)",
+            // verify-seed: cluster lifecycle
+            "Bash(docker *)",
+            "Bash(docker-compose *)",
+            "Bash(java *)",
+            "Bash(nohup java *)",
+            "Bash(curl *)",
+            "Bash(kill *)",
+            "Bash(lsof *)",
+            "Bash(disown *)",
+            "Bash(jq *)",
           ],
           deny: [
             "Bash(rm -rf *)",
@@ -200,6 +222,13 @@ export async function startRun(opts: {
               "central.maven.org",
               "*.maven.org",
               "plugins.gradle.org",
+              // verify-seed: Docker image pulls and Elasticsearch
+              "hub.docker.com",
+              "*.docker.io",
+              "registry-1.docker.io",
+              "auth.docker.io",
+              "production.cloudflare.docker.com",
+              "localhost",
             ],
           },
         },

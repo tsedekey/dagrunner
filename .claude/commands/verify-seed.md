@@ -57,10 +57,21 @@ git diff origin/main...HEAD --name-only
 ```
 
 Determine the minimal Maven `-pl` scope that covers the changed files plus the `dist` module
-(which is always needed for the all-in-one JAR). Build with tests skipped:
+(which is always needed for the all-in-one JAR). Build with tests skipped.
+
+Create a writable Maven temp dir first (the sandbox may restrict writes to /tmp directly):
 
 ```bash
-./mvnw -T 1C -am -pl dist clean install -DskipTests -q
+MAVEN_TMP="$DAGRUN_ARTIFACTS/maven-tmp"
+mkdir -p "$MAVEN_TMP"
+```
+
+Build using the worktree's Maven wrapper:
+
+```bash
+./mvnw -T 1C -am -pl dist clean install -DskipTests -q \
+  -Djava.io.tmpdir="$MAVEN_TMP" \
+  -Dmaven.tmp="$MAVEN_TMP"
 ```
 
 If the build fails:
@@ -70,6 +81,8 @@ If the build fails:
    verify dependencies resolve.
 3. Search for the error message online or via available MCPs.
 4. Fix the root cause and retry. Common issues:
+   - `java.io.tmpdir` permission denied: the `-Djava.io.tmpdir` flag above should prevent this;
+     if not, try `-Djava.io.tmpdir=/tmp` or set `export TMPDIR="$MAVEN_TMP"` before running mvnw
    - Port already in use: kill the conflicting process
    - Maven local repo corruption: `./mvnw dependency:purge-local-repository -pl <module>`
    - IntelliJ-generated class file conflicts: `find . -name "*.class" -path "*/out/*" -delete`
