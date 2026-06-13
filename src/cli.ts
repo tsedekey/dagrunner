@@ -15,7 +15,14 @@ import {
   resolveConfig,
 } from "./xdg.js";
 import { releaseLock } from "./lock.js";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import { generateReport } from "./report.js";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
@@ -132,7 +139,7 @@ async function cmdResume(argv: string[]): Promise<void> {
   if (runId === undefined || runId.startsWith("--")) {
     process.stderr.write(
       `dagrun resume: missing <run-id> argument.\n` +
-        `Usage: dagrun resume <run-id> [--approve] [--reject "<comment>"]\n`,
+        `Usage: dagrun resume <run-id> [--approve] [--reject "<comment>"] [--verify y|n]\n`,
     );
     process.exit(1);
   }
@@ -140,6 +147,8 @@ async function cmdResume(argv: string[]): Promise<void> {
   const approve = hasFlag(argv, "--approve");
   const rejectComment = flagValue(argv, "--reject");
   const configFlag = flagValue(argv, "--config");
+  const verifyRaw = flagValue(argv, "--verify");
+  const verify = verifyRaw === "y" ? "y" : verifyRaw === "n" ? "n" : undefined;
 
   const homeDir = resolveHome();
   const config = resolveConfig(homeDir, configFlag);
@@ -151,6 +160,7 @@ async function cmdResume(argv: string[]): Promise<void> {
     config,
     ...(approve ? { approve: true } : {}),
     ...(rejectComment !== undefined ? { rejectComment } : {}),
+    ...(verify !== undefined ? { verify } : {}),
   });
 }
 
@@ -286,6 +296,37 @@ function cmdCleanup(argv: string[]): void {
   const state = readState(stateFile);
   const worktreePath = state.worktreePath;
 
+  // Stop verify cluster if verify-seed wrote PIDs (Phase 2b).
+  const pidsFile = join(homeDir, "runs", runId, "verify-seed", "pids.json");
+  if (existsSync(pidsFile)) {
+    try {
+      const pids = JSON.parse(readFileSync(pidsFile, "utf8")) as {
+        aio?: number;
+        es_container?: string;
+      };
+      if (pids.aio !== undefined) {
+        try {
+          execSync(`kill ${pids.aio}`, { stdio: "ignore" });
+          process.stdout.write(`dagrun: stopped AIO process ${pids.aio}\n`);
+        } catch {
+          // Process may have already exited.
+        }
+      }
+      if (pids.es_container !== undefined) {
+        try {
+          execSync(`docker stop "${pids.es_container}"`, { stdio: "ignore" });
+          process.stdout.write(
+            `dagrun: stopped ES container ${pids.es_container}\n`,
+          );
+        } catch {
+          // Container may have already stopped.
+        }
+      }
+    } catch {
+      process.stderr.write(`dagrun cleanup: could not read pids.json\n`);
+    }
+  }
+
   try {
     // Must run in the source repo so git can find the worktree registration.
     execSync(`git worktree remove "${worktreePath}" --force`, {
@@ -302,6 +343,56 @@ function cmdCleanup(argv: string[]): void {
 
   releaseLock(homeDir);
   process.stdout.write(`dagrun: cleaned up ${runId}\n`);
+}
+
+function cmdRevertReflection(argv: string[]): void {
+  const runId = argv[0];
+  if (runId === undefined) {
+    process.stderr.write(
+      `dagrun revert-reflection: missing <run-id> argument.\n`,
+    );
+    process.exit(1);
+  }
+
+  const homeDir = resolveHome();
+  const backupDir = join(homeDir, "runs", runId, "reflect", "backup");
+
+  if (!existsSync(backupDir)) {
+    process.stderr.write(
+      `dagrun revert-reflection: no backup found at ${backupDir}\n`,
+    );
+    process.exit(1);
+  }
+
+  const manifestPath = join(backupDir, "manifest.json");
+  if (!existsSync(manifestPath)) {
+    process.stderr.write(
+      `dagrun revert-reflection: no manifest.json in ${backupDir}\n`,
+    );
+    process.exit(1);
+  }
+
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+    files: Array<{ original: string; backup: string }>;
+  };
+
+  let restored = 0;
+  for (const entry of manifest.files) {
+    if (existsSync(entry.backup)) {
+      mkdirSync(join(entry.original, ".."), { recursive: true });
+      cpSync(entry.backup, entry.original);
+      process.stdout.write(`dagrun: restored ${entry.original}\n`);
+      restored++;
+    } else {
+      process.stderr.write(
+        `dagrun revert-reflection: backup missing for ${entry.original}\n`,
+      );
+    }
+  }
+
+  process.stdout.write(
+    `dagrun: revert-reflection complete — ${restored} file(s) restored for ${runId}\n`,
+  );
 }
 
 function cmdReport(argv: string[]): void {
@@ -365,13 +456,14 @@ function printHelp(): void {
       "  dagrun init [--home <path>]",
       "  dagrun preflight [--base-branch <branch>] [--config <file>]",
       "  dagrun start <workflow> --plan <file> [--max-budget-usd <n>] [--force]",
-      '  dagrun resume <run-id> [--approve] [--reject "<comment>"]',
+      '  dagrun resume <run-id> [--approve] [--reject "<comment>"] [--verify y|n]',
       "  dagrun status [<run-id>]",
       "  dagrun list",
       "  dagrun abort <run-id>",
       "  dagrun cleanup <run-id>",
       "  dagrun report <run-id>",
       "  dagrun logs <run-id> <node>",
+      "  dagrun revert-reflection <run-id>",
       "",
     ].join("\n"),
   );
@@ -429,6 +521,10 @@ async function main(argv: string[]): Promise<number> {
 
     case "logs":
       cmdLogs(rest);
+      return 0;
+
+    case "revert-reflection":
+      cmdRevertReflection(rest);
       return 0;
 
     default:

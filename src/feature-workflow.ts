@@ -150,5 +150,39 @@ export const featureWorkflow: Workflow = {
         "Review the feedback below and revise the code changes in the worktree accordingly. " +
         "Then update {artifactsDir}/summary.md to reflect all changes made (which findings were addressed, what files changed, what was deferred).",
     },
+    // Phase 2b nodes — added after Gate 2 (fix).
+    // verify-election (micro-gate in run-engine, not a node) routes here.
+    {
+      id: "verify-seed",
+      dependsOn: ["fix"],
+      command: "/verify-seed",
+      model: "sonnet", // upgraded from haiku — see DECISIONS.md phase2b-verify-seed-model
+      produces: ["manual-test.md"],
+      optional: true, // election=n pre-marks this skipped; optional prevents cascade-block on pr
+      gate: { maxIterations: 5, onReject: "revise-self" }, // Gate 3: human runs manual test
+    },
+    {
+      id: "pr",
+      dependsOn: ["fix", "verify-seed"], // fix ensures worktree is ready; verify-seed optional
+      command: "/pr",
+      model: "haiku",
+      produces: ["body.md"],
+    },
+    {
+      id: "reflect",
+      dependsOn: ["pr"],
+      command: "/reflect",
+      model: "sonnet",
+      produces: ["camunda-knowledge.md", "dagrunner-proposals.md"],
+      gate: { maxIterations: 3, onReject: "revise-self", skippable: true }, // Gate 4: post-PR, never blocks shipping
+    },
+    {
+      id: "apply-reflection",
+      dependsOn: ["reflect"],
+      command: "/apply-reflection",
+      model: "sonnet",
+      produces: ["apply-summary.md"],
+      joinRule: "none-failed-min-one-success", // only runs if reflect completed; auto-skips if reflect was skipped
+    },
   ],
 };

@@ -79,6 +79,8 @@ export type RunState = {
   sourcePlanPath: string;
   /** Keyed by node id. */
   nodes: Record<string, NodeState>;
+  /** verify-election decision captured after Gate 2 (fix) approval. */
+  verifyElection?: "y" | "n";
 };
 
 // ---------------------------------------------------------------------------

@@ -40,6 +40,11 @@ export type GateConfig = {
    * Template literal enforces `rerun:<id>` shape at the type level.
    */
   onReject?: "revise-self" | `rerun:${string}`;
+  /**
+   * When true, quitting the interactive gate marks the node skipped and continues
+   * the run instead of halting. Used for post-PR gates that must never block shipping.
+   */
+  skippable?: boolean;
 };
 
 // ---------------------------------------------------------------------------

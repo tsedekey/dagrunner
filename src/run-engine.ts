@@ -38,9 +38,11 @@ import { loadWorkflow } from "./workflow.js";
 
 function makeCtx(runDir: string) {
   return {
+    // Reads the first structured JSON artifact from a node directory.
+    // Nodes that produce structured output use output.json (sdk-runner writes it).
     json: (nodeId: string): unknown =>
       JSON.parse(
-        readFileSync(join(runDir, nodeId, "classify.json"), "utf8"),
+        readFileSync(join(runDir, nodeId, "output.json"), "utf8"),
       ) as unknown,
     read: (nodeId: string, file: string): string =>
       readFileSync(join(runDir, nodeId, file), "utf8"),
@@ -301,6 +303,8 @@ export async function resumeRun(opts: {
   config: DagrunnerConfig;
   approve?: boolean;
   rejectComment?: string;
+  /** Non-interactive election answer: 'y' = run cluster verify, 'n' = skip. */
+  verify?: "y" | "n";
 }): Promise<void> {
   const { runId, homeDir, config } = opts;
   const runDir = join(homeDir, "runs", runId);
@@ -414,8 +418,10 @@ export async function resumeRun(opts: {
             `${preview}\n---\n\n`,
         );
       }
+      const skippable = gateNode?.gate?.skippable === true;
+      const quitHint = skippable ? "[q]uit/skip" : "[q]uit";
       process.stdout.write(
-        `[a]pprove  [r]eject <comment>  [s]how full  [q]uit\n> `,
+        `[a]pprove  [r]eject <comment>  [s]how full  ${quitHint}\n> `,
       );
       const line = await readOneLine();
       if (line === "a" || line === "approve") {
@@ -431,11 +437,94 @@ export async function resumeRun(opts: {
         }
         await resumeRun(opts);
         return;
+      } else if (skippable) {
+        // Skippable gate (e.g. reflect): quit marks node skipped, run continues done.
+        state = {
+          ...state,
+          nodes: {
+            ...state.nodes,
+            [gateNodeId]: {
+              ...gateNodeState,
+              status: "skipped",
+              endedAt: new Date().toISOString(),
+              gateHistory: [
+                ...gateNodeState.gateHistory,
+                {
+                  decision: "reject" as const,
+                  comment: "skipped by user",
+                  timestamp: new Date().toISOString(),
+                },
+              ],
+            },
+          },
+          status: "running",
+          updatedAt: new Date().toISOString(),
+        };
+        writeState(stateFile, state);
+        process.stdout.write(
+          `dagrun: ${gateNodeId} gate skipped — run will complete done (PR already shipped)\n`,
+        );
+        // Fall through: no gateEntry remaining, runDag resumes below.
       } else {
         process.stdout.write("dagrun: quit\n");
         releaseLock(homeDir);
         process.exit(0);
       }
+    }
+  }
+
+  // verify-election: conducted once, after fix (Gate 2) is approved.
+  // Only applies when the workflow has a verify-seed node and election is not yet recorded.
+  if (state.verifyElection === undefined) {
+    const hasVerifySeed = workflow.nodes.some((n) => n.id === "verify-seed");
+    const fixDone = state.nodes["fix"]?.status === "done";
+    if (hasVerifySeed && fixDone) {
+      let electionAnswer: "y" | "n";
+      if (opts.verify !== undefined) {
+        electionAnswer = opts.verify;
+        process.stdout.write(
+          `dagrun: verify-election = ${electionAnswer} (from --verify flag)\n`,
+        );
+      } else {
+        process.stdout.write(
+          "\nRun runtime verification (cluster start + manual-test seed)? [y/n] > ",
+        );
+        const answer = await readOneLine();
+        electionAnswer = answer.trim() === "y" ? "y" : "n";
+      }
+
+      state = {
+        ...state,
+        verifyElection: electionAnswer,
+        updatedAt: new Date().toISOString(),
+      };
+
+      if (electionAnswer === "n") {
+        // Pre-mark verify-seed as skipped so the DAG routes directly to pr.
+        const verifySeedNodeState = state.nodes["verify-seed"];
+        if (verifySeedNodeState !== undefined) {
+          state = {
+            ...state,
+            nodes: {
+              ...state.nodes,
+              "verify-seed": {
+                ...verifySeedNodeState,
+                status: "skipped",
+                endedAt: new Date().toISOString(),
+              },
+            },
+          };
+        }
+        process.stdout.write(
+          "dagrun: skipping runtime verification — proceeding to pr\n",
+        );
+      } else {
+        process.stdout.write(
+          "dagrun: will run runtime verification (verify-seed + Gate 3)\n",
+        );
+      }
+
+      writeState(stateFile, state);
     }
   }
 
