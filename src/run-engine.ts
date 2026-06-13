@@ -121,8 +121,10 @@ export async function startRun(opts: {
   const destClaude = join(worktreePath, ".claude");
   mkdirSync(join(destClaude, "commands"), { recursive: true });
   mkdirSync(join(destClaude, "hooks"), { recursive: true });
+  mkdirSync(join(destClaude, "agents"), { recursive: true });
   const srcCommands = join(dagrunnerRoot, ".claude", "commands");
   const srcHooks = join(dagrunnerRoot, ".claude", "hooks");
+  const srcAgents = join(dagrunnerRoot, ".claude", "agents");
   if (!existsSync(srcCommands)) {
     throw new Error(
       `dagrun: bundled commands not found at ${srcCommands} — package installation may be broken`,
@@ -133,13 +135,60 @@ export async function startRun(opts: {
       `dagrun: bundled hooks not found at ${srcHooks} — package installation may be broken`,
     );
   }
+  if (!existsSync(srcAgents)) {
+    throw new Error(
+      `dagrun: bundled agents not found at ${srcAgents} — package installation may be broken`,
+    );
+  }
   cpSync(srcCommands, join(destClaude, "commands"), { recursive: true });
   cpSync(srcHooks, join(destClaude, "hooks"), { recursive: true });
-  // Node-run settings: hooks only — no build-harness deny-guard.
+  cpSync(srcAgents, join(destClaude, "agents"), { recursive: true });
+
+  // Runtime settings.json: full permission/sandbox/network model (Phase 2a D1).
+  // DISTINCT from the build-harness settings.json (bypassPermissions).
+  // additionalDirectories includes runDir so all node artifact subdirs are
+  // accessible without prompting (artifacts live outside the worktree).
   writeFileSync(
     join(destClaude, "settings.json"),
     JSON.stringify(
       {
+        permissions: {
+          defaultMode: "acceptEdits",
+          additionalDirectories: [runDir],
+          allow: [
+            "Read",
+            "Bash(git *)",
+            "Bash(npm run *)",
+            "Bash(npm test *)",
+            "Bash(npm ci *)",
+            "Bash(npx tsc *)",
+            "Bash(npx prettier *)",
+            "Bash(./mvnw *)",
+          ],
+          deny: [
+            "Bash(rm -rf *)",
+            "Bash(sudo *)",
+            "Bash(git push --force *)",
+            "Bash(git push * --force)",
+            "Read(**/.env)",
+            "Read(**/.env.*)",
+            "Read(**/secrets/**)",
+            "Write(**/.env*)",
+          ],
+        },
+        sandbox: {
+          enabled: true,
+          autoAllowBashIfSandboxed: true,
+          network: {
+            allowedDomains: [
+              "api.anthropic.com",
+              "registry.npmjs.org",
+              "*.npmjs.org",
+              "github.com",
+              "*.githubusercontent.com",
+            ],
+          },
+        },
         hooks: {
           SessionStart: [
             {
@@ -340,8 +389,9 @@ export async function resumeRun(opts: {
       writeState(stateFile, state);
       process.stdout.write(`dagrun: approved — continuing run\n`);
     } else {
-      // Interactive gate UX.
-      const artifactPath = join(artifactsDir, "guide.md");
+      // Interactive gate UX — preview the primary produces artifact.
+      const primaryProduces = gateNode?.produces?.[0] ?? "artifact";
+      const artifactPath = join(artifactsDir, primaryProduces);
       if (existsSync(artifactPath)) {
         const preview = readFileSync(artifactPath, "utf8")
           .split("\n")

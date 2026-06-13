@@ -165,6 +165,8 @@ let RUN_ID = "";
     "perf_sensitive",
     "touches_schema_or_proto",
     "needs_runtime",
+    "run_adversarial_verifier",
+    "recommend_pr_review",
   ]) {
     assert.strictEqual(
       typeof classify[field],
@@ -236,19 +238,80 @@ let RUN_ID = "";
 }
 
 // ---------------------------------------------------------------------------
-// Step 5 — dagrun resume --approve -> implement -> done
+// Step 5 — dagrun resume --approve (Gate 1) -> implement -> review -> fix -> Gate 2
 // ---------------------------------------------------------------------------
 
 {
   const result = runCli(
     ["resume", RUN_ID, "--approve"],
     HOME_ENV,
-    300_000, // 5 minutes for implement
+    600_000, // 10 minutes: implement + review (multi-subagent fan-out) + fix
   );
   assert.strictEqual(
     result.status,
     0,
-    `approve failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
+    `approve Gate 1 failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
+  );
+
+  const runDir = join(HOME, "runs", RUN_ID);
+  const stateRaw = JSON.parse(
+    readFileSync(join(runDir, "state.json"), "utf8"),
+  ) as { status: string; nodes: Record<string, { status: string }> };
+
+  // After Gate 1 approve: implement runs, review runs, fix hits Gate 2 and pauses.
+  assert.ok(
+    stateRaw.status === "paused" || stateRaw.status === "running",
+    `run must be paused at Gate 2 or running, got: ${stateRaw.status}`,
+  );
+  assert.ok(
+    existsSync(join(runDir, "implement", "summary.md")),
+    "implement/summary.md must exist",
+  );
+  assert.ok(
+    existsSync(join(runDir, "review", "findings.json")),
+    "review/findings.json must exist after review node",
+  );
+  // findings.json must be valid JSON with required top-level keys
+  const findingsRaw = JSON.parse(
+    readFileSync(join(runDir, "review", "findings.json"), "utf8"),
+  ) as Record<string, unknown>;
+  for (const key of [
+    "run_id",
+    "timestamp",
+    "reviewers_run",
+    "reviewers_skipped",
+    "adversarial_verifier_run",
+    "findings",
+  ]) {
+    assert.ok(key in findingsRaw, `findings.json must have key "${key}"`);
+  }
+  assert.ok(
+    Array.isArray(findingsRaw["findings"]),
+    "findings.json findings must be an array",
+  );
+  assert.ok(
+    existsSync(join(runDir, "fix", "summary.md")),
+    "fix/summary.md must exist after fix node",
+  );
+  console.log(
+    "step 5 passed: approve Gate 1 -> implement -> review -> fix -> Gate 2 pause",
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Step 6 — dagrun resume --approve (Gate 2) -> done
+// ---------------------------------------------------------------------------
+
+{
+  const result = runCli(
+    ["resume", RUN_ID, "--approve"],
+    HOME_ENV,
+    60_000, // Gate 2 approve: no API call needed, just state transition
+  );
+  assert.strictEqual(
+    result.status,
+    0,
+    `approve Gate 2 failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
   );
 
   const runDir = join(HOME, "runs", RUN_ID);
@@ -259,17 +322,13 @@ let RUN_ID = "";
   assert.strictEqual(
     stateRaw.status,
     "done",
-    `run must reach done status, got: ${stateRaw.status}`,
+    `run must reach done status after Gate 2 approve, got: ${stateRaw.status}`,
   );
-  assert.ok(
-    existsSync(join(runDir, "implement", "summary.md")),
-    "implement/summary.md must exist after run completes",
-  );
-  console.log("step 5 passed: approve -> implement -> done");
+  console.log("step 6 passed: approve Gate 2 -> done");
 }
 
 // ---------------------------------------------------------------------------
-// Step 6 — reconcile: running node -> failed (synthetic, no API call)
+// Step 7 — reconcile: running node -> failed (synthetic, no API call)
 // ---------------------------------------------------------------------------
 
 {
@@ -369,7 +428,7 @@ let RUN_ID = "";
   );
 
   console.log(
-    `step 6 passed: reconcile running->failed (status after reconcile: ${String(implementStatus)})`,
+    `step 7 passed: reconcile running->failed (status after reconcile: ${String(implementStatus)})`,
   );
 }
 
@@ -377,4 +436,4 @@ let RUN_ID = "";
 // Done
 // ---------------------------------------------------------------------------
 
-console.log("\nall 6 smoke test steps passed");
+console.log("\nall 7 smoke test steps passed");

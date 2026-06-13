@@ -23,6 +23,7 @@ import { assertAuth } from "./launcher.js";
 import { featureWorkflow } from "./feature-workflow.js";
 import { startRun, resumeRun, listRuns } from "./run-engine.js";
 import { readState, writeState } from "./state.js";
+import { runPreflight, printPreflightResult } from "./preflight.js";
 
 // ---------------------------------------------------------------------------
 // Arg-parsing helpers
@@ -49,6 +50,19 @@ function cmdInit(argv: string[]): void {
   const homeDir = computeHomePath(homeFlag);
   initHome(homeDir);
   process.stdout.write(`dagrunner home initialized at ${homeDir}\n`);
+}
+
+async function cmdPreflight(argv: string[]): Promise<void> {
+  const configFlag = flagValue(argv, "--config");
+  const baseBranch = flagValue(argv, "--base-branch");
+  const homeDir = resolveHome();
+  const config = resolveConfig(homeDir, configFlag);
+
+  const result = runPreflight(config, homeDir, {
+    ...(baseBranch !== undefined ? { baseBranch } : {}),
+  });
+  printPreflightResult(result);
+  if (!result.ok) process.exit(1);
 }
 
 async function cmdStart(argv: string[]): Promise<void> {
@@ -87,6 +101,13 @@ async function cmdStart(argv: string[]): Promise<void> {
 
   // Auth check.
   assertAuth();
+
+  // Preflight checks — must pass before creating any worktrees.
+  const preflight = runPreflight(config, homeDir);
+  if (!preflight.ok) {
+    printPreflightResult(preflight);
+    process.exit(1);
+  }
 
   // Resolve workflow by name.
   if (workflowName !== "feature") {
@@ -340,6 +361,7 @@ function printHelp(): void {
       "",
       "Commands:",
       "  dagrun init [--home <path>]",
+      "  dagrun preflight [--base-branch <branch>] [--config <file>]",
       "  dagrun start <workflow> --plan <file> [--max-budget-usd <n>] [--force]",
       '  dagrun resume <run-id> [--approve] [--reject "<comment>"]',
       "  dagrun status [<run-id>]",
@@ -369,6 +391,10 @@ async function main(argv: string[]): Promise<number> {
   switch (command) {
     case "init":
       cmdInit(rest);
+      return 0;
+
+    case "preflight":
+      await cmdPreflight(rest);
       return 0;
 
     case "start":

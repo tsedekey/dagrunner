@@ -60,22 +60,35 @@ export function makeSDKRunner(
       if (latest !== undefined) {
         const feedbackPath = join(ctx.artifactsDir, latest);
         const feedbackText = readFileSync(feedbackPath, "utf8").trim();
-        // Wrap with an explicit rewrite instruction so the model uses Write tool
-        // rather than acknowledging the feedback verbally without updating the file.
-        const primaryArtifact = node.produces?.[0] ?? "artifact";
-        const artifactFullPath = join(ctx.artifactsDir, primaryArtifact);
+        const revisionBody =
+          node.revisionInstruction !== undefined
+            ? node.revisionInstruction.replace(
+                /\{artifactsDir\}/g,
+                ctx.artifactsDir,
+              )
+            : (() => {
+                // Default: rewrite the primary artifact completely.
+                const primaryArtifact = node.produces?.[0] ?? "artifact";
+                const artifactFullPath = join(
+                  ctx.artifactsDir,
+                  primaryArtifact,
+                );
+                return `Incorporate this feedback and rewrite ${artifactFullPath} completely with the changes applied.`;
+              })();
         prompt =
           `<reviewer-feedback>\n${feedbackText}\n</reviewer-feedback>\n\n` +
-          `Incorporate this feedback and rewrite ${artifactFullPath} completely with the changes applied.`;
+          revisionBody;
       }
     }
 
     // Build SDK options object — only set keys whose values are defined
     // (exactOptionalPropertyTypes: never assign key: undefined).
+    // Runtime nodes run under the seeded settings.json permission model
+    // (acceptEdits + sandbox). Do NOT bypass — the permission boundary must
+    // exist before any node mutates the real repo (Phase 2a D1 requirement).
     const options: Parameters<typeof query>[0]["options"] = {
       cwd: worktreePath,
-      permissionMode: "bypassPermissions",
-      allowDangerouslySkipPermissions: true,
+      permissionMode: "acceptEdits",
       settingSources: ["project"],
       systemPrompt: { type: "preset", preset: "claude_code" },
     };

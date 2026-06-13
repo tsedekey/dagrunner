@@ -103,6 +103,13 @@ export type Node = {
   maxBudget?: number;
   /** Per-node hook scripts. */
   hooks?: { stop?: string };
+  /**
+   * Custom revision prompt injected when gate feedback is applied.
+   * Overrides the default "rewrite {artifact}" prompt. Use `{artifactsDir}`
+   * as a placeholder for the absolute per-node artifacts directory path.
+   * Required for fix node where the product is the worktree diff, not a single artifact.
+   */
+  revisionInstruction?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -134,4 +141,8 @@ export type ClassifyOutput = {
   touches_schema_or_proto: boolean;
   needs_runtime: boolean;
   risk: "low" | "med" | "high";
+  /** When true: review node runs the adversarial verifier subagent to ground findings. */
+  run_adversarial_verifier: boolean;
+  /** Advisory only: suggests a /pr-review run (Phase 3 — not acted on in Phase 2a). */
+  recommend_pr_review: boolean;
 };
