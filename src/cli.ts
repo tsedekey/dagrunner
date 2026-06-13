@@ -21,6 +21,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { generateReport } from "./report.js";
@@ -28,7 +29,7 @@ import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { assertAuth } from "./launcher.js";
 import { featureWorkflow } from "./feature-workflow.js";
-import { startRun, resumeRun, listRuns } from "./run-engine.js";
+import { startRun, resumeRun, listRuns, activeRun } from "./run-engine.js";
 import { readState, writeState } from "./state.js";
 import { runPreflight, printPreflightResult } from "./preflight.js";
 
@@ -444,6 +445,104 @@ function cmdLogs(argv: string[]): void {
 }
 
 // ---------------------------------------------------------------------------
+// Diagnostic dump — called by the SIGINT handler
+// ---------------------------------------------------------------------------
+
+function writeDiagnostic(runDir: string): void {
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  const reportPath = join(runDir, `diagnostic-${ts}.md`);
+
+  const stateFile = join(runDir, "state.json");
+  if (!existsSync(stateFile)) {
+    process.stderr.write(
+      "dagrun: no state.json found — cannot write diagnostic\n",
+    );
+    return;
+  }
+
+  const state = readState(stateFile);
+
+  const activeNodes = Object.entries(state.nodes).filter(
+    ([, ns]) => ns.status === "running" || ns.status === "pending",
+  );
+
+  const lines: string[] = [
+    `# dagrun Diagnostic Report`,
+    ``,
+    `**Run:** ${state.runId}`,
+    `**Interrupted:** ${new Date().toISOString()}`,
+    ``,
+    `## Active Nodes at Interrupt`,
+  ];
+
+  if (activeNodes.length === 0) {
+    lines.push("(none running)");
+  } else {
+    for (const [id, ns] of activeNodes) {
+      lines.push(`- **${id}** (${ns.status})`);
+      if (ns.error !== undefined) lines.push(`  error: ${ns.error}`);
+    }
+  }
+
+  lines.push(
+    ``,
+    `## Run State`,
+    ``,
+    "```json",
+    JSON.stringify(state, null, 2),
+    "```",
+  );
+
+  lines.push(``, `## Artifact Files`);
+
+  const logPaths: string[] = [];
+
+  for (const nodeId of Object.keys(state.nodes)) {
+    const artifactsDir = join(runDir, nodeId);
+    if (!existsSync(artifactsDir)) continue;
+    lines.push(``, `### ${nodeId}/`);
+    try {
+      const files = readdirSync(artifactsDir);
+      for (const f of files) {
+        const fp = join(artifactsDir, f);
+        try {
+          const st = statSync(fp);
+          lines.push(`- ${f} (${st.size} bytes)`);
+          if (f.endsWith(".log") || f === "transcript.log") logPaths.push(fp);
+        } catch {
+          lines.push(`- ${f}`);
+        }
+      }
+    } catch {
+      lines.push("(unreadable)");
+    }
+  }
+
+  if (logPaths.length > 0) {
+    lines.push(``, `## Log Tails (last 100 lines each)`);
+    for (const logPath of logPaths) {
+      const rel = logPath.slice(runDir.length + 1);
+      lines.push(``, `### ${rel}`, "```");
+      try {
+        const tail = readFileSync(logPath, "utf8")
+          .split("\n")
+          .slice(-100)
+          .join("\n");
+        lines.push(tail);
+      } catch {
+        lines.push("(unreadable)");
+      }
+      lines.push("```");
+    }
+  }
+
+  lines.push(``, `---`, `*Report: ${reportPath}*`);
+
+  writeFileSync(reportPath, lines.join("\n"), "utf8");
+  process.stderr.write(`\ndagrun: diagnostic → ${reportPath}\n`);
+}
+
+// ---------------------------------------------------------------------------
 // Help
 // ---------------------------------------------------------------------------
 
@@ -474,6 +573,22 @@ function printHelp(): void {
 // ---------------------------------------------------------------------------
 
 async function main(argv: string[]): Promise<number> {
+  // SIGINT handler: write diagnostic before exiting so the user has a record
+  // of what the active node was doing and why it may have failed.
+  process.on("SIGINT", () => {
+    if (activeRun.runDir !== undefined) {
+      writeDiagnostic(activeRun.runDir);
+    }
+    if (activeRun.homeDir !== undefined) {
+      try {
+        releaseLock(activeRun.homeDir);
+      } catch {
+        // Ignore — lock may already be gone.
+      }
+    }
+    process.exit(130);
+  });
+
   const command = argv[0];
   const rest = argv.slice(1);
 

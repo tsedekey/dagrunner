@@ -13,6 +13,7 @@
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import {
+  appendFileSync,
   mkdirSync,
   writeFileSync,
   readdirSync,
@@ -114,6 +115,23 @@ export function makeSDKRunner(
       systemPrompt: { type: "preset", preset: "claude_code" },
     };
 
+    // verify-seed needs Docker (Unix socket) and Maven /tmp writes.
+    // The deny list in settings.json still applies; only the OS sandbox
+    // restrictions are relaxed for these specific paths.
+    if (nodeId === "verify-seed") {
+      options.sandbox = {
+        network: {
+          // allowAllUnixSockets covers both /var/run/docker.sock and
+          // ~/.docker/run/docker.sock (Docker Desktop path varies by version).
+          allowAllUnixSockets: true,
+        },
+        filesystem: {
+          allowWrite: ["/tmp"],
+          allowRead: ["/tmp"],
+        },
+      };
+    }
+
     if (node.model === "haiku") {
       options.model = "claude-haiku-4-5-20251001";
     } else if (node.model === "sonnet") {
@@ -139,12 +157,25 @@ export function makeSDKRunner(
 
     const q = query({ prompt, options });
 
+    // Per-node transcript: captures the full message stream so the SIGINT
+    // diagnostic (and dagrun logs <node>) shows why a node failed.
+    const transcriptPath = join(ctx.artifactsDir, "transcript.log");
+
     let finalSessionId = "";
     let totalCost = 0;
     let structuredOutput: unknown = undefined;
     let sdkError: string | null = null;
 
     for await (const msg of q) {
+      // Append every SDK message to the transcript (compact JSON, one per line).
+      // Truncated to 8 KB per entry to keep the file manageable.
+      const raw = JSON.stringify(msg);
+      appendFileSync(
+        transcriptPath,
+        raw.length > 8192 ? raw.slice(0, 8192) + "…}\n" : raw + "\n",
+        "utf8",
+      );
+
       // Stream tool calls and assistant text to stdout so the user can follow progress.
       if (msg.type === "assistant") {
         const content = (

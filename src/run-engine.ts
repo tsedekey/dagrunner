@@ -19,6 +19,10 @@ import {
   readdirSync,
   existsSync,
 } from "node:fs";
+
+// Mutable ref so the SIGINT handler in cli.ts can find the active run dir and
+// release the lock cleanly. Mutated (not reassigned) so the export stays stable.
+export const activeRun: { runDir?: string; homeDir?: string } = {};
 import { join, basename } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import type { Workflow } from "./types.js";
@@ -109,6 +113,10 @@ export async function startRun(opts: {
   const runDir = join(homeDir, "runs", runId);
   const stateFile = join(runDir, "state.json");
   const worktreePath = join(homeDir, "worktrees", runId);
+
+  // Track for SIGINT diagnostic handler in cli.ts.
+  activeRun.runDir = runDir;
+  activeRun.homeDir = homeDir;
 
   // Lock BEFORE creating the worktree (advisor: avoid stray worktrees on failure).
   if (force === true) releaseLock(homeDir);
@@ -338,6 +346,10 @@ export async function resumeRun(opts: {
   const { runId, homeDir, config } = opts;
   const runDir = join(homeDir, "runs", runId);
   const stateFile = join(runDir, "state.json");
+
+  // Track for SIGINT diagnostic handler in cli.ts.
+  activeRun.runDir = runDir;
+  activeRun.homeDir = homeDir;
 
   if (!existsSync(stateFile)) {
     process.stderr.write(`dagrun: run "${runId}" not found at ${stateFile}\n`);
