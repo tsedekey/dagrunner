@@ -352,6 +352,34 @@ export async function resumeRun(opts: {
 
   const workflow = workflowFromState(state);
 
+  // Optional nodes that were running when the process was interrupted become
+  // failed after reconcile. Because failed+optional = silently skipped in the
+  // DAG, they would be bypassed on the next runDag call rather than retried.
+  // Reset them to pending so the DAG picks them up again.
+  for (const [id, ns] of Object.entries(state.nodes)) {
+    if (
+      ns.status === "failed" &&
+      ns.error === "process interrupted — reconciled on resume" &&
+      workflow.nodes.find((n) => n.id === id)?.optional === true
+    ) {
+      // Omit error/endedAt via destructuring — exactOptionalPropertyTypes
+      // forbids explicit `undefined` on optional properties.
+      const { error: _e, endedAt: _ea, ...nsRest } = ns;
+      state = {
+        ...state,
+        nodes: {
+          ...state.nodes,
+          [id]: { ...nsRest, status: "pending" },
+        },
+        updatedAt: new Date().toISOString(),
+      };
+      process.stdout.write(
+        `dagrun: node "${id}" was interrupted — resetting to pending for retry\n`,
+      );
+    }
+  }
+  writeState(stateFile, state);
+
   // Find the awaiting-gate node (single-awaiting-gate invariant).
   const gateEntry = Object.entries(state.nodes).find(
     ([, ns]) => ns.status === "awaiting-gate",
