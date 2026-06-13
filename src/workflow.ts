@@ -155,8 +155,6 @@ export function validateClassifyOutput(data: unknown): ClassifyOutput {
     "perf_sensitive",
     "touches_schema_or_proto",
     "needs_runtime",
-    "run_adversarial_verifier",
-    "recommend_pr_review",
   ] as const;
 
   for (const field of boolFields) {
@@ -181,8 +179,6 @@ export function validateClassifyOutput(data: unknown): ClassifyOutput {
     touches_schema_or_proto: obj["touches_schema_or_proto"] as boolean,
     needs_runtime: obj["needs_runtime"] as boolean,
     risk,
-    run_adversarial_verifier: obj["run_adversarial_verifier"] as boolean,
-    recommend_pr_review: obj["recommend_pr_review"] as boolean,
   };
 }
 

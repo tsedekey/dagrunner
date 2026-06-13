@@ -22,8 +22,6 @@ export const CLASSIFY_SCHEMA = {
     touches_schema_or_proto: { type: "boolean" },
     needs_runtime: { type: "boolean" },
     risk: { type: "string", enum: ["low", "med", "high"] },
-    run_adversarial_verifier: { type: "boolean" },
-    recommend_pr_review: { type: "boolean" },
   },
   required: [
     "touches_public_api",
@@ -32,8 +30,6 @@ export const CLASSIFY_SCHEMA = {
     "touches_schema_or_proto",
     "needs_runtime",
     "risk",
-    "run_adversarial_verifier",
-    "recommend_pr_review",
   ],
   additionalProperties: false,
 } as const satisfies Record<string, unknown>;

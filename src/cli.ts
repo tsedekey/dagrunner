@@ -195,10 +195,12 @@ function cmdStatus(argv: string[]): void {
   let totalCost = 0;
   for (const [nodeId, ns] of Object.entries(state.nodes)) {
     totalCost += ns.cost;
+    const artifactLink =
+      ns.artifacts.length > 0 ? `  artifact=file://${ns.artifacts[0]}` : "";
     process.stdout.write(
       `  ${nodeId.padEnd(20)} status=${ns.status.padEnd(14)} ` +
-        `cost=$${ns.cost.toFixed(4)}  iter=${ns.iteration}  ` +
-        `artifacts=${ns.artifacts.length}\n`,
+        `cost=$${ns.cost.toFixed(4)}  iter=${ns.iteration}` +
+        `${artifactLink}\n`,
     );
   }
 

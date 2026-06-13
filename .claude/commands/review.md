@@ -12,14 +12,12 @@ Read the classify artifact:
 $DAGRUN_ARTIFACTS/../classify/classify.json
 ```
 
-Parse it and determine:
+Determine which conditional reviewers to run based on the flags:
 
-- `run_adversarial_verifier` — whether to run the adversarial verifier after collecting findings
-- Which conditional reviewers to run based on the flags:
-  - `touches_public_api` → include `reviewer-api-stability`
-  - `touches_runtime` → include `reviewer-distributed-systems`
-  - `perf_sensitive` → include `reviewer-performance`
-  - `touches_schema_or_proto` → include `reviewer-migration-safety`
+- `touches_public_api` → include `reviewer-api-stability`
+- `touches_runtime` → include `reviewer-distributed-systems`
+- `perf_sensitive` → include `reviewer-performance`
+- `touches_schema_or_proto` → include `reviewer-migration-safety`
 
 These two always run regardless of flags:
 
@@ -38,18 +36,22 @@ Collect all findings arrays from successful reviewers. Flatten them into a singl
 
 ---
 
-## Step 3 — Adversarial verifier (conditional)
+## Step 3 — Adversarial verifier (runtime threshold)
 
-If `run_adversarial_verifier` is true in classify.json:
+Count the total number of findings in the merged array.
+
+**If `findings.length > 3`:**
 
 - Use the **Agent tool** to dispatch `reviewer-adversarial-verifier`
 - Pass it the merged findings array (all findings from Step 2) as JSON in the prompt: `"Here are the findings to verify:\n\n<findings JSON>"`
 - The verifier returns the same array with `grounded: boolean` added to each item
 - Replace the findings array with the verifier's output
+- Set `adversarial_verifier_run: true`
 
-If `run_adversarial_verifier` is false:
+**If `findings.length <= 3`:**
 
-- Set `grounded: true` on all findings (reviewer said what they saw; no independent verification ran)
+- Set `grounded: true` on all findings (small set — reviewer claims are taken at face value)
+- Set `adversarial_verifier_run: false`
 
 ---
 

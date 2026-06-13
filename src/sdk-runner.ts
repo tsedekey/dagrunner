@@ -6,7 +6,7 @@
  *   2. Gated nodes ALWAYS return awaiting-gate (not done) after the query
  *      completes — the human approve step marks them done in run-engine.ts.
  *   3. On resume (ctx.sessionId set) + feedback present, feed feedback as the
- *      next user turn so Claude revises with memory of why it wrote the artifact.
+ *      next user turn so Claude revises with full session memory (Theme 5).
  *   4. classify.json is written from SDK structured_output deterministically by
  *      the runner, not by the node itself.
  */
@@ -19,7 +19,7 @@ import {
   readFileSync,
   existsSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import type {
   NodeExecutor,
   NodeExecResult,
@@ -28,6 +28,27 @@ import type {
 import type { Node } from "./types.js";
 import type { DagrunnerConfig } from "./xdg.js";
 import { applyNodeEnv, buildNodeEnv } from "./launcher.js";
+
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
+
+/** Collect full paths for node.produces files that exist on disk. */
+function collectArtifacts(artifactsDir: string, produces: string[]): string[] {
+  return produces
+    .map((f) => join(artifactsDir, f))
+    .filter((p) => existsSync(p));
+}
+
+/** Print a one-line progress update for a running node. */
+function logProgress(nodeId: string, line: string): void {
+  process.stdout.write(`[${nodeId}] ${line}\n`);
+}
+
+/** Truncate a string to maxLen chars, appending … if cut. */
+function trunc(s: string, maxLen = 80): string {
+  return s.length > maxLen ? s.slice(0, maxLen - 1) + "…" : s;
+}
 
 // ---------------------------------------------------------------------------
 // makeSDKRunner
@@ -124,6 +145,38 @@ export function makeSDKRunner(
     let sdkError: string | null = null;
 
     for await (const msg of q) {
+      // Stream tool calls and assistant text to stdout so the user can follow progress.
+      if (msg.type === "assistant") {
+        const content = (
+          msg as { type: "assistant"; message: { content: unknown[] } }
+        ).message.content;
+        for (const block of content) {
+          const b = block as Record<string, unknown>;
+          if (b["type"] === "tool_use") {
+            const toolName = String(b["name"] ?? "");
+            const input = (b["input"] ?? {}) as Record<string, unknown>;
+            // Show the most informative single-line summary per tool type.
+            const detail =
+              typeof input["command"] === "string"
+                ? trunc(input["command"])
+                : typeof input["file_path"] === "string"
+                  ? basename(input["file_path"])
+                  : typeof input["description"] === "string"
+                    ? trunc(input["description"])
+                    : "";
+            logProgress(
+              nodeId,
+              detail ? `→ ${toolName}(${detail})` : `→ ${toolName}`,
+            );
+          } else if (b["type"] === "text") {
+            const text = String(b["text"] ?? "").trim();
+            if (text.length > 0) {
+              logProgress(nodeId, trunc(text, 120));
+            }
+          }
+        }
+      }
+
       if (msg.type === "result") {
         finalSessionId = msg.session_id;
         totalCost = msg.total_cost_usd;
@@ -154,6 +207,8 @@ export function makeSDKRunner(
       );
     }
 
+    const produces = node.produces ?? [];
+
     // Gated nodes always pause after completing — human approve marks them done.
     // The current iteration count = number of feedback files that exist now.
     if (node.gate !== undefined) {
@@ -163,7 +218,7 @@ export function makeSDKRunner(
           ).length
         : 0;
       // Primary artifact path (first produces entry) for the gate preview.
-      const primaryProduces = node.produces?.[0] ?? "artifact";
+      const primaryProduces = produces[0] ?? "artifact";
       return {
         status: "awaiting-gate",
         iteration: feedbackCount,
@@ -175,7 +230,7 @@ export function makeSDKRunner(
 
     return {
       status: "done",
-      artifacts: [],
+      artifacts: collectArtifacts(ctx.artifactsDir, produces),
       cost: totalCost,
       sessionId: finalSessionId,
     };

@@ -74,14 +74,19 @@ function renderNodeTable(nodes: Record<string, NodeState>): string {
   const rows = Object.entries(nodes).map(([id, ns]: [string, NodeState]) => {
     const error = ns.error ? esc(ns.error) : "&mdash;";
     const model = ns.model ? esc(ns.model) : "&mdash;";
+    const firstArtifact = ns.artifacts[0];
+    const artifactCell =
+      firstArtifact !== undefined
+        ? `<a href="file://${esc(firstArtifact)}" style="font-family:monospace;font-size:0.85em;">${esc(firstArtifact.split("/").pop() ?? firstArtifact)}</a>`
+        : "&mdash;";
     return `
         <tr>
           <td><code>${esc(id)}</code></td>
           <td>${badge(ns.status)}</td>
-          <td>${model}</td>
+          <td style="font-size:0.85em;">${model}</td>
           <td style="text-align:center;">${ns.iteration}</td>
           <td style="text-align:right;">$${ns.cost.toFixed(4)}</td>
-          <td style="text-align:center;">${ns.artifacts.length}</td>
+          <td>${artifactCell}</td>
           <td style="font-size:0.85em;color:#c62828;">${error}</td>
         </tr>`;
   });
@@ -97,7 +102,7 @@ function renderNodeTable(nodes: Record<string, NodeState>): string {
             <th>Model</th>
             <th>Iterations</th>
             <th>Cost (USD)</th>
-            <th>Artifacts</th>
+            <th>Artifact</th>
             <th>Last Error</th>
           </tr>
         </thead>

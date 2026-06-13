@@ -141,8 +141,4 @@ export type ClassifyOutput = {
   touches_schema_or_proto: boolean;
   needs_runtime: boolean;
   risk: "low" | "med" | "high";
-  /** When true: review node runs the adversarial verifier subagent to ground findings. */
-  run_adversarial_verifier: boolean;
-  /** Advisory only: suggests a /pr-review run (Phase 3 — not acted on in Phase 2a). */
-  recommend_pr_review: boolean;
 };

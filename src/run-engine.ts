@@ -20,6 +20,7 @@ import {
   existsSync,
 } from "node:fs";
 import { join, basename } from "node:path";
+import { homedir } from "node:os";
 import type { Workflow } from "./types.js";
 import type { DagrunnerConfig } from "./xdg.js";
 import { readState, writeState } from "./state.js";
@@ -51,6 +52,11 @@ function makeCtx(runDir: string) {
 // Initial node state factory
 // ---------------------------------------------------------------------------
 
+const MODEL_IDS: Record<string, string> = {
+  haiku: "claude-haiku-4-5-20251001",
+  sonnet: "claude-sonnet-4-6",
+};
+
 function makeInitialNodeStates(workflow: Workflow): Record<string, NodeState> {
   const nodes: Record<string, NodeState> = {};
   for (const node of workflow.nodes) {
@@ -60,6 +66,9 @@ function makeInitialNodeStates(workflow: Workflow): Record<string, NodeState> {
       iteration: 0,
       cost: 0,
       gateHistory: [],
+      ...(node.model !== undefined
+        ? { model: MODEL_IDS[node.model] ?? node.model }
+        : {}),
     };
   }
   return nodes;
@@ -154,7 +163,7 @@ export async function startRun(opts: {
       {
         permissions: {
           defaultMode: "acceptEdits",
-          additionalDirectories: [runDir],
+          additionalDirectories: [runDir, join(homedir(), ".m2")],
           allow: [
             "Read",
             "Bash(git *)",
@@ -185,6 +194,10 @@ export async function startRun(opts: {
               "*.npmjs.org",
               "github.com",
               "*.githubusercontent.com",
+              "repo.maven.apache.org",
+              "central.maven.org",
+              "*.maven.org",
+              "plugins.gradle.org",
             ],
           },
         },
