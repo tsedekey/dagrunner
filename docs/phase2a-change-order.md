@@ -50,6 +50,7 @@ All five changes share one theme: **strip everything predictive out of the front
 ## Findings schema after these changes
 
 The review node's `findings.json` no longer carries any classify-driven fields. It should be:
+
 ```
 {
   run_id, timestamp,                         // passed in, not generated
@@ -62,11 +63,13 @@ The review node's `findings.json` no longer carries any classify-driven fields. 
   ]
 }
 ```
+
 (`triage` replaces the former external classify contract; it is produced inside the review node.)
 
 ## Acceptance (re-run the fixture)
 
 Re-run the Phase 2a validation fixture and show:
+
 1. No `classify` node runs; the pipeline starts at expand-guide.
 2. The review node's diff-triage selects the correct reviewer subset from the diff (the fixture's public-API change triggers api-stability).
 3. The adversarial verifier runs only when findings > N (the 3 planted flaws is a good boundary to test both sides of the threshold — tune N or the fixture so you can demonstrate both "ran" and "skipped").

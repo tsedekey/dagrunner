@@ -24,11 +24,13 @@ Deliver runnable proof (captured transcript + the produced findings.json + a bef
 ## 1. Context: what exists, what shifted
 
 **Phase 1 is DONE and hardened** (your compacted context already holds the detail). It delivered the complete engine + spine + thin slice:
+
 - Nodes: classify -> expand-guide -> implement, with Gate 1 (review-the-guide, conversation-led).
 - Spine: run-id, state.json, checkpoint-and-exit, reconcile-on-resume, worktree lifecycle, run-dir artifact channel, `produces` contract, XDG home, native hooks (SessionStart sync, PostToolUse format, Stop friction/gates, SessionEnd cost), launcher with env propagation, `dagrun report` static HTML.
 - Hardened: 5 fresh-model bugs fixed, formatter hook fixed (parses `tool_input.file_path` from stdin), seeded-command/hook path resolution from package root, scoped worktree sync, enterprise-config dress rehearsal passed.
 
 **What SHIFTED since Phase 1 was specced** (do NOT follow the old Phase-1 handoff on these):
+
 - The six reviewers are NOT six static DAG nodes, and there is NO `synthesize-and-fix` loop node. That design is superseded.
 - Instead: **review and fix are SPLIT into two static nodes.** `review` is read-only parallel fan-out over a bounded reviewer set using NATIVE SUBAGENTS inside one static node, producing a single findings artifact. `fix` is a separate static node that mutates the worktree and carries the conversation-led gate.
 - The feature pipeline is **fully static** — no dynamic workflows inside it. Dynamic workflows (`/pr-review`) and the siblings are Phase 3, out of scope here.
@@ -66,16 +68,27 @@ This MUST land before review/fix, because review/fix are the first nodes to do a
     "additionalDirectories": ["<run-dir artifacts path — injected per run>"],
     "allow": ["Read", "Bash(git *)", "Bash(npm run *)", "Bash(npx tsc *)"],
     "deny": [
-      "Bash(rm -rf *)", "Bash(sudo *)",
-      "Bash(git push --force *)", "Bash(git push * --force)",
-      "Read(**/.env)", "Read(**/.env.*)", "Read(**/secrets/**)", "Write(**/.env*)"
+      "Bash(rm -rf *)",
+      "Bash(sudo *)",
+      "Bash(git push --force *)",
+      "Bash(git push * --force)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/secrets/**)",
+      "Write(**/.env*)"
     ]
   },
   "sandbox": {
     "enabled": true,
     "autoAllowBashIfSandboxed": true,
     "network": {
-      "allowedDomains": ["api.anthropic.com", "registry.npmjs.org", "*.npmjs.org", "github.com", "*.githubusercontent.com"]
+      "allowedDomains": [
+        "api.anthropic.com",
+        "registry.npmjs.org",
+        "*.npmjs.org",
+        "github.com",
+        "*.githubusercontent.com"
+      ]
     }
   }
 }
@@ -84,11 +97,13 @@ This MUST land before review/fix, because review/fix are the first nodes to do a
 Behavior to achieve: inside-project auto (acceptEdits + worktree cwd); Read global; out-of-project mutation kernel-blocked by macOS Seatbelt (hard block, not a prompt); network proxied + allowlisted (NOT cut off — WebFetch/WebSearch tools unaffected since in-process; Bash network works for allowlisted domains, un-listed => loud failure).
 
 **Three gotchas to handle:**
+
 1. The run-dir artifacts live OUTSIDE the worktree — inject the per-run artifact path into `additionalDirectories` at seed time, or every node prompts. (Most likely source of unexpected prompts.)
 2. Node-native `fetch` (undici) ignores the proxy and breaks under the sandbox — if any node code does raw `fetch()`, it needs a ProxyAgent or `excludedCommands`. Build/test tools (npm/git/tsc) respect the proxy and are fine.
 3. Enterprise managed settings can override/lock user+project rules — verify the work config doesn't impose conflicting rules.
 
 **1b. `dagrun preflight`** — runs before the graph (and as the first thing `start` does). NOT a DAG node. Fails loud on any miss:
+
 - On expected base branch; git working tree clean.
 - DEVHARNESS_SRC resolves and is a git repo.
 - Seeded permission settings.json present; macOS Seatbelt sandbox available.
@@ -112,6 +127,7 @@ Behavior to achieve: inside-project auto (acceptEdits + worktree cwd); Read glob
 - **produces:** ONE `review/findings.json` validated against the dagrunner-owned findings schema (below). No worktree mutation.
 
 **Findings schema (dagrunner owns it; single source of truth):**
+
 ```
 {
   run_id, timestamp,                        // passed IN, not generated

@@ -197,11 +197,11 @@ export function makeSDKRunner(
       };
     }
 
-    // classify node: write structured output to classify.json deterministically.
-    // The runner owns this write — not the node (Theme 4).
+    // Structured output node: write SDK output deterministically (runner owns write, not node).
     if (node.outputSchema !== undefined && structuredOutput !== undefined) {
+      const outFile = node.produces?.[0] ?? "output.json";
       writeFileSync(
-        join(ctx.artifactsDir, "classify.json"),
+        join(ctx.artifactsDir, outFile),
         JSON.stringify(structuredOutput, null, 2),
         "utf8",
       );

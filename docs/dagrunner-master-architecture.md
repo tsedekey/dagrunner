@@ -18,13 +18,13 @@ Design north star (validated repeatedly this project): **strip everything predic
 
 ## 2. The five-component system
 
-| # | Component | Runs where | Role |
-|---|---|---|---|
-| 1 | **Glean Agent (Feature Task Companion)** | Glean | Ingests a GitHub task; emits a directional implementation plan (INTENT/why). dagrunner's expand-guide writes the code-level HOW. The plan is dagrunner's inbox input — no GitHub issue needed. |
-| 2 | **dagrunner (static feature pipeline)** | local machine | The gated feature pipeline. The heart of the system. |
-| 3 | **ci-babysit** | local (dagrunner-static) | Sibling: monitors CI on an open PR, rebases/fixes/re-verifies. Needs the local verify cluster + private context. |
-| 4 | **/pr-review** | session / `claude -p` | Sibling: on-demand deep adversarial PR review as a SAVED dynamic workflow. |
-| 5 | **review-triage** | GitHub Actions (gh-aw) | Sibling: ingests PR review comments (bots + humans + /pr-review), classifies, drafts replies, NEVER auto-posts (gh-aw safe-outputs). |
+| #   | Component                                | Runs where               | Role                                                                                                                                                                                           |
+| --- | ---------------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **Glean Agent (Feature Task Companion)** | Glean                    | Ingests a GitHub task; emits a directional implementation plan (INTENT/why). dagrunner's expand-guide writes the code-level HOW. The plan is dagrunner's inbox input — no GitHub issue needed. |
+| 2   | **dagrunner (static feature pipeline)**  | local machine            | The gated feature pipeline. The heart of the system.                                                                                                                                           |
+| 3   | **ci-babysit**                           | local (dagrunner-static) | Sibling: monitors CI on an open PR, rebases/fixes/re-verifies. Needs the local verify cluster + private context.                                                                               |
+| 4   | **/pr-review**                           | session / `claude -p`    | Sibling: on-demand deep adversarial PR review as a SAVED dynamic workflow.                                                                                                                     |
+| 5   | **review-triage**                        | GitHub Actions (gh-aw)   | Sibling: ingests PR review comments (bots + humans + /pr-review), classifies, drafts replies, NEVER auto-posts (gh-aw safe-outputs).                                                           |
 
 Three substrates, three locations — local-gated (dagrunner), session-on-demand (dynamic workflows), CI-event-driven (gh-aw) — converging at the PR boundary for everything post-implementation.
 
@@ -64,16 +64,19 @@ All nodes are static DAG nodes. No dynamic-workflow node lives inside the featur
 ```
 
 ### Why review and fix are SPLIT (central decision)
+
 - **review** is read-only: never touches the worktree, so its entire downstream contract is ONE schema-defined artifact (`findings.json`) — fully stabilizable.
 - **fix** is the mutating node and carries the conversation-led gate, so the human gates the actual CODE CHANGES, with full session memory (reject-to-converse works because fix is static).
 - This collapses the old six-static-reviewer-nodes + conditional-join + synthesize-Stop-loop into review (fan-out) -> findings -> fix (gated).
 
 ### The adversarial verifier (what it is, why it is singled out)
+
 - It is a **second-order discriminator, not a seventh reviewer.** The reviewers read the diff and GENERATE findings; the verifier reads the reviewers' FINDINGS (in isolated context, not having seen their reasoning), grounds each against the actual diff, and drops/downgrades ungrounded ones. Same principle as the fresh-model pass that caught 5 bugs in the dagrunner build.
 - It cannot be folded into a reviewer: (a) **ordering** — structurally downstream, needs all findings as input; (b) **isolation** — its value is independence from the reviewers' bias; (c) **cost** — a strong-tier pass worth running only when there are enough findings to prune.
 - **Trigger:** runtime finding-count threshold inside the review node (findings > N, default 3). NOT an upstream/predicted flag.
 
 ### The gates
+
 1. **expand-guide gate** — review the implementation guide before any code is written (highest leverage).
 2. **fix gate** — accept/reject the fixes applied to the worktree.
 3. **verify-election + verify-seed gate** — after fix approval, the human elects y/n whether runtime verification is needed (decided WITH full context of the diff + findings, not predicted upfront). `n` => verify-seed skipped, straight to pr. `y` => verify-seed runs, then the manual-test gate. Reuses the conditional-node `when` machinery with a human-answered predicate.
@@ -82,6 +85,7 @@ All nodes are static DAG nodes. No dynamic-workflow node lives inside the featur
 All gates: checkpoint-and-exit, single-awaiting-gate invariant, conversation-led reject (resume same session + feedback artifact). Gates live ONLY on static nodes.
 
 ### Review node findings schema (dagrunner owns it; single source of truth)
+
 ```
 {
   run_id, timestamp,                          // passed IN, not generated
@@ -96,6 +100,7 @@ All gates: checkpoint-and-exit, single-awaiting-gate invariant, conversation-led
   ]
 }
 ```
+
 `triage` is produced INSIDE the review node (replaces the former external classify contract). Reviewer selection: correctness + test-adequacy always; api-stability when touches_public_api; distributed-systems when touches_runtime; migration-safety when touches_schema_or_proto; performance when triage judges it performance-sensitive.
 
 ---
@@ -128,15 +133,28 @@ Goal: **free inside the project, read anywhere, hard boundary on mutation/networ
     "additionalDirectories": ["<run-dir artifacts path — injected per run>"],
     "allow": ["Read", "Bash(git *)", "Bash(npm run *)", "Bash(npx tsc *)"],
     "deny": [
-      "Bash(rm -rf *)", "Bash(sudo *)",
-      "Bash(git push --force *)", "Bash(git push * --force)",
-      "Read(**/.env)", "Read(**/.env.*)", "Read(**/secrets/**)", "Write(**/.env*)"
+      "Bash(rm -rf *)",
+      "Bash(sudo *)",
+      "Bash(git push --force *)",
+      "Bash(git push * --force)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/secrets/**)",
+      "Write(**/.env*)"
     ]
   },
   "sandbox": {
     "enabled": true,
     "autoAllowBashIfSandboxed": true,
-    "network": { "allowedDomains": ["api.anthropic.com","registry.npmjs.org","*.npmjs.org","github.com","*.githubusercontent.com"] }
+    "network": {
+      "allowedDomains": [
+        "api.anthropic.com",
+        "registry.npmjs.org",
+        "*.npmjs.org",
+        "github.com",
+        "*.githubusercontent.com"
+      ]
+    }
   }
 }
 ```
@@ -156,6 +174,7 @@ Goal: **free inside the project, read anywhere, hard boundary on mutation/networ
 ## 7. classify — REMOVED for now (returns Phase 5/6)
 
 There is no classify node. Its only consumer was reviewer-selection, which now happens as the review node's internal diff-triage step (reads the diff — strictly better input than predicting from the plan). All former classify outputs were removed and relocated to where the information exists:
+
 - `needs_runtime` -> human verify-election after the fix gate.
 - `recommend_pr_review` / `pr_review_rationale` -> removed; the /pr-review call is the human's, judged from reviewer breadth in `dagrun status`.
 - `run_adversarial_verifier` -> runtime finding-count threshold in the review node.
@@ -163,6 +182,7 @@ There is no classify node. Its only consumer was reviewer-selection, which now h
 - `touches_*` -> moved into review's diff-triage step.
 
 **The principle (governs classify's return):** classify earns a node only when it ROUTES the graph, not when it annotates the change.
+
 - Change-AREA detection (what files/layers) is derivable from the diff -> belongs downstream (review). Removed now.
 - Task-TYPE routing (feature / bug / tech-debt / refactor) is NOT derivable from a not-yet-existent diff and changes the graph shape upfront -> needs an upfront node. Returns in Phase 5/6 when dagrunner handles multiple task types, as a genuine upfront branch-decider operating on the TASK.
 
@@ -189,14 +209,14 @@ Defense-in-depth review model (why in-pipeline review stays static): pre-impl re
 
 ## 10. Phase roadmap
 
-| Phase | Scope | Status | Gated by |
-|---|---|---|---|
-| **1** | Engine + spine + thin slice + Gate 1; state/resume/worktrees/artifacts/hooks/launcher; `dagrun report` static HTML. (Built classify/expand-guide/implement — classify-as-a-node since RETIRED; its logic moved into review's diff-triage.) | ✅ DONE & hardened | — |
-| **2a** | (1) Preflight + runtime permission/sandbox/network model [FIRST]; (2) review node (diff-triage self-select + fan-out + finding-count-gated verifier -> findings schema); (3) fix node (gated, self-verifying). Built + fixture-passed; see Change Order for post-fixture restructure. | IN PROGRESS | nothing — pure SDK |
-| **2b** | verify-election + verify-seed (+ headless cluster) + Gate 3; pr node; reflect -> reflect-gate -> apply-reflection (4 guardrails) | after 2a | 2a complete |
-| **3** | Siblings: ci-babysit (local), /pr-review (saved DW), review-triage (gh-aw) | later | **enterprise + governance checks** |
-| **4** | Live `dagrun ui` (Node-http + SSE + vanilla HTML, localhost-only, scrubbed) | someday | — |
-| **5/6** | Multi-task-type support (bug/tech-debt/refactor); classify RETURNS as an upfront task-type router | future | — |
+| Phase   | Scope                                                                                                                                                                                                                                                                                 | Status             | Gated by                           |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ---------------------------------- |
+| **1**   | Engine + spine + thin slice + Gate 1; state/resume/worktrees/artifacts/hooks/launcher; `dagrun report` static HTML. (Built classify/expand-guide/implement — classify-as-a-node since RETIRED; its logic moved into review's diff-triage.)                                            | ✅ DONE & hardened | —                                  |
+| **2a**  | (1) Preflight + runtime permission/sandbox/network model [FIRST]; (2) review node (diff-triage self-select + fan-out + finding-count-gated verifier -> findings schema); (3) fix node (gated, self-verifying). Built + fixture-passed; see Change Order for post-fixture restructure. | IN PROGRESS        | nothing — pure SDK                 |
+| **2b**  | verify-election + verify-seed (+ headless cluster) + Gate 3; pr node; reflect -> reflect-gate -> apply-reflection (4 guardrails)                                                                                                                                                      | after 2a           | 2a complete                        |
+| **3**   | Siblings: ci-babysit (local), /pr-review (saved DW), review-triage (gh-aw)                                                                                                                                                                                                            | later              | **enterprise + governance checks** |
+| **4**   | Live `dagrun ui` (Node-http + SSE + vanilla HTML, localhost-only, scrubbed)                                                                                                                                                                                                           | someday            | —                                  |
+| **5/6** | Multi-task-type support (bug/tech-debt/refactor); classify RETURNS as an upfront task-type router                                                                                                                                                                                     | future             | —                                  |
 
 Key insight: the verification gates separate Phase 2 from Phase 3, not Phase 1 from Phase 2. Phase 2 is fully unblocked (pure SDK). Phase 3 cannot start until enterprise/governance checks clear.
 
@@ -219,6 +239,9 @@ Key insight: the verification gates separate Phase 2 from Phase 3, not Phase 1 f
 - Unattended runs: never auto-approve a gate; subagents must never end a turn with a question (autonomy directive in all agent .md + CLAUDE.md).
 - Any FUTURE dynamic-in-pipeline node must be idempotent + cheap-to-re-run (workflow resume is session-scoped; no partial recovery).
 - Schema is single-source-of-truth, owned by dagrunner, passed where needed — never duplicated.
-- Reflect/apply-reflection: worktree-private .claude/** only, allowlisted paths, exact approved diffs, snapshot-before-apply. Never committed to Camunda.
+- Reflect/apply-reflection: worktree-private .claude/\*\* only, allowlisted paths, exact approved diffs, snapshot-before-apply. Never committed to Camunda.
 - Validation: Phase 2a mechanics -> fake polyglot fixture (planted flaws, both TS+Java formatters). End of Phase 2 -> de-scoped M2-6 subset (record-only, no CF rotation) on real camunda/camunda via a mimicked companion plan. Real #53839 stays for the weekend.
+
+```
+
 ```

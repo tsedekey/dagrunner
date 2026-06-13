@@ -4,25 +4,38 @@ You are running the **review node** of a dagrunner pipeline. Your job is to orch
 
 ---
 
-## Step 1 — Read classify output
+## Step 1 — Diff-triage (haiku, internal step)
 
-Read the classify artifact:
+Get the diff of all changes introduced by this worktree branch relative to the base branch:
 
+```bash
+git diff origin/main...HEAD
 ```
-$DAGRUN_ARTIFACTS/../classify/classify.json
-```
 
-Determine which conditional reviewers to run based on the flags:
+Read the diff and set these four booleans:
 
-- `touches_public_api` → include `reviewer-api-stability`
-- `touches_runtime` → include `reviewer-distributed-systems`
-- `perf_sensitive` → include `reviewer-performance`
-- `touches_schema_or_proto` → include `reviewer-migration-safety`
+- `touches_public_api`: does the diff add or change a public API endpoint, public method signature, or exported interface?
+- `touches_runtime`: does it change runtime/async/distributed behavior, job workers, or concurrency logic?
+- `touches_schema_or_proto`: does it add or change a DB schema, proto definition, Avro schema, or migration file?
+- `performance_sensitive`: could it affect hot-path latency, throughput, or memory use?
 
-These two always run regardless of flags:
+Use **only the diff** as input (not the plan). This triage is an internal step — do not write it as a separate artifact.
+
+Determine which reviewers to run:
+
+**Always run:**
 
 - `reviewer-correctness`
 - `reviewer-test-adequacy`
+
+**Conditionally run:**
+
+- `reviewer-api-stability` — if `touches_public_api`
+- `reviewer-distributed-systems` — if `touches_runtime`
+- `reviewer-migration-safety` — if `touches_schema_or_proto`
+- `reviewer-performance` — if `performance_sensitive`
+
+Save the triage booleans in memory — you will write them into findings.json in Step 4.
 
 ---
 
@@ -62,7 +75,13 @@ Write the following JSON object to `$DAGRUN_ARTIFACTS/findings.json`:
 ```json
 {
   "run_id": "<value of $DAGRUN_RUN_ID env var>",
-  "timestamp": "<ISO 8601 timestamp, e.g. new Date().toISOString()>",
+  "timestamp": "<ISO 8601 timestamp>",
+  "triage": {
+    "touches_public_api": true/false,
+    "touches_runtime": true/false,
+    "touches_schema_or_proto": true/false,
+    "performance_sensitive": true/false
+  },
   "reviewers_run": ["<names of reviewers that completed successfully>"],
   "reviewers_skipped": [{ "name": "...", "reason": "..." }],
   "adversarial_verifier_run": true/false,
@@ -91,3 +110,4 @@ The file must be valid JSON matching that schema exactly. Do not write any other
 - `reviewers_skipped` must be an array (empty `[]` if all reviewers ran successfully).
 - Every finding must have all seven fields including `grounded`.
 - An empty findings array `"findings": []` is valid and correct when no issues are found.
+- `triage` must always be present with all four boolean fields.

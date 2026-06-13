@@ -131,6 +131,8 @@ export type Workflow = {
 
 /**
  * Shape of the structured JSON object that the `classify` node emits.
+ * Classify is DORMANT in v1 (removed from the production pipeline; returns in
+ * Phase 5/6 as a task-type router: feature/bug/tech-debt).
  * Runner writes this from SDK `structured_output`; downstream `when` predicates
  * read it via `ctx.json('classify')`.
  */
@@ -139,6 +141,4 @@ export type ClassifyOutput = {
   touches_runtime: boolean;
   perf_sensitive: boolean;
   touches_schema_or_proto: boolean;
-  needs_runtime: boolean;
-  risk: "low" | "med" | "high";
 };

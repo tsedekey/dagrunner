@@ -154,7 +154,6 @@ export function validateClassifyOutput(data: unknown): ClassifyOutput {
     "touches_runtime",
     "perf_sensitive",
     "touches_schema_or_proto",
-    "needs_runtime",
   ] as const;
 
   for (const field of boolFields) {
@@ -165,20 +164,11 @@ export function validateClassifyOutput(data: unknown): ClassifyOutput {
     }
   }
 
-  const risk = obj["risk"];
-  if (risk !== "low" && risk !== "med" && risk !== "high") {
-    throw new Error(
-      `validateClassifyOutput: field "risk" must be 'low' | 'med' | 'high', got ${JSON.stringify(risk)}`,
-    );
-  }
-
   return {
     touches_public_api: obj["touches_public_api"] as boolean,
     touches_runtime: obj["touches_runtime"] as boolean,
     perf_sensitive: obj["perf_sensitive"] as boolean,
     touches_schema_or_proto: obj["touches_schema_or_proto"] as boolean,
-    needs_runtime: obj["needs_runtime"] as boolean,
-    risk,
   };
 }
 
@@ -187,20 +177,20 @@ export function validateClassifyOutput(data: unknown): ClassifyOutput {
 // ---------------------------------------------------------------------------
 
 /**
- * A minimal valid workflow: classify → expand-guide (with dependency).
+ * A minimal valid workflow: expand-guide → implement (with dependency).
  */
 export const FIXTURE_VALID: Workflow = {
   name: "fixture-valid",
   nodes: [
     {
-      id: "classify",
-      command: "/classify",
+      id: "expand-guide",
+      command: "/expand-guide",
       model: "haiku",
     },
     {
-      id: "expand-guide",
-      command: "/expand-guide",
-      dependsOn: ["classify"],
+      id: "implement",
+      command: "/implement",
+      dependsOn: ["expand-guide"],
     },
   ],
 };

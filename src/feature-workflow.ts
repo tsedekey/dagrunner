@@ -1,7 +1,10 @@
 /**
  * feature-workflow.ts — v1 thin-slice workflow definition.
  *
- * classify → expand-guide [review gate] → implement
+ * Phase 2a pipeline:
+ *   expand-guide (Gate 1) -> implement -> review -> fix (Gate 2)
+ *
+ * Phase 2b will add: verify-election -> verify-seed (Gate 3) -> pr -> reflect
  *
  * This is the ONLY workflow in v1. Additional workflows are config additions
  * on the proven engine.
@@ -10,7 +13,9 @@
 import type { Workflow } from "./types.js";
 
 // ---------------------------------------------------------------------------
-// classify.json JSON schema (used as SDK outputFormat schema)
+// classify.json JSON schema
+// DORMANT — classify node removed from production pipeline in Phase 2a.
+// Retained as a schema reference for Phase 5/6 revival as a task-type router.
 // ---------------------------------------------------------------------------
 
 export const CLASSIFY_SCHEMA = {
@@ -20,16 +25,12 @@ export const CLASSIFY_SCHEMA = {
     touches_runtime: { type: "boolean" },
     perf_sensitive: { type: "boolean" },
     touches_schema_or_proto: { type: "boolean" },
-    needs_runtime: { type: "boolean" },
-    risk: { type: "string", enum: ["low", "med", "high"] },
   },
   required: [
     "touches_public_api",
     "touches_runtime",
     "perf_sensitive",
     "touches_schema_or_proto",
-    "needs_runtime",
-    "risk",
   ],
   additionalProperties: false,
 } as const satisfies Record<string, unknown>;
@@ -43,6 +44,22 @@ export const FINDINGS_SCHEMA = {
   properties: {
     run_id: { type: "string" },
     timestamp: { type: "string" },
+    triage: {
+      type: "object",
+      properties: {
+        touches_public_api: { type: "boolean" },
+        touches_runtime: { type: "boolean" },
+        touches_schema_or_proto: { type: "boolean" },
+        performance_sensitive: { type: "boolean" },
+      },
+      required: [
+        "touches_public_api",
+        "touches_runtime",
+        "touches_schema_or_proto",
+        "performance_sensitive",
+      ],
+      additionalProperties: false,
+    },
     reviewers_run: { type: "array", items: { type: "string" } },
     reviewers_skipped: {
       type: "array",
@@ -89,6 +106,7 @@ export const FINDINGS_SCHEMA = {
   required: [
     "run_id",
     "timestamp",
+    "triage",
     "reviewers_run",
     "reviewers_skipped",
     "adversarial_verifier_run",
@@ -105,15 +123,7 @@ export const featureWorkflow: Workflow = {
   name: "feature",
   nodes: [
     {
-      id: "classify",
-      model: "haiku",
-      command: "/classify",
-      outputSchema: { ...CLASSIFY_SCHEMA },
-      produces: ["classify.json"],
-    },
-    {
       id: "expand-guide",
-      dependsOn: ["classify"],
       command: "/expand-guide",
       produces: ["guide.md"],
       gate: { maxIterations: 10, onReject: "revise-self" },

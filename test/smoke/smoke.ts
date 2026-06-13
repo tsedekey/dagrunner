@@ -111,7 +111,8 @@ let RUN_ID = "";
 
 // ---------------------------------------------------------------------------
 // Step 2 — dagrun start feature --plan toy-plan.md
-//          classify (haiku) → expand-guide → awaiting-gate → exits
+//          expand-guide (Gate 1) → awaiting-gate → exits
+//          (classify node removed in Phase 2a — pipeline now starts at expand-guide)
 // ---------------------------------------------------------------------------
 
 {
@@ -125,7 +126,7 @@ let RUN_ID = "";
   const result = runCli(
     ["start", "feature", "--plan", TOY_PLAN_PATH],
     HOME_ENV,
-    180_000, // 3 minutes for two real API calls
+    180_000, // 3 minutes for one real API call (expand-guide)
   );
 
   assert.strictEqual(
@@ -139,7 +140,6 @@ let RUN_ID = "";
     `expected gate checkpoint in output:\n${result.stdout}`,
   );
 
-  // Confirm classify.json is valid JSON matching ClassifyOutput schema.
   const runs = readdirSync(join(HOME, "runs")).filter((d) =>
     existsSync(join(HOME, "runs", d, "state.json")),
   );
@@ -147,47 +147,18 @@ let RUN_ID = "";
 
   RUN_ID = runs[0] as string;
   const runDir = join(HOME, "runs", RUN_ID);
-  const classifyPath = join(runDir, "classify", "classify.json");
+
+  // No classify node — confirm it did NOT run.
   assert.ok(
-    existsSync(classifyPath),
-    `classify.json must exist at ${classifyPath}`,
+    !existsSync(join(runDir, "classify")),
+    "classify dir must NOT exist (classify node removed in Phase 2a)",
   );
 
-  const classifyRaw = JSON.parse(readFileSync(classifyPath, "utf8")) as unknown;
-  assert.ok(
-    classifyRaw !== null && typeof classifyRaw === "object",
-    "classify.json must be a JSON object",
-  );
-  const classify = classifyRaw as Record<string, unknown>;
-  for (const field of [
-    "touches_public_api",
-    "touches_runtime",
-    "perf_sensitive",
-    "touches_schema_or_proto",
-    "needs_runtime",
-    "run_adversarial_verifier",
-    "recommend_pr_review",
-  ]) {
-    assert.strictEqual(
-      typeof classify[field],
-      "boolean",
-      `classify.json field "${field}" must be boolean`,
-    );
-  }
-  assert.ok(
-    classify["risk"] === "low" ||
-      classify["risk"] === "med" ||
-      classify["risk"] === "high",
-    `classify.json risk must be low|med|high, got: ${String(classify["risk"])}`,
-  );
-
-  // Confirm guide.md was produced.
+  // Confirm guide.md was produced by expand-guide.
   const guidePath = join(runDir, "expand-guide", "guide.md");
   assert.ok(existsSync(guidePath), `guide.md must exist at ${guidePath}`);
 
-  console.log(
-    `step 2 passed: start -> classify -> expand-guide -> gate (run: ${RUN_ID})`,
-  );
+  console.log(`step 2 passed: start -> expand-guide -> gate (run: ${RUN_ID})`);
 }
 
 // ---------------------------------------------------------------------------
