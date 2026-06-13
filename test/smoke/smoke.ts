@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
- * Block 9 — 6-step smoke test for dagrunner v1.
+ * Block 9 — 8-step smoke test for dagrunner v1 (Phase 2a + 2b).
  *
  * Drives the real thin slice end-to-end using non-interactive flags.
- * Makes REAL SDK calls for steps 2-5. Step 6 uses a synthetic state
- * (no API call) to test reconcile plumbing only.
+ * Makes REAL SDK calls for steps 2-5 and step 6 (pr + reflect) and step 7.
+ * Step 8 uses a synthetic state (no API call) to test reconcile plumbing only.
+ * Phase 2b: step 6 uses --verify n (election skip) + DAGRUN_NO_PR=1 (no real PR).
  *
  * Run: node --import tsx ./test/smoke/smoke.ts
  *
@@ -270,19 +271,79 @@ let RUN_ID = "";
 }
 
 // ---------------------------------------------------------------------------
-// Step 6 — dagrun resume --approve (Gate 2) -> done
+// Step 6 — dagrun resume --approve --verify n (Gate 2)
+//          election=n -> verify-seed skipped -> pr -> reflect (Gate 4 pause)
+// ---------------------------------------------------------------------------
+
+{
+  const result = runCli(
+    ["resume", RUN_ID, "--approve", "--verify", "n"],
+    // DAGRUN_NO_PR prevents real gh pr create; pr still writes body.md
+    { ...HOME_ENV, DAGRUN_NO_PR: "1" },
+    600_000, // 10 minutes: election + pr (haiku) + reflect (sonnet)
+  );
+  assert.strictEqual(
+    result.status,
+    0,
+    `Gate 2 approve + election failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
+  );
+
+  const runDir = join(HOME, "runs", RUN_ID);
+  const stateRaw = JSON.parse(
+    readFileSync(join(runDir, "state.json"), "utf8"),
+  ) as {
+    status: string;
+    verifyElection?: string;
+    nodes: Record<string, { status: string }>;
+  };
+
+  // Election must be recorded as "n".
+  assert.strictEqual(
+    stateRaw.verifyElection,
+    "n",
+    `verifyElection must be "n", got: ${String(stateRaw.verifyElection)}`,
+  );
+  // verify-seed must be skipped.
+  assert.strictEqual(
+    stateRaw.nodes["verify-seed"]?.status,
+    "skipped",
+    `verify-seed must be skipped, got: ${String(stateRaw.nodes["verify-seed"]?.status)}`,
+  );
+  // pr must have run.
+  assert.strictEqual(
+    stateRaw.nodes["pr"]?.status,
+    "done",
+    `pr must be done, got: ${String(stateRaw.nodes["pr"]?.status)}`,
+  );
+  assert.ok(
+    existsSync(join(runDir, "pr", "body.md")),
+    "pr/body.md must exist after pr node",
+  );
+  // reflect must have paused at Gate 4.
+  assert.ok(
+    stateRaw.status === "paused" ||
+      stateRaw.nodes["reflect"]?.status === "awaiting-gate",
+    `run must be paused at reflect gate, got status: ${stateRaw.status}`,
+  );
+  console.log(
+    "step 6 passed: Gate 2 approve --verify n -> pr -> reflect gate (Gate 4 pause)",
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Step 7 — dagrun resume --approve (Gate 4 / reflect) -> apply-reflection -> done
 // ---------------------------------------------------------------------------
 
 {
   const result = runCli(
     ["resume", RUN_ID, "--approve"],
     HOME_ENV,
-    60_000, // Gate 2 approve: no API call needed, just state transition
+    600_000, // 10 minutes: apply-reflection (sonnet)
   );
   assert.strictEqual(
     result.status,
     0,
-    `approve Gate 2 failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
+    `approve Gate 4 (reflect) failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
   );
 
   const runDir = join(HOME, "runs", RUN_ID);
@@ -293,13 +354,36 @@ let RUN_ID = "";
   assert.strictEqual(
     stateRaw.status,
     "done",
-    `run must reach done status after Gate 2 approve, got: ${stateRaw.status}`,
+    `run must reach done status after reflect approval, got: ${stateRaw.status}`,
   );
-  console.log("step 6 passed: approve Gate 2 -> done");
+  // reflect must have produced both output files.
+  assert.ok(
+    existsSync(join(runDir, "reflect", "camunda-knowledge.md")),
+    "reflect/camunda-knowledge.md must exist",
+  );
+  assert.ok(
+    existsSync(join(runDir, "reflect", "dagrunner-proposals.md")),
+    "reflect/dagrunner-proposals.md must exist",
+  );
+  // apply-reflection must have run (done) or been skipped (if reflect had no proposals).
+  const applyStatus = stateRaw.nodes["apply-reflection"]?.status;
+  assert.ok(
+    applyStatus === "done" || applyStatus === "skipped",
+    `apply-reflection must be done or skipped, got: ${String(applyStatus)}`,
+  );
+  if (applyStatus === "done") {
+    assert.ok(
+      existsSync(join(runDir, "apply-reflection", "apply-summary.md")),
+      "apply-reflection/apply-summary.md must exist when node completed",
+    );
+  }
+  console.log(
+    `step 7 passed: approve reflect gate -> apply-reflection (${String(applyStatus)}) -> done`,
+  );
 }
 
 // ---------------------------------------------------------------------------
-// Step 7 — reconcile: running node -> failed (synthetic, no API call)
+// Step 8 — reconcile: running node -> failed (synthetic, no API call)
 // ---------------------------------------------------------------------------
 
 {
@@ -399,7 +483,7 @@ let RUN_ID = "";
   );
 
   console.log(
-    `step 7 passed: reconcile running->failed (status after reconcile: ${String(implementStatus)})`,
+    `step 8 passed: reconcile running->failed (status after reconcile: ${String(implementStatus)})`,
   );
 }
 
@@ -407,4 +491,4 @@ let RUN_ID = "";
 // Done
 // ---------------------------------------------------------------------------
 
-console.log("\nall 7 smoke test steps passed");
+console.log("\nall 8 smoke test steps passed");
