@@ -14,6 +14,7 @@ import { execSync } from "node:child_process";
 import {
   cpSync,
   mkdirSync,
+  rmSync,
   writeFileSync,
   readFileSync,
   readdirSync,
@@ -28,7 +29,8 @@ import { homedir, tmpdir } from "node:os";
 import type { Workflow } from "./types.js";
 import type { DagrunnerConfig } from "./xdg.js";
 import { readState, writeState } from "./state.js";
-import type { RunState, NodeState } from "./state.js";
+import type { RunState, NodeState, NodeStatus } from "./state.js";
+import type { ExecutionCtx } from "./mock-executor.js";
 import { reconcileRunningNodes } from "./dag.js";
 import { runDag } from "./dag.js";
 import { acquireLock, releaseLock } from "./lock.js";
@@ -559,4 +561,161 @@ export function listRuns(
   }
 
   return results.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+// ---------------------------------------------------------------------------
+// rerunNode — re-execute a single node against an existing run's worktree
+// ---------------------------------------------------------------------------
+
+/**
+ * Re-execute a single workflow node in isolation, using the existing worktree
+ * and run directory. Useful for testing node prompt changes or recovering from
+ * a failed node without restarting the whole workflow.
+ *
+ * Lock discipline: rerunNode does NOT acquire the run lock — it is a debug/
+ * recovery tool. Ensure no other dagrun process is running the same run.
+ *
+ * On completion the node's entry in state.json is updated to reflect the new
+ * result, so `dagrun resume <run-id>` can continue the DAG from there.
+ */
+export async function rerunNode(opts: {
+  runId: string;
+  nodeId: string;
+  homeDir: string;
+  config: DagrunnerConfig;
+}): Promise<void> {
+  const { runId, nodeId, homeDir, config } = opts;
+  const runDir = join(homeDir, "runs", runId);
+  const stateFile = join(runDir, "state.json");
+
+  if (!existsSync(stateFile)) {
+    process.stderr.write(`dagrun: run "${runId}" not found at ${stateFile}\n`);
+    process.exit(1);
+  }
+
+  const state = readState(stateFile);
+  const workflow = workflowFromState(state);
+  const node = workflow.nodes.find((n) => n.id === nodeId);
+
+  if (node === undefined) {
+    const available = workflow.nodes.map((n) => n.id).join(", ");
+    process.stderr.write(
+      `dagrun: node "${nodeId}" not found in workflow "${state.workflow}".\n` +
+        `  Available nodes: ${available}\n`,
+    );
+    process.exit(1);
+  }
+
+  const worktreePath = state.worktreePath;
+  const artifactsDir = join(runDir, nodeId);
+
+  // Re-seed .claude/ so any changes to commands, hooks, or settings-seed.ts
+  // take effect without needing a new full run (e.g. allowedDomains fixes).
+  const dagrunnerRoot = new URL("../", import.meta.url).pathname;
+  const destClaude = join(worktreePath, ".claude");
+  const srcCommands = join(dagrunnerRoot, ".claude", "commands");
+  const srcHooks = join(dagrunnerRoot, ".claude", "hooks");
+  const srcAgents = join(dagrunnerRoot, ".claude", "agents");
+  if (existsSync(srcCommands))
+    cpSync(srcCommands, join(destClaude, "commands"), { recursive: true });
+  if (existsSync(srcHooks))
+    cpSync(srcHooks, join(destClaude, "hooks"), { recursive: true });
+  if (existsSync(srcAgents))
+    cpSync(srcAgents, join(destClaude, "agents"), { recursive: true });
+  const seededSettings = buildSeededSettings({
+    runDir,
+    homeDir: homedir(),
+    tmpDir: tmpdir(),
+    passthrough: readSourcePassthrough(config.DEVHARNESS_SRC),
+    ...(config.claudeConfigDir !== undefined
+      ? { claudeConfigDir: config.claudeConfigDir }
+      : {}),
+    workProfileMcpServers: readWorkProfileMcpServers(homedir(), worktreePath),
+  });
+  writeFileSync(
+    join(destClaude, "settings.json"),
+    JSON.stringify(seededSettings, null, 2),
+    "utf8",
+  );
+
+  // Wipe previous artifacts so the node starts clean.
+  rmSync(artifactsDir, { recursive: true, force: true });
+  mkdirSync(artifactsDir, { recursive: true });
+
+  process.stdout.write(
+    `dagrun: rerunning node "${nodeId}" in run "${runId}"\n` +
+      `  Worktree: ${worktreePath}\n` +
+      `  Artifacts: ${artifactsDir}\n`,
+  );
+
+  const executor = makeSDKRunner(config, runId, runDir, worktreePath);
+  const execCtx: ExecutionCtx = { runDir, artifactsDir, worktreePath };
+  const result = await executor(nodeId, node, execCtx);
+
+  // Build the updated node state — mirror what runDag does.
+  const now = new Date().toISOString();
+  const prev = state.nodes[nodeId] ?? {
+    status: "pending" as NodeStatus,
+    artifacts: [],
+    iteration: 0,
+    cost: 0,
+    gateHistory: [],
+  };
+
+  let newStatus: NodeStatus;
+  let updates: Partial<NodeState>;
+
+  if (result.status === "done") {
+    const missing = (node.produces ?? []).filter(
+      (f) => !existsSync(join(runDir, nodeId, f)),
+    );
+    if (missing.length > 0) {
+      newStatus = "failed";
+      updates = {
+        status: newStatus,
+        error: `produces contract violated — missing: ${missing.join(", ")}`,
+        endedAt: now,
+      };
+    } else {
+      newStatus = "done";
+      updates = {
+        status: newStatus,
+        artifacts: result.artifacts,
+        cost: result.cost,
+        sessionId: result.sessionId,
+        endedAt: now,
+      };
+    }
+  } else if (result.status === "awaiting-gate") {
+    newStatus = "awaiting-gate";
+    updates = {
+      status: newStatus,
+      iteration: result.iteration,
+      sessionId: result.sessionId,
+      cost: result.cost,
+      endedAt: now,
+    };
+  } else {
+    newStatus = "failed";
+    updates = {
+      status: newStatus,
+      error: result.error,
+      endedAt: now,
+    };
+  }
+
+  const updatedState: RunState = {
+    ...state,
+    updatedAt: now,
+    nodes: {
+      ...state.nodes,
+      [nodeId]: { ...prev, ...updates },
+    },
+  };
+  writeState(stateFile, updatedState);
+
+  process.stdout.write(`dagrun: node "${nodeId}" rerun → ${newStatus}\n`);
+  if (newStatus === "done" || newStatus === "awaiting-gate") {
+    process.stdout.write(`  To continue: dagrun resume ${runId}\n`);
+  }
 }

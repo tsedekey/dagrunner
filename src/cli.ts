@@ -31,7 +31,13 @@ import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { assertAuth } from "./launcher.js";
 import { featureWorkflow } from "./feature-workflow.js";
-import { startRun, resumeRun, listRuns, activeRun } from "./run-engine.js";
+import {
+  startRun,
+  resumeRun,
+  rerunNode,
+  listRuns,
+  activeRun,
+} from "./run-engine.js";
 import { readState, writeState } from "./state.js";
 import {
   runPreflight,
@@ -271,6 +277,26 @@ function cmdList(): void {
       `${run.runId.padEnd(36)}  ${run.status.padEnd(10)}  ${run.updatedAt}\n`,
     );
   }
+}
+
+async function cmdRerun(argv: string[]): Promise<void> {
+  const runId = argv[0];
+  const nodeId = argv[1];
+  if (
+    runId === undefined ||
+    runId.startsWith("--") ||
+    nodeId === undefined ||
+    nodeId.startsWith("--")
+  ) {
+    process.stderr.write(
+      "dagrun rerun: usage: dagrun rerun <run-id> <node-id>\n",
+    );
+    process.exit(1);
+  }
+  const homeDir = resolveHome();
+  const config = resolveConfig(homeDir);
+  assertAuth(config.claudeConfigDir);
+  await rerunNode({ runId, nodeId, homeDir, config });
 }
 
 function cmdAbort(argv: string[]): void {
@@ -652,6 +678,7 @@ function printHelp(): void {
       "  dagrun clear --all [--yes]",
       "  dagrun report <run-id>",
       "  dagrun logs <run-id> <node>",
+      "  dagrun rerun <run-id> <node-id>",
       "  dagrun revert-reflection <run-id>",
       "",
     ].join("\n"),
@@ -722,6 +749,10 @@ async function main(argv: string[]): Promise<number> {
 
     case "clear":
       cmdClear(rest);
+      return 0;
+
+    case "rerun":
+      await cmdRerun(rest);
       return 0;
 
     case "report":
