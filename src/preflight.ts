@@ -472,6 +472,9 @@ export function formatAgentContext(
   lines.push(`  Home              ${homeDir}`);
   lines.push(`  Config            ${join(homeDir, "config.json")}`);
   lines.push(`  DEVHARNESS_SRC    ${config.DEVHARNESS_SRC}`);
+  lines.push(
+    `  Claude config     ${config.claudeConfigDir ?? "~/.claude  (default)"}`,
+  );
   if (config.maxBudgetUsd !== undefined) {
     lines.push(`  Max budget        $${config.maxBudgetUsd}`);
   }

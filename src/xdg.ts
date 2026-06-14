@@ -19,6 +19,11 @@ import { homedir } from "node:os";
 export type DagrunnerConfig = {
   /** Absolute path to the main checkout. Mandatory — user must fill in. */
   DEVHARNESS_SRC: string;
+  /**
+   * Which Claude config directory agent sessions use (CLAUDE_CONFIG_DIR).
+   * ~/.claude = personal, ~/.claude-work = work. Defaults to ~/.claude if unset.
+   */
+  claudeConfigDir?: string;
   maxBudgetUsd?: number;
   maxParallel?: number;
   /** Root directory for worktrees. Default: <DAGRUNNER_HOME>/worktrees */
@@ -156,6 +161,11 @@ export function resolveConfig(
     config.maxParallel = maxParallel;
   }
 
+  const claudeConfigDir = raw["claudeConfigDir"];
+  if (typeof claudeConfigDir === "string" && claudeConfigDir.trim() !== "") {
+    config.claudeConfigDir = claudeConfigDir;
+  }
+
   const worktreeRoot = raw["worktreeRoot"];
   if (typeof worktreeRoot === "string") {
     config.worktreeRoot = worktreeRoot;
@@ -182,7 +192,10 @@ export function initHome(homeDir: string): void {
 
   const configPath = join(homeDir, "config.json");
   if (!existsSync(configPath)) {
-    const template: Record<string, string> = { DEVHARNESS_SRC: "" };
+    const template = {
+      DEVHARNESS_SRC: "",
+      claudeConfigDir: "~/.claude",
+    };
     writeFileSync(configPath, JSON.stringify(template, null, 2) + "\n", "utf8");
   }
 }

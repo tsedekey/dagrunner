@@ -150,6 +150,13 @@ export function makeSDKRunner(
       >;
     }
 
+    // Set CLAUDE_CONFIG_DIR so the agent session uses the configured Claude
+    // profile (personal ~/.claude vs work ~/.claude-work). Must be set on
+    // process.env BEFORE query() spawns — SDK inherits the current env.
+    if (config.claudeConfigDir !== undefined) {
+      process.env["CLAUDE_CONFIG_DIR"] = config.claudeConfigDir;
+    }
+
     const q = query({ prompt, options });
 
     // Per-node transcript: captures the full message stream so the SIGINT
