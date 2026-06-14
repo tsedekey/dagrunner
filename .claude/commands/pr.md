@@ -4,38 +4,42 @@ Compose a PR body and title from the run artifacts. dagrunner handles the
 actual `git push` and `gh pr create` outside this session — your job is to
 produce the artifacts.
 
-## Inputs (read from the run directory via $DAGRUN_RUN_DIR)
+## Step 0 — Confirm output directory
 
-- `$DAGRUN_RUN_DIR/plan/plan.md` — the original feature plan
-- `$DAGRUN_RUN_DIR/expand-guide/guide.md` — the implementation guide
-- `$DAGRUN_RUN_DIR/implement/summary.md` — what was implemented
-- `$DAGRUN_RUN_DIR/review/findings.json` — review findings
-- `$DAGRUN_RUN_DIR/fix/summary.md` — what was fixed
-- `$DAGRUN_RUN_DIR/verify-guide/manual-test.md` — (optional) verification guide result
+Run this first so you know the exact path for every write in this session:
+
+```bash
+echo "ARTIFACTS : $DAGRUN_ARTIFACTS"
+echo "RUN DIR   : $DAGRUN_RUN_DIR"
+mkdir -p "$DAGRUN_ARTIFACTS"
+```
+
+All output files go to `$DAGRUN_ARTIFACTS/` (the value printed above).
+`$DAGRUN_RUN_DIR` is read-only in this session — never write there.
 
 ## Step 1 — Read all available artifacts
 
-Read each artifact listed above. For optional files (verify-guide/manual-test.md), check if
-the file exists before reading — if absent, note "Verification guide: skipped".
+Read each of these inputs:
 
-Also gather the branch name from env:
-
-```bash
-cd "$DAGRUN_WORKTREE" && git rev-parse --abbrev-ref HEAD
-```
+- `$DAGRUN_RUN_DIR/plan/plan.md`
+- `$DAGRUN_RUN_DIR/expand-guide/guide.md`
+- `$DAGRUN_RUN_DIR/implement/summary.md`
+- `$DAGRUN_RUN_DIR/review/findings.json`
+- `$DAGRUN_RUN_DIR/fix/summary.md`
+- `$DAGRUN_RUN_DIR/verify-guide/manual-test.md` (optional — skip if absent)
 
 ## Step 2 — Compose the PR body
 
-Follow the Camunda PR template exactly. Write `$DAGRUN_ARTIFACTS/body.md`:
+Follow the Camunda PR template exactly. Write to the path printed in Step 0:
 
-```markdown
+```bash
+# Use the resolved path — never write to $DAGRUN_RUN_DIR
+cat > "$DAGRUN_ARTIFACTS/body.md" << 'BODY'
 ## Description
 
-<2–4 sentences. State what this PR does and why — goal and purpose only.
-Draw from guide.md (what to implement, acceptance criteria) and
-implement/summary.md (what was actually done). Be concise: no bullet lists,
-no section headers, no review/fix recap. If verify-guide ran, add one sentence
-noting that a verification guide (seeding spec + code tour) was produced.>
+<2–4 sentences. What this PR does and why — goal and purpose only.
+Draw from guide.md and implement/summary.md. No bullet lists, no sub-headers,
+no review/fix recap. If verify-guide ran, one sentence noting it was produced.>
 
 ## Checklist
 
@@ -47,34 +51,36 @@ noting that a verification guide (seeding spec + code tour) was produced.>
 ## Related issues
 
 closes #<issue number extracted from plan.md, or leave as "closes #" if not found>
+BODY
 ```
 
-**Description writing rules:**
-
-- Maximum 4 sentences. Prefer 2–3.
-- Do not summarise the review or fix steps — reviewers will read the code.
-- Do not include file lists, finding counts, or cost figures.
-- Use plain prose, not bullet points or sub-headers.
+**Writing rules:** Maximum 4 sentences. Plain prose only. No file lists, no finding counts, no cost figures.
 
 ## Step 3 — Write metadata
 
-Write `$DAGRUN_ARTIFACTS/pr-meta.json`:
+Write to the resolved path from Step 0. Use the Write tool or a heredoc — your choice, but the file must land at `$DAGRUN_ARTIFACTS/pr-meta.json`:
 
 ```json
 {
   "runId": "<DAGRUN_RUN_ID>",
-  "branch": "<branch-name>",
+  "branch": "<branch from: cd $DAGRUN_WORKTREE && git rev-parse --abbrev-ref HEAD>",
   "worktreePath": "<DAGRUN_WORKTREE>",
-  "bodyPath": "<DAGRUN_ARTIFACTS>/body.md",
+  "bodyPath": "<resolved DAGRUN_ARTIFACTS>/body.md",
   "title": "<concise PR title from guide.md, ≤70 chars>",
   "verifyRan": <true|false>,
   "createdAt": "<ISO timestamp>"
 }
 ```
 
+Confirm both files exist:
+
+```bash
+ls -la "$DAGRUN_ARTIFACTS/"
+```
+
 ## Step 4 — Backstop commit
 
-Check whether there are uncommitted changes in the worktree:
+Check for uncommitted changes in the worktree:
 
 ```bash
 cd "$DAGRUN_WORKTREE"
@@ -88,10 +94,9 @@ git add -A
 git commit -m "feat: <title from guide.md> (dagrun: $DAGRUN_RUN_ID)"
 ```
 
-Under normal flow `implement.md` commits first and this is a no-op.
+Under normal flow `implement.md` commits first — this is a no-op if that happened.
 
 ## Done
 
-Your work ends here. dagrunner will run `git push origin HEAD` and
-`gh pr create --draft` from outside the agent session (outside the sandbox)
-after this session exits.
+Your work ends here. dagrunner runs `git push origin HEAD` and
+`gh pr create --draft` from outside the agent session after this exits.

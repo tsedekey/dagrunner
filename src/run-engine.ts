@@ -532,9 +532,21 @@ function runPrPostProcess(state: RunState, runDir: string): void {
   const prNodeState = state.nodes["pr"];
   if (prNodeState?.status !== "done") return;
 
-  const metaPath = join(runDir, "pr", "pr-meta.json");
-  const bodyPath = join(runDir, "pr", "body.md");
-  if (!existsSync(metaPath) || !existsSync(bodyPath)) return;
+  // Primary locations (correct): runs/<id>/pr/body.md and pr-meta.json.
+  // Fallback locations (miswrite): agent used $DAGRUN_RUN_DIR instead of
+  // $DAGRUN_ARTIFACTS and wrote to the run dir root. Accept both so the
+  // post-process still fires even when the agent got the path wrong.
+  const metaPath = existsSync(join(runDir, "pr", "pr-meta.json"))
+    ? join(runDir, "pr", "pr-meta.json")
+    : existsSync(join(runDir, "pr-meta.json"))
+      ? join(runDir, "pr-meta.json")
+      : "";
+  const bodyPath = existsSync(join(runDir, "pr", "body.md"))
+    ? join(runDir, "pr", "body.md")
+    : existsSync(join(runDir, "body.md"))
+      ? join(runDir, "body.md")
+      : "";
+  if (metaPath === "" || bodyPath === "") return;
 
   let meta: Record<string, unknown>;
   try {
