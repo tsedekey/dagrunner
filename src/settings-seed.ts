@@ -104,8 +104,17 @@ export function buildSeededSettings(opts: {
   passthrough: SourcePassthrough;
   /** Expanded path to the Claude config dir (e.g. /Users/x/.claude-work). */
   claudeConfigDir?: string;
+  /** Work-profile MCP servers to include in settings (from readWorkProfileMcpServers). */
+  workProfileMcpServers?: Record<string, unknown>;
 }): Record<string, unknown> {
-  const { runDir, homeDir, tmpDir, passthrough, claudeConfigDir } = opts;
+  const {
+    runDir,
+    homeDir,
+    tmpDir,
+    passthrough,
+    claudeConfigDir,
+    workProfileMcpServers,
+  } = opts;
 
   const settings: Record<string, unknown> = {
     permissions: {
@@ -223,9 +232,22 @@ export function buildSeededSettings(opts: {
   if (Object.keys(passthrough.env).length > 0) {
     settings["env"] = { ...passthrough.env };
   }
-  // Passthrough: mcpServers
-  if (passthrough.mcpServers !== undefined) {
-    settings["mcpServers"] = passthrough.mcpServers;
+  // MCP servers: merge work-profile servers (from .claude.json) with source-repo
+  // passthrough (from DEVHARNESS_SRC/.claude/settings.json). Writing them into
+  // settings.json ensures they connect under settingSources:["project"] — SDK-level
+  // options.mcpServers alone is suppressed when project settings has mcpServers:{}.
+  const mergedMcp: Record<string, unknown> = {};
+  if (
+    passthrough.mcpServers !== null &&
+    typeof passthrough.mcpServers === "object"
+  ) {
+    Object.assign(mergedMcp, passthrough.mcpServers);
+  }
+  if (workProfileMcpServers !== undefined) {
+    Object.assign(mergedMcp, workProfileMcpServers);
+  }
+  if (Object.keys(mergedMcp).length > 0) {
+    settings["mcpServers"] = mergedMcp;
   }
 
   // Mirror enabledPlugins from the Claude profile's global settings so LSP and

@@ -35,7 +35,11 @@ import { acquireLock, releaseLock } from "./lock.js";
 import { makeSDKRunner } from "./sdk-runner.js";
 import { featureWorkflow } from "./feature-workflow.js";
 import { loadWorkflow } from "./workflow.js";
-import { readSourcePassthrough, buildSeededSettings } from "./settings-seed.js";
+import {
+  readSourcePassthrough,
+  readWorkProfileMcpServers,
+  buildSeededSettings,
+} from "./settings-seed.js";
 
 // ---------------------------------------------------------------------------
 // Ctx builder
@@ -175,6 +179,7 @@ export async function startRun(opts: {
     ...(config.claudeConfigDir !== undefined
       ? { claudeConfigDir: config.claudeConfigDir }
       : {}),
+    workProfileMcpServers: readWorkProfileMcpServers(homedir(), worktreePath),
   });
   writeFileSync(
     join(destClaude, "settings.json"),
