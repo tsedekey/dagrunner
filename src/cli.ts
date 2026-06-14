@@ -26,12 +26,19 @@ import {
 } from "node:fs";
 import { generateReport } from "./report.js";
 import { join } from "node:path";
+import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { assertAuth } from "./launcher.js";
 import { featureWorkflow } from "./feature-workflow.js";
 import { startRun, resumeRun, listRuns, activeRun } from "./run-engine.js";
 import { readState, writeState } from "./state.js";
-import { runPreflight, printPreflightResult } from "./preflight.js";
+import {
+  runPreflight,
+  printPreflightResult,
+  getAgentContext,
+  formatAgentContext,
+  writeAgentContextFile,
+} from "./preflight.js";
 
 // ---------------------------------------------------------------------------
 // Arg-parsing helpers
@@ -70,6 +77,19 @@ async function cmdPreflight(argv: string[]): Promise<void> {
     ...(baseBranch !== undefined ? { baseBranch } : {}),
   });
   printPreflightResult(result);
+
+  // Always show agent context so the user can verify what nodes will have access to.
+  const dagrunnerRoot = new URL("../", import.meta.url).pathname;
+  const cacheDir = join(homedir(), ".cache", "dagrunner");
+  const ctx = getAgentContext(dagrunnerRoot, config);
+  const contextFile = writeAgentContextFile(
+    ctx,
+    config,
+    dagrunnerRoot,
+    cacheDir,
+  );
+  process.stdout.write(formatAgentContext(ctx, contextFile));
+
   if (!result.ok) process.exit(1);
 }
 

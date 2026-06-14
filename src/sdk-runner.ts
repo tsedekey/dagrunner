@@ -21,7 +21,7 @@ import {
   existsSync,
 } from "node:fs";
 import { join, basename } from "node:path";
-import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import type {
   NodeExecutor,
   NodeExecResult,
@@ -30,6 +30,7 @@ import type {
 import type { Node } from "./types.js";
 import type { DagrunnerConfig } from "./xdg.js";
 import { applyNodeEnv, buildNodeEnv } from "./launcher.js";
+import { readWorkProfileMcpServers } from "./settings-seed.js";
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -116,24 +117,11 @@ export function makeSDKRunner(
       systemPrompt: { type: "preset", preset: "claude_code" },
     };
 
-    // verify-seed needs Docker (Unix socket) and Maven /tmp writes.
-    // The deny list in settings.json still applies; only the OS sandbox
-    // restrictions are relaxed for these specific paths.
+    // verify-seed runs Docker, Maven, and the AIO JVM — too many dynamic
+    // paths to enumerate in an allowlist. Disable the OS sandbox for this
+    // node only; the deny list in settings.json still applies.
     if (nodeId === "verify-seed") {
-      options.sandbox = {
-        network: {
-          // allowAllUnixSockets covers both /var/run/docker.sock and
-          // ~/.docker/run/docker.sock (Docker Desktop path varies by version).
-          allowAllUnixSockets: true,
-        },
-        filesystem: {
-          // /tmp is the conventional path; tmpdir() is the actual macOS
-          // session temp dir (/var/folders/…/T/) used by Maven, spotless,
-          // exec-maven-plugin, and jansi for native lib extraction.
-          allowWrite: ["/tmp", tmpdir()],
-          allowRead: ["/tmp", tmpdir()],
-        },
-      };
+      options.sandbox = { enabled: false };
     }
 
     if (node.model === "haiku") {
@@ -157,6 +145,16 @@ export function makeSDKRunner(
     }
     if (ctx.sessionId !== undefined && ctx.sessionId !== "") {
       options.resume = ctx.sessionId;
+    }
+
+    // Inject work-profile MCP servers (e.g. camunda-knowledge) via SDK options.
+    // CREV_REPO_DIR is set to the worktree so semgrep/bpmn_lint see the agent's
+    // actual working tree. Settings.json carry the allow/deny permissions.
+    const workProfileMcp = readWorkProfileMcpServers(homedir(), worktreePath);
+    if (Object.keys(workProfileMcp).length > 0) {
+      options.mcpServers = workProfileMcp as NonNullable<
+        (typeof options)["mcpServers"]
+      >;
     }
 
     const q = query({ prompt, options });

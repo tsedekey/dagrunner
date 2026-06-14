@@ -35,6 +35,7 @@ import { acquireLock, releaseLock } from "./lock.js";
 import { makeSDKRunner } from "./sdk-runner.js";
 import { featureWorkflow } from "./feature-workflow.js";
 import { loadWorkflow } from "./workflow.js";
+import { readSourcePassthrough, buildSeededSettings } from "./settings-seed.js";
 
 // ---------------------------------------------------------------------------
 // Ctx builder
@@ -165,133 +166,16 @@ export async function startRun(opts: {
 
   // Runtime settings.json: full permission/sandbox/network model (Phase 2a D1).
   // DISTINCT from the build-harness settings.json (bypassPermissions).
-  // additionalDirectories includes runDir so all node artifact subdirs are
-  // accessible without prompting (artifacts live outside the worktree).
-  //
-  // verify-seed requirements:
-  //   - /tmp and os.tmpdir() added so Maven can write temp files (sandbox filesystem fix)
-  //   - ~/.docker added so Docker CLI can reach the Docker Desktop socket
-  //   - Docker, docker-compose, java, curl, kill, lsof added to allow list
+  // buildSeededSettings is the single authoritative template (settings-seed.ts).
+  const seededSettings = buildSeededSettings({
+    runDir,
+    homeDir: homedir(),
+    tmpDir: tmpdir(),
+    passthrough: readSourcePassthrough(config.DEVHARNESS_SRC),
+  });
   writeFileSync(
     join(destClaude, "settings.json"),
-    JSON.stringify(
-      {
-        permissions: {
-          defaultMode: "acceptEdits",
-          additionalDirectories: [
-            runDir,
-            join(homedir(), ".m2"),
-            join(homedir(), ".docker"),
-            "/tmp",
-            tmpdir(),
-          ],
-          allow: [
-            "Read",
-            "Bash(git *)",
-            "Bash(npm *)",
-            "Bash(npx tsc *)",
-            "Bash(npx prettier *)",
-            "Bash(./mvnw *)",
-            "Bash(cd java && ./mvnw *)",
-            "Bash(mvn *)",
-            // verify-seed: cluster lifecycle
-            "Bash(docker *)",
-            "Bash(docker-compose *)",
-            "Bash(java *)",
-            "Bash(nohup java *)",
-            "Bash(curl *)",
-            "Bash(kill *)",
-            "Bash(lsof *)",
-            "Bash(disown *)",
-            "Bash(jq *)",
-          ],
-          deny: [
-            "Bash(rm -rf *)",
-            "Bash(sudo *)",
-            "Bash(git push --force *)",
-            "Bash(git push * --force)",
-            "Read(**/.env)",
-            "Read(**/.env.*)",
-            "Read(**/secrets/**)",
-            "Write(**/.env*)",
-          ],
-        },
-        sandbox: {
-          enabled: true,
-          autoAllowBashIfSandboxed: true,
-          network: {
-            allowedDomains: [
-              "api.anthropic.com",
-              "registry.npmjs.org",
-              "*.npmjs.org",
-              "github.com",
-              "*.githubusercontent.com",
-              "repo.maven.apache.org",
-              "central.maven.org",
-              "*.maven.org",
-              "plugins.gradle.org",
-              // verify-seed: Docker image pulls and Elasticsearch
-              "hub.docker.com",
-              "*.docker.io",
-              "registry-1.docker.io",
-              "auth.docker.io",
-              "production.cloudflare.docker.com",
-              "localhost",
-            ],
-          },
-        },
-        hooks: {
-          SessionStart: [
-            {
-              hooks: [
-                {
-                  type: "command",
-                  command: "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh",
-                },
-              ],
-            },
-          ],
-          Stop: [
-            {
-              hooks: [
-                {
-                  type: "command",
-                  command: "$CLAUDE_PROJECT_DIR/.claude/hooks/stop-verifier.sh",
-                },
-                {
-                  type: "command",
-                  command: "$CLAUDE_PROJECT_DIR/.claude/hooks/stop-schema.sh",
-                },
-              ],
-            },
-          ],
-          PostToolUse: [
-            {
-              matcher: "Write|Edit|MultiEdit",
-              hooks: [
-                {
-                  type: "command",
-                  command:
-                    "$CLAUDE_PROJECT_DIR/.claude/hooks/post-tool-use-format.sh",
-                },
-              ],
-            },
-          ],
-          SessionEnd: [
-            {
-              hooks: [
-                {
-                  type: "command",
-                  command: "$CLAUDE_PROJECT_DIR/.claude/hooks/session-end.sh",
-                },
-              ],
-            },
-          ],
-        },
-      },
-      null,
-      2,
-    ),
+    JSON.stringify(seededSettings, null, 2),
     "utf8",
   );
 
