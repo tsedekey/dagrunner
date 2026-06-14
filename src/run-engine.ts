@@ -182,6 +182,8 @@ export async function startRun(opts: {
       ? { claudeConfigDir: config.claudeConfigDir }
       : {}),
     workProfileMcpServers: readWorkProfileMcpServers(homedir(), worktreePath),
+    devharnessSrc: config.DEVHARNESS_SRC,
+    dagrunnerHome: homeDir,
   });
   writeFileSync(
     join(destClaude, "settings.json"),
@@ -716,6 +718,8 @@ export async function rerunNode(opts: {
       ? { claudeConfigDir: config.claudeConfigDir }
       : {}),
     workProfileMcpServers: readWorkProfileMcpServers(homedir(), worktreePath),
+    devharnessSrc: config.DEVHARNESS_SRC,
+    dagrunnerHome: homeDir,
   });
   writeFileSync(
     join(destClaude, "settings.json"),

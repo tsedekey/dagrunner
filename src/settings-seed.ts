@@ -99,6 +99,7 @@ export function readSourcePassthrough(
  */
 export function buildSeededSettings(opts: {
   runDir: string;
+  /** OS home dir (homedir()) — used for .m2, .docker paths. */
   homeDir: string;
   tmpDir: string;
   passthrough: SourcePassthrough;
@@ -106,6 +107,21 @@ export function buildSeededSettings(opts: {
   claudeConfigDir?: string;
   /** Work-profile MCP servers to include in settings (from readWorkProfileMcpServers). */
   workProfileMcpServers?: Record<string, unknown>;
+  /**
+   * DEVHARNESS_SRC (e.g. ~/dev/camunda/camunda-main). When provided, added to
+   * additionalDirectories so apply-reflection can write CLAUDE.local.md files
+   * directly into the real source tree. All nodes get this access — scope is
+   * intentional (logged in DECISIONS.md): prompt-discipline is the guard, not
+   * the sandbox boundary, for cross-tree writes.
+   */
+  devharnessSrc?: string;
+  /**
+   * Dagrunner home (DAGRUNNER_HOME, e.g. ~/.local/share/dagrunner). When
+   * provided, added to additionalDirectories so apply-reflection can write to
+   * store/proposals/ — a sibling of runDir that the runDir entry alone does not
+   * cover.
+   */
+  dagrunnerHome?: string;
 }): Record<string, unknown> {
   const {
     runDir,
@@ -114,18 +130,26 @@ export function buildSeededSettings(opts: {
     passthrough,
     claudeConfigDir,
     workProfileMcpServers,
+    devharnessSrc,
+    dagrunnerHome,
   } = opts;
+
+  const additionalDirs: string[] = [
+    runDir,
+    join(homeDir, ".m2"),
+    join(homeDir, ".docker"),
+    "/tmp",
+    tmpDir,
+  ];
+  if (devharnessSrc !== undefined && devharnessSrc !== "")
+    additionalDirs.push(devharnessSrc);
+  if (dagrunnerHome !== undefined && dagrunnerHome !== "")
+    additionalDirs.push(dagrunnerHome);
 
   const settings: Record<string, unknown> = {
     permissions: {
       defaultMode: "acceptEdits",
-      additionalDirectories: [
-        runDir,
-        join(homeDir, ".m2"),
-        join(homeDir, ".docker"),
-        "/tmp",
-        tmpDir,
-      ],
+      additionalDirectories: additionalDirs,
       allow: [
         "Read",
         "Bash(git *)",
