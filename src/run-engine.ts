@@ -172,6 +172,9 @@ export async function startRun(opts: {
     homeDir: homedir(),
     tmpDir: tmpdir(),
     passthrough: readSourcePassthrough(config.DEVHARNESS_SRC),
+    ...(config.claudeConfigDir !== undefined
+      ? { claudeConfigDir: config.claudeConfigDir }
+      : {}),
   });
   writeFileSync(
     join(destClaude, "settings.json"),

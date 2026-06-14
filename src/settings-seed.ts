@@ -102,8 +102,10 @@ export function buildSeededSettings(opts: {
   homeDir: string;
   tmpDir: string;
   passthrough: SourcePassthrough;
+  /** Expanded path to the Claude config dir (e.g. /Users/x/.claude-work). */
+  claudeConfigDir?: string;
 }): Record<string, unknown> {
-  const { runDir, homeDir, tmpDir, passthrough } = opts;
+  const { runDir, homeDir, tmpDir, passthrough, claudeConfigDir } = opts;
 
   const settings: Record<string, unknown> = {
     permissions: {
@@ -224,6 +226,32 @@ export function buildSeededSettings(opts: {
   // Passthrough: mcpServers
   if (passthrough.mcpServers !== undefined) {
     settings["mcpServers"] = passthrough.mcpServers;
+  }
+
+  // Mirror enabledPlugins from the Claude profile's global settings so LSP and
+  // other marketplace plugins remain active when settingSources: ["project"]
+  // causes the global settings file to be skipped entirely.
+  if (claudeConfigDir !== undefined && claudeConfigDir !== "") {
+    const profileSettingsPath = join(claudeConfigDir, "settings.json");
+    if (existsSync(profileSettingsPath)) {
+      try {
+        const ps = JSON.parse(
+          readFileSync(profileSettingsPath, "utf8"),
+        ) as Record<string, unknown>;
+        const ep = ps["enabledPlugins"];
+        if (ep !== null && typeof ep === "object") {
+          const plugins: Record<string, boolean> = {};
+          for (const [k, v] of Object.entries(ep as Record<string, unknown>)) {
+            if (typeof v === "boolean") plugins[k] = v;
+          }
+          if (Object.keys(plugins).length > 0) {
+            settings["enabledPlugins"] = plugins;
+          }
+        }
+      } catch {
+        // Unparseable profile settings — skip; don't block the run.
+      }
+    }
   }
 
   return settings;
