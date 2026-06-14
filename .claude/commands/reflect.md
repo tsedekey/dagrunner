@@ -14,6 +14,8 @@ cd "$DAGRUN_WORKTREE" && git diff origin/main...HEAD
 # Side-artifacts (optional — check existence before reading)
 cat "$DAGRUN_RUN_DIR/expand-guide/notes.md" 2>/dev/null
 cat "$DAGRUN_RUN_DIR/implement/notes.md" 2>/dev/null
+cat "$DAGRUN_RUN_DIR/review/notes.md" 2>/dev/null
+cat "$DAGRUN_RUN_DIR/fix/notes.md" 2>/dev/null
 
 # Structured outputs
 cat "$DAGRUN_RUN_DIR/review/findings.json"

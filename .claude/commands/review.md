@@ -103,6 +103,23 @@ The file must be valid JSON matching that schema exactly. Do not write any other
 
 ---
 
+## Step 5 — Optional notes (write only if substantive)
+
+Optionally write `$DAGRUN_ARTIFACTS/notes.md` if you observed anything that would help future
+implementations in this code area avoid the same class of issue. Good candidates:
+
+- A recurring anti-pattern across multiple findings (e.g. "every public method in this module
+  omits null-check on the entity arg — callers must guard upstream").
+- A module invariant that was violated and is easy to miss.
+- A finding dimension (e.g. migration-safety) that fired here but would not be obvious from
+  reading the code — worth flagging to future expand-guide and implement runs.
+
+**Absence is fine.** Only write notes.md if there is something genuinely non-obvious that
+reduces friction for future runs in this code area. Do not summarise the findings themselves —
+those are already in findings.json.
+
+---
+
 ## Constraints
 
 - Read-only: do not edit, write to, or run commands that modify files in the worktree (only write to `$DAGRUN_ARTIFACTS/`).
