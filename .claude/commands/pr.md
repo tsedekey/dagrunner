@@ -1,6 +1,8 @@
-# /pr — Compose and Open Pull Request
+# /pr — Compose Pull Request Body
 
-Compose a PR body from the run artifacts and open the PR (or dry-run on fixture runs).
+Compose a PR body and title from the run artifacts. dagrunner handles the
+actual `git push` and `gh pr create` outside this session — your job is to
+produce the artifacts.
 
 ## Inputs (read from the run directory via $DAGRUN_RUN_DIR)
 
@@ -16,7 +18,7 @@ Compose a PR body from the run artifacts and open the PR (or dry-run on fixture 
 Read each artifact listed above. For optional files (verify-guide/manual-test.md), check if
 the file exists before reading — if absent, note "Verification guide: skipped".
 
-Also gather the branch name and worktree path from env:
+Also gather the branch name from env:
 
 ```bash
 cd "$DAGRUN_WORKTREE" && git rev-parse --abbrev-ref HEAD
@@ -64,49 +66,32 @@ Write `$DAGRUN_ARTIFACTS/pr-meta.json`:
   "branch": "<branch-name>",
   "worktreePath": "<DAGRUN_WORKTREE>",
   "bodyPath": "<DAGRUN_ARTIFACTS>/body.md",
+  "title": "<concise PR title from guide.md, ≤70 chars>",
   "verifyRan": <true|false>,
   "createdAt": "<ISO timestamp>"
 }
 ```
 
-## Step 4 — Open the PR (gated by DAGRUN_NO_PR)
+## Step 4 — Backstop commit
 
-Check if the `DAGRUN_NO_PR` env var is set:
-
-```bash
-echo "${DAGRUN_NO_PR:-}"
-```
-
-If `DAGRUN_NO_PR` is set to any non-empty value, **do not open a real PR**. Print:
-
-```
-dagrun/pr: DAGRUN_NO_PR is set — skipping real PR creation. body.md written to $DAGRUN_ARTIFACTS/body.md
-```
-
-If `DAGRUN_NO_PR` is NOT set, commit any remaining changes, push the feature branch, and open a draft PR:
+Check whether there are uncommitted changes in the worktree:
 
 ```bash
 cd "$DAGRUN_WORKTREE"
-
-# Backstop: if implement/fix left uncommitted changes, commit them now so the
-# push carries real diffs. Under normal flow implement.md commits first; this
-# catches the case where it didn't.
-if ! git diff --cached --quiet || ! git diff --quiet; then
-  git add -A
-  git commit -m "feat: <title from guide.md> (dagrun: $DAGRUN_RUN_ID)"
-fi
-
-git push origin HEAD
-gh pr create \
-  --draft \
-  --title "<concise title from guide.md, ≤70 chars>" \
-  --body-file "$DAGRUN_ARTIFACTS/body.md" \
-  --base main
+git status --short
 ```
 
-Capture the PR URL from `gh pr create` output and append it to `$DAGRUN_ARTIFACTS/pr-meta.json`
-as `"prUrl": "<url>"`.
+If there are uncommitted changes, commit them:
 
-If `gh pr create` fails (e.g. no GitHub auth, wrong base branch), log the error to
-`$DAGRUN_ARTIFACTS/pr-error.txt` and still exit successfully — the body.md is the deliverable,
-the PR URL is a bonus.
+```bash
+git add -A
+git commit -m "feat: <title from guide.md> (dagrun: $DAGRUN_RUN_ID)"
+```
+
+Under normal flow `implement.md` commits first and this is a no-op.
+
+## Done
+
+Your work ends here. dagrunner will run `git push origin HEAD` and
+`gh pr create --draft` from outside the agent session (outside the sandbox)
+after this session exits.

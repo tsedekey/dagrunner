@@ -208,6 +208,8 @@ export async function startRun(opts: {
   const ctx = makeCtx(runDir);
   const result = await runDag(workflow, executor, state, { ctx, stateFile });
 
+  runPrPostProcess(readState(stateFile), runDir);
+
   // Paused = gate checkpoint: release lock so another start can proceed.
   if (result.status === "paused") {
     releaseLock(homeDir);
@@ -494,6 +496,8 @@ export async function resumeRun(opts: {
   const ctx = makeCtx(runDir);
   const result = await runDag(workflow, executor, state, { ctx, stateFile });
 
+  runPrPostProcess(readState(stateFile), runDir);
+
   if (result.status === "paused") {
     releaseLock(homeDir);
     const gateNode = Object.entries(result.nodes).find(
@@ -506,6 +510,75 @@ export async function resumeRun(opts: {
   } else {
     releaseLock(homeDir);
     process.stdout.write(`dagrun: run ${runId} ${result.status}\n`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// runPrPostProcess — push branch + open draft PR outside the agent sandbox
+// ---------------------------------------------------------------------------
+
+/**
+ * After the pr node's agent session exits, push the feature branch and create
+ * a draft PR using Node.js (outside the Claude Code sandbox). This avoids the
+ * TLS certificate error that occurs when `gh` (Go binary) runs inside the
+ * sandbox — Go's TLS stack doesn't trust the sandbox proxy certificate, while
+ * Node.js and macOS-native tools use the keychain correctly.
+ *
+ * Reads pr-meta.json for the branch and title written by the agent.
+ * Writes prUrl back to pr-meta.json on success, pr-error.txt on failure.
+ * Idempotent — skips if prUrl is already set.
+ */
+function runPrPostProcess(state: RunState, runDir: string): void {
+  const prNodeState = state.nodes["pr"];
+  if (prNodeState?.status !== "done") return;
+
+  const metaPath = join(runDir, "pr", "pr-meta.json");
+  const bodyPath = join(runDir, "pr", "body.md");
+  if (!existsSync(metaPath) || !existsSync(bodyPath)) return;
+
+  let meta: Record<string, unknown>;
+  try {
+    meta = JSON.parse(readFileSync(metaPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+  } catch {
+    return;
+  }
+
+  if (typeof meta["prUrl"] === "string" && meta["prUrl"] !== "") return;
+
+  const worktreePath = state.worktreePath;
+  const title =
+    typeof meta["title"] === "string" ? meta["title"] : state.branch;
+  const errorPath = join(runDir, "pr", "pr-error.txt");
+
+  // Push the branch (idempotent — may already be done from a prior attempt).
+  try {
+    execSync(`git -C "${worktreePath}" push origin HEAD`, { stdio: "pipe" });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    writeFileSync(errorPath, `git push failed: ${msg}\n`);
+    process.stdout.write(`dagrun: git push failed — see ${errorPath}\n`);
+    return;
+  }
+
+  // Create the draft PR.
+  try {
+    const url = execSync(
+      `gh pr create --draft --title ${JSON.stringify(title)} --body-file "${bodyPath}" --base main`,
+      { cwd: worktreePath, encoding: "utf8" },
+    ).trim();
+    meta["prUrl"] = url;
+    writeFileSync(metaPath, JSON.stringify(meta, null, 2) + "\n", "utf8");
+    process.stdout.write(`dagrun: draft PR created: ${url}\n`);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    writeFileSync(errorPath, `gh pr create failed: ${msg}\n`);
+    process.stdout.write(`dagrun: PR creation failed — see ${errorPath}\n`);
+    process.stdout.write(
+      `  Manual: cd "${worktreePath}" && gh pr create --draft --title ${JSON.stringify(title)} --body-file "${bodyPath}" --base main\n`,
+    );
   }
 }
 
@@ -713,6 +786,7 @@ export async function rerunNode(opts: {
     },
   };
   writeState(stateFile, updatedState);
+  runPrPostProcess(updatedState, runDir);
 
   process.stdout.write(`dagrun: node "${nodeId}" rerun → ${newStatus}\n`);
   if (newStatus === "done" || newStatus === "awaiting-gate") {
