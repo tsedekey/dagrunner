@@ -317,37 +317,6 @@ function cmdCleanup(argv: string[]): void {
   const state = readState(stateFile);
   const worktreePath = state.worktreePath;
 
-  // Stop verify cluster if verify-seed wrote PIDs (Phase 2b).
-  const pidsFile = join(homeDir, "runs", runId, "verify-seed", "pids.json");
-  if (existsSync(pidsFile)) {
-    try {
-      const pids = JSON.parse(readFileSync(pidsFile, "utf8")) as {
-        aio?: number;
-        es_container?: string;
-      };
-      if (pids.aio !== undefined) {
-        try {
-          execSync(`kill ${pids.aio}`, { stdio: "ignore" });
-          process.stdout.write(`dagrun: stopped AIO process ${pids.aio}\n`);
-        } catch {
-          // Process may have already exited.
-        }
-      }
-      if (pids.es_container !== undefined) {
-        try {
-          execSync(`docker stop "${pids.es_container}"`, { stdio: "ignore" });
-          process.stdout.write(
-            `dagrun: stopped ES container ${pids.es_container}\n`,
-          );
-        } catch {
-          // Container may have already stopped.
-        }
-      }
-    } catch {
-      process.stderr.write(`dagrun cleanup: could not read pids.json\n`);
-    }
-  }
-
   try {
     // Must run in the source repo so git can find the worktree registration.
     execSync(`git worktree remove "${worktreePath}" --force`, {

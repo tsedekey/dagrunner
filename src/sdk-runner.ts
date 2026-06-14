@@ -117,13 +117,6 @@ export function makeSDKRunner(
       systemPrompt: { type: "preset", preset: "claude_code" },
     };
 
-    // verify-seed runs Docker, Maven, and the AIO JVM — too many dynamic
-    // paths to enumerate in an allowlist. Disable the OS sandbox for this
-    // node only; the deny list in settings.json still applies.
-    if (nodeId === "verify-seed") {
-      options.sandbox = { enabled: false };
-    }
-
     if (node.model === "haiku") {
       options.model = "claude-haiku-4-5-20251001";
     } else if (node.model === "sonnet") {

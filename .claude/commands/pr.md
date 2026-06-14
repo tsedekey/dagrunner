@@ -9,12 +9,12 @@ Compose a PR body from the run artifacts and open the PR (or dry-run on fixture 
 - `$DAGRUN_RUN_DIR/implement/summary.md` — what was implemented
 - `$DAGRUN_RUN_DIR/review/findings.json` — review findings
 - `$DAGRUN_RUN_DIR/fix/summary.md` — what was fixed
-- `$DAGRUN_RUN_DIR/verify-seed/manual-test.md` — (optional) runtime verification result
+- `$DAGRUN_RUN_DIR/verify-guide/manual-test.md` — (optional) verification guide result
 
 ## Step 1 — Read all available artifacts
 
-Read each artifact listed above. For optional files (verify-seed/manual-test.md), check if
-the file exists before reading — if absent, note "Runtime verification: skipped".
+Read each artifact listed above. For optional files (verify-guide/manual-test.md), check if
+the file exists before reading — if absent, note "Verification guide: skipped".
 
 Also gather the branch name and worktree path from env:
 
@@ -32,8 +32,8 @@ Follow the Camunda PR template exactly. Write `$DAGRUN_ARTIFACTS/body.md`:
 <2–4 sentences. State what this PR does and why — goal and purpose only.
 Draw from guide.md (what to implement, acceptance criteria) and
 implement/summary.md (what was actually done). Be concise: no bullet lists,
-no section headers, no review/fix recap. If verify-seed ran successfully,
-add one sentence noting that the change was verified end-to-end.>
+no section headers, no review/fix recap. If verify-guide ran, add one sentence
+noting that a verification guide (seeding spec + code tour) was produced.>
 
 ## Checklist
 

@@ -4,7 +4,7 @@
  * Phase 2a pipeline:
  *   expand-guide (Gate 1) -> implement -> review -> fix (Gate 2)
  *
- * Phase 2b will add: verify-election -> verify-seed (Gate 3) -> pr -> reflect
+ * Phase 2b adds: verify-election -> verify-guide (Gate 3) -> pr -> reflect
  *
  * This is the ONLY workflow in v1. Additional workflows are config additions
  * on the proven engine.
@@ -153,17 +153,17 @@ export const featureWorkflow: Workflow = {
     // Phase 2b nodes — added after Gate 2 (fix).
     // verify-election (micro-gate in run-engine, not a node) routes here.
     {
-      id: "verify-seed",
+      id: "verify-guide",
       dependsOn: ["fix"],
-      command: "/verify-seed",
-      model: "sonnet", // upgraded from haiku — see DECISIONS.md phase2b-verify-seed-model
-      produces: ["manual-test.md"],
+      command: "/verify-guide",
+      model: "haiku",
+      produces: ["seeding-spec.json", "tour-spec.json", "manual-test.md"],
       optional: true, // election=n pre-marks this skipped; optional prevents cascade-block on pr
-      gate: { maxIterations: 5, onReject: "revise-self" }, // Gate 3: human runs manual test
+      gate: { maxIterations: 5, onReject: "revise-self" }, // Gate 3: human reviews manual-test.md
     },
     {
       id: "pr",
-      dependsOn: ["fix", "verify-seed"], // fix ensures worktree is ready; verify-seed optional
+      dependsOn: ["fix", "verify-guide"], // fix ensures worktree is ready; verify-guide optional
       command: "/pr",
       model: "haiku",
       produces: ["body.md"],

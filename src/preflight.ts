@@ -468,7 +468,7 @@ export function formatAgentContext(
   lines.push(`\nAgent context  (dagrunner + DEVHARNESS_SRC)`);
   lines.push(hr);
   lines.push(`  Permission mode   acceptEdits`);
-  lines.push(`  Sandbox           enabled by default  (verify-seed: disabled)`);
+  lines.push(`  Sandbox           enabled for all nodes`);
   lines.push(`  Hooks             ${ctx.hooks.join(" · ")}`);
 
   if (Object.keys(ctx.env).length === 0) {
