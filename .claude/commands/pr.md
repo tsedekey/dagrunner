@@ -24,37 +24,35 @@ cd "$DAGRUN_WORKTREE" && git rev-parse --abbrev-ref HEAD
 
 ## Step 2 — Compose the PR body
 
-Write `$DAGRUN_ARTIFACTS/body.md` with this structure:
+Follow the Camunda PR template exactly. Write `$DAGRUN_ARTIFACTS/body.md`:
 
 ```markdown
-## Summary
+## Description
 
-<1-3 bullet points from guide.md and implement/summary.md>
+<2–4 sentences. State what this PR does and why — goal and purpose only.
+Draw from guide.md (what to implement, acceptance criteria) and
+implement/summary.md (what was actually done). Be concise: no bullet lists,
+no section headers, no review/fix recap. If verify-seed ran successfully,
+add one sentence noting that the change was verified end-to-end.>
 
-## What Changed
+## Checklist
 
-<Key files changed from implement/summary.md>
+<!--- Please delete options that are not relevant. -->
 
-## Review Findings
+- [ ] Enable backports when necessary (fex. [for bug fixes](https://github.com/camunda/camunda/blob/main/CONTRIBUTING.md#backporting-changes), [for CI changes](https://camunda.github.io/camunda/ci/#when-to-backport-ci-changes), or [for documentation changes](https://camunda.github.io/camunda/ci/#documentation-specific-backporting-monorepo-docs-folders)).
+- [ ] If this PR modifies the [C8 Orchestration Cluster E2E Test Suite](qa/c8-orchestration-cluster-e2e-test-suite), the relevant tests have been run via the [on-demand workflow](https://github.com/camunda/camunda/actions/workflows/c8-orchestration-cluster-e2e-tests-on-demand.yml) before requesting review. Any test failures are documented in the PR description and confirmed not to be regressions introduced by this PR.
 
-<Summary of findings.json: N reviewers ran, M findings (blockers/majors), adversarial verifier ran: yes/no>
+## Related issues
 
-## Fixes Applied
-
-<From fix/summary.md — which findings were addressed>
-
-## Runtime Verification
-
-<If verify-seed ran: process key, instance key, test result>
-<If skipped: "Runtime verification was skipped for this PR">
-
-## Test Plan
-
-- [ ] Review the implementation guide: guide.md
-- [ ] Verify all blocker/major findings from review are addressed
-- [ ] Run the existing test suite
-      <Add any feature-specific steps from guide.md acceptance criteria>
+closes #<issue number extracted from plan.md, or leave as "closes #" if not found>
 ```
+
+**Description writing rules:**
+
+- Maximum 4 sentences. Prefer 2–3.
+- Do not summarise the review or fix steps — reviewers will read the code.
+- Do not include file lists, finding counts, or cost figures.
+- Use plain prose, not bullet points or sub-headers.
 
 ## Step 3 — Write metadata
 
