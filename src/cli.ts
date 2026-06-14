@@ -14,13 +14,14 @@ import {
   resolveHome,
   resolveConfig,
 } from "./xdg.js";
-import { releaseLock } from "./lock.js";
+import { releaseLock, readLock } from "./lock.js";
 import {
   cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -127,8 +128,8 @@ async function cmdStart(argv: string[]): Promise<void> {
   // Load config — fails loud if DEVHARNESS_SRC is blank.
   const config = resolveConfig(homeDir, configFlag);
 
-  // Auth check.
-  assertAuth();
+  // Auth check — scoped to the configured Claude profile.
+  assertAuth(config.claudeConfigDir);
 
   // Preflight checks — must pass before creating any worktrees.
   const preflight = runPreflight(config, homeDir);
@@ -173,7 +174,7 @@ async function cmdResume(argv: string[]): Promise<void> {
 
   const homeDir = resolveHome();
   const config = resolveConfig(homeDir, configFlag);
-  assertAuth();
+  assertAuth(config.claudeConfigDir);
 
   await resumeRun({
     runId,
@@ -283,6 +284,15 @@ function cmdAbort(argv: string[]): void {
   const stateFile = join(homeDir, "runs", runId, "state.json");
 
   if (!existsSync(stateFile)) {
+    // Run dir was manually deleted — if the lock still names this run, release it.
+    const lock = readLock(homeDir);
+    if (lock !== null && lock.runId === runId) {
+      releaseLock(homeDir);
+      process.stdout.write(
+        `dagrun: run directory for "${runId}" not found — released stale lock.\n`,
+      );
+      return;
+    }
     process.stderr.write(`dagrun: run "${runId}" not found at ${stateFile}\n`);
     process.exit(1);
   }
@@ -298,15 +308,48 @@ function cmdAbort(argv: string[]): void {
 }
 
 function cmdCleanup(argv: string[]): void {
-  const runId = argv[0];
-  if (runId === undefined || runId.startsWith("--")) {
-    process.stderr.write(`dagrun cleanup: missing <run-id> argument.\n`);
-    process.exit(1);
-  }
-
   const configFlag = flagValue(argv, "--config");
   const homeDir = resolveHome();
   const config = resolveConfig(homeDir, configFlag);
+
+  if (hasFlag(argv, "--all")) {
+    const worktreeRoot = config.worktreeRoot ?? join(homeDir, "worktrees");
+    const dirs = existsSync(worktreeRoot) ? readdirSync(worktreeRoot) : [];
+    if (dirs.length === 0) {
+      process.stdout.write("dagrun: no worktrees to clean up\n");
+      return;
+    }
+    let removed = 0;
+    for (const d of dirs) {
+      const wt = join(worktreeRoot, d);
+      try {
+        execSync(`git worktree remove "${wt}" --force`, {
+          cwd: config.DEVHARNESS_SRC,
+          stdio: "inherit",
+        });
+        removed++;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(
+          `dagrun cleanup: failed to remove ${wt}: ${msg}\n`,
+        );
+      }
+    }
+    releaseLock(homeDir);
+    process.stdout.write(`dagrun: removed ${removed} worktree(s)\n`);
+    return;
+  }
+
+  const runId = argv[0];
+  if (runId === undefined || runId.startsWith("--")) {
+    process.stderr.write(
+      `dagrun cleanup: missing <run-id> argument.\n` +
+        `Usage: dagrun cleanup <run-id>\n` +
+        `       dagrun cleanup --all\n`,
+    );
+    process.exit(1);
+  }
+
   const stateFile = join(homeDir, "runs", runId, "state.json");
 
   if (!existsSync(stateFile)) {
@@ -333,6 +376,61 @@ function cmdCleanup(argv: string[]): void {
 
   releaseLock(homeDir);
   process.stdout.write(`dagrun: cleaned up ${runId}\n`);
+}
+
+function cmdClear(argv: string[]): void {
+  const homeDir = resolveHome();
+  const runsDir = join(homeDir, "runs");
+
+  if (hasFlag(argv, "--all")) {
+    const yes = hasFlag(argv, "--yes");
+    const runDirs = existsSync(runsDir) ? readdirSync(runsDir) : [];
+    if (runDirs.length === 0) {
+      process.stdout.write("dagrun: no runs to clear\n");
+      return;
+    }
+    if (!yes) {
+      process.stderr.write(
+        `dagrun clear --all: will delete ${runDirs.length} run(s):\n` +
+          runDirs.map((d) => `  ${d}`).join("\n") +
+          `\nAdd --yes to confirm.\n`,
+      );
+      process.exit(1);
+    }
+    for (const d of runDirs) {
+      rmSync(join(runsDir, d), { recursive: true, force: true });
+      process.stdout.write(`dagrun: cleared ${d}\n`);
+    }
+    releaseLock(homeDir);
+    process.stdout.write(`dagrun: all runs cleared\n`);
+    return;
+  }
+
+  const runId = argv[0];
+  if (runId === undefined || runId.startsWith("--")) {
+    process.stderr.write(
+      `dagrun clear: missing <run-id> argument.\n` +
+        `Usage: dagrun clear <run-id>\n` +
+        `       dagrun clear --all [--yes]\n`,
+    );
+    process.exit(1);
+  }
+
+  const runDir = join(runsDir, runId);
+  if (!existsSync(runDir)) {
+    process.stderr.write(`dagrun: run "${runId}" not found at ${runDir}\n`);
+    process.exit(1);
+  }
+
+  rmSync(runDir, { recursive: true, force: true });
+
+  // Release lock if this run held it.
+  const lock = readLock(homeDir);
+  if (lock !== null && lock.runId === runId) {
+    releaseLock(homeDir);
+  }
+
+  process.stdout.write(`dagrun: cleared run ${runId}\n`);
 }
 
 function cmdRevertReflection(argv: string[]): void {
@@ -549,6 +647,9 @@ function printHelp(): void {
       "  dagrun list",
       "  dagrun abort <run-id>",
       "  dagrun cleanup <run-id>",
+      "  dagrun cleanup --all",
+      "  dagrun clear <run-id>",
+      "  dagrun clear --all [--yes]",
       "  dagrun report <run-id>",
       "  dagrun logs <run-id> <node>",
       "  dagrun revert-reflection <run-id>",
@@ -617,6 +718,10 @@ async function main(argv: string[]): Promise<number> {
 
     case "cleanup":
       cmdCleanup(rest);
+      return 0;
+
+    case "clear":
+      cmdClear(rest);
       return 0;
 
     case "report":

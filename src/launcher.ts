@@ -80,11 +80,16 @@ export function applyNodeEnv(env: NodeLaunchEnv): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Assert that at least one Anthropic auth credential is present in env.
- * Fails loud if neither ANTHROPIC_API_KEY nor ANTHROPIC_AUTH_TOKEN is set.
- * Never logs the key value — only checks presence.
+ * Assert that the configured Claude profile is authenticated.
+ *
+ * Checks in order:
+ *   1. ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN env vars (API key auth)
+ *   2. `claude auth status` scoped to claudeConfigDir (subscription auth)
+ *
+ * If not authenticated, prints the exact command to run in a terminal to log
+ * in and exits 1.
  */
-export function assertAuth(): void {
+export function assertAuth(claudeConfigDir?: string): void {
   const hasKey =
     typeof process.env["ANTHROPIC_API_KEY"] === "string" &&
     process.env["ANTHROPIC_API_KEY"] !== "";
@@ -94,11 +99,16 @@ export function assertAuth(): void {
 
   if (hasKey || hasToken) return;
 
-  // Accept claude.ai subscription auth (the SDK's claude binary uses its own session)
+  // Check subscription auth scoped to the configured Claude profile directory.
   try {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    if (claudeConfigDir !== undefined && claudeConfigDir !== "") {
+      env["CLAUDE_CONFIG_DIR"] = claudeConfigDir;
+    }
     const out = execSync("claude auth status 2>/dev/null", {
       encoding: "utf8",
       timeout: 5000,
+      env,
     });
     if (out.includes('"loggedIn": true') || out.includes('"loggedIn":true'))
       return;
@@ -106,8 +116,20 @@ export function assertAuth(): void {
     // claude not found or not logged in — fall through to hard fail
   }
 
+  const configDirNote =
+    claudeConfigDir !== undefined && claudeConfigDir !== ""
+      ? `  Claude config: ${claudeConfigDir}\n`
+      : "";
+  const loginCmd =
+    claudeConfigDir !== undefined && claudeConfigDir !== ""
+      ? `CLAUDE_CONFIG_DIR=${claudeConfigDir} claude auth login`
+      : "claude auth login";
+
   process.stderr.write(
-    `dagrun: authentication required: set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN, or run \`claude login\`.\n`,
+    `dagrun: not logged in to Claude.\n` +
+      configDirNote +
+      `  Run in your terminal:\n` +
+      `    ${loginCmd}\n`,
   );
   process.exit(1);
 }
