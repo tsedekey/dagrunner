@@ -460,37 +460,56 @@ export function writeAgentContextFile(
 export function formatAgentContext(
   ctx: AgentContext,
   contextFile: string,
+  config: DagrunnerConfig,
+  homeDir: string,
 ): string {
-  const lbl = (s: string) => `  ${s.padEnd(18)}`;
+  const lbl = (s: string) => `  ${s.padEnd(20)}`;
   const lines: string[] = [];
   const hr = "─".repeat(60);
 
-  lines.push(`\nAgent context  (dagrunner + DEVHARNESS_SRC)`);
+  lines.push(`\n⚙️  Configuration`);
   lines.push(hr);
-  lines.push(`  Permission mode   acceptEdits`);
-  lines.push(`  Sandbox           enabled for all nodes`);
-  lines.push(`  Hooks             ${ctx.hooks.join(" · ")}`);
+  lines.push(`  🏠 Home              ${homeDir}`);
+  lines.push(`  📄 Config            ${join(homeDir, "config.json")}`);
+  lines.push(`  🎯 DEVHARNESS_SRC    ${config.DEVHARNESS_SRC}`);
+  if (config.maxBudgetUsd !== undefined) {
+    lines.push(`  💰 Max budget        $${config.maxBudgetUsd}`);
+  }
+  if (config.maxParallel !== undefined) {
+    lines.push(`  🔀 Max parallel      ${config.maxParallel}`);
+  }
+  if (config.worktreeRoot !== undefined) {
+    lines.push(`  🌿 Worktree root     ${config.worktreeRoot}`);
+  }
+
+  lines.push(`\n🤖 Agent context  (dagrunner + DEVHARNESS_SRC)`);
+  lines.push(hr);
+  lines.push(`  🔐 Permission mode   acceptEdits`);
+  lines.push(`  🛡️  Sandbox           enabled for all nodes`);
+  lines.push(`  🪝 Hooks             ${ctx.hooks.join(" · ")}`);
 
   if (Object.keys(ctx.env).length === 0) {
-    lines.push(`  Env               (none)`);
+    lines.push(`  🌍 Env               (none)`);
   } else {
     const envStr = Object.entries(ctx.env)
       .map(([k, v]) => `${k}=${v}`)
       .join("  ");
-    lines.push(`  Env               ${envStr}  ← DEVHARNESS_SRC`);
+    lines.push(`  🌍 Env               ${envStr}  ← DEVHARNESS_SRC`);
   }
 
   lines.push(
-    `  MCP servers       ${ctx.mcpServers.length === 0 ? "(none)" : ctx.mcpServers.join(", ")}`,
+    `  🔌 MCP servers       ${ctx.mcpServers.length === 0 ? "(none)" : ctx.mcpServers.join(", ")}`,
   );
   lines.push(
-    `${lbl(`Commands (${ctx.commands.length})`)}dagrunner: ${bySource(ctx.commands, "dagrunner").length}  DEVHARNESS_SRC: ${bySource(ctx.commands, "DEVHARNESS_SRC").length}`,
+    `${lbl(`  📋 Commands (${ctx.commands.length})`)}dagrunner: ${bySource(ctx.commands, "dagrunner").length}  DEVHARNESS_SRC: ${bySource(ctx.commands, "DEVHARNESS_SRC").length}`,
   );
   lines.push(
-    `${lbl(`Agents (${ctx.agents.length})`)}dagrunner: ${bySource(ctx.agents, "dagrunner").length}  DEVHARNESS_SRC: ${bySource(ctx.agents, "DEVHARNESS_SRC").length}`,
+    `${lbl(`  🤖 Agents (${ctx.agents.length})`)}dagrunner: ${bySource(ctx.agents, "dagrunner").length}  DEVHARNESS_SRC: ${bySource(ctx.agents, "DEVHARNESS_SRC").length}`,
   );
-  lines.push(`${lbl(`Skills (${ctx.skills.length})`)}all from DEVHARNESS_SRC`);
-  lines.push(`\n  Full detail: ${contextFile}\n`);
+  lines.push(
+    `${lbl(`  ⚡ Skills (${ctx.skills.length})`)}all from DEVHARNESS_SRC`,
+  );
+  lines.push(`\n  📁 Full detail: ${contextFile}\n`);
 
   return lines.join("\n");
 }

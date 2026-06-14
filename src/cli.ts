@@ -88,7 +88,7 @@ async function cmdPreflight(argv: string[]): Promise<void> {
     dagrunnerRoot,
     cacheDir,
   );
-  process.stdout.write(formatAgentContext(ctx, contextFile));
+  process.stdout.write(formatAgentContext(ctx, contextFile, config, homeDir));
 
   if (!result.ok) process.exit(1);
 }
