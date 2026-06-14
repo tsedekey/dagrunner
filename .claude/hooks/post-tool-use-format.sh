@@ -27,5 +27,14 @@ file=$(jq -r '.tool_input.file_path // empty' 2>/dev/null)
 # No-op if the file doesn't exist on disk
 [[ -f "$file" ]] || exit 0
 
+# Only run prettier on frontend/JS/TS files. Reformatting YAML, Java, XML,
+# shell scripts, and other non-frontend formats is out of scope and can cause
+# unexpected diffs (e.g. single→double quote coercion in YAML).
+ext="${file##*.}"
+case "$ext" in
+  ts|tsx|js|jsx|mjs|cjs|css|scss|less|html|htm) ;;
+  *) exit 0 ;;
+esac
+
 # Run prettier; swallow errors (fail-soft — formatting never blocks a node)
 npx prettier --write "$file" 2>/dev/null || true

@@ -88,10 +88,13 @@ Write `$DAGRUN_ARTIFACTS/summary.md`:
 
 ---
 
-## Step 5 — Optional notes (write only if substantive)
+## Step 5 — Write notes.md
 
-Optionally write `$DAGRUN_ARTIFACTS/notes.md` if you discovered something non-obvious while
-applying fixes. Good candidates:
+Write `$DAGRUN_ARTIFACTS/notes.md`. This file is **required** whenever fixes were applied.
+
+If there is nothing non-obvious to report, write a single line: `No non-obvious discoveries.`
+
+Otherwise document any of the following:
 
 - Hidden coupling that forced you to touch files beyond the directly cited location.
 - A deferred finding that looks systemic (the same root cause likely exists in other places
@@ -100,10 +103,9 @@ applying fixes. Good candidates:
   classpath issue).
 - A root-cause pattern behind multiple findings (e.g. "three blockers trace back to the same
   missing transaction boundary in the service layer").
+- Any automatic reformatting (e.g. a formatter hook changed additional files beyond your edits).
 
-**Absence is fine.** Only write notes.md if there is something genuinely non-obvious that
-would save future runs time in this code area. Do not recap the summary — that is already
-in summary.md.
+Do not recap the summary — that is already in summary.md.
 
 ---
 
@@ -112,5 +114,5 @@ in summary.md.
 - Fix ONLY findings with `confidence: "high"` AND `severity` of `"blocker"` or `"major"`. Defer everything else.
 - Do not make speculative improvements beyond what the findings require.
 - Do not modify `$DAGRUN_ARTIFACTS/../review/findings.json` — it is the read-only input.
-- Write all artifacts to `$DAGRUN_ARTIFACTS/` (summary.md, addressed-checklist.md, notes.md if applicable).
+- Write all artifacts to `$DAGRUN_ARTIFACTS/` (summary.md, addressed-checklist.md, notes.md).
 - If a build or test step is unavailable (no build tool found), note it in the summary and continue.
