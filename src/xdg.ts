@@ -163,7 +163,10 @@ export function resolveConfig(
 
   const claudeConfigDir = raw["claudeConfigDir"];
   if (typeof claudeConfigDir === "string" && claudeConfigDir.trim() !== "") {
-    config.claudeConfigDir = claudeConfigDir;
+    // Expand leading ~/ — shell expansion doesn't apply to Node env assignments.
+    config.claudeConfigDir = claudeConfigDir.startsWith("~/")
+      ? join(homedir(), claudeConfigDir.slice(2))
+      : claudeConfigDir;
   }
 
   const worktreeRoot = raw["worktreeRoot"];
