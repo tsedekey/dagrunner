@@ -170,6 +170,7 @@ export function buildSeededSettings(opts: {
           "registry.npmjs.org",
           "*.npmjs.org",
           "github.com",
+          "api.github.com",
           "*.githubusercontent.com",
           "repo.maven.apache.org",
           "central.maven.org",

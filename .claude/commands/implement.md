@@ -14,3 +14,23 @@ Keep it under 100 words. Write to $DAGRUN_ARTIFACTS/summary.md.
 Optionally, if you discover non-obvious facts about the Camunda code area while implementing
 (hidden coupling, module quirks, surprising invariants), write them to $DAGRUN_ARTIFACTS/notes.md.
 Only write notes.md if there is something genuinely useful for future runs. Absence is fine.
+
+## Final step — Commit implementation
+
+After writing all artifacts, commit your code changes to the worktree:
+
+```bash
+cd "$DAGRUN_WORKTREE"
+git add -A
+git status --short
+```
+
+If the working tree is already clean (nothing to commit), note it in summary.md and skip the commit.
+
+Otherwise commit with a title derived from the first heading in `$DAGRUN_ARTIFACTS/../expand-guide/guide.md`:
+
+```bash
+git commit -m "feat: <concise title ≤70 chars from guide.md>"
+```
+
+Do not push — the pr node handles the push.

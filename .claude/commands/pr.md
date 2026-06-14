@@ -83,12 +83,22 @@ If `DAGRUN_NO_PR` is set to any non-empty value, **do not open a real PR**. Prin
 dagrun/pr: DAGRUN_NO_PR is set — skipping real PR creation. body.md written to $DAGRUN_ARTIFACTS/body.md
 ```
 
-If `DAGRUN_NO_PR` is NOT set, push the feature branch and open the PR:
+If `DAGRUN_NO_PR` is NOT set, commit any remaining changes, push the feature branch, and open a draft PR:
 
 ```bash
 cd "$DAGRUN_WORKTREE"
+
+# Backstop: if implement/fix left uncommitted changes, commit them now so the
+# push carries real diffs. Under normal flow implement.md commits first; this
+# catches the case where it didn't.
+if ! git diff --cached --quiet || ! git diff --quiet; then
+  git add -A
+  git commit -m "feat: <title from guide.md> (dagrun: $DAGRUN_RUN_ID)"
+fi
+
 git push origin HEAD
 gh pr create \
+  --draft \
   --title "<concise title from guide.md, ≤70 chars>" \
   --body-file "$DAGRUN_ARTIFACTS/body.md" \
   --base main
