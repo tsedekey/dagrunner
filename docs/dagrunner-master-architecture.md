@@ -18,11 +18,13 @@ North star: **strip everything predictive out of the front of the pipeline; deci
 
 ## 2. System components
 
-| # | Component | Runs where | Role |
-|---|---|---|---|
-| 1 | Glean Feature Task Companion | Glean | Ingests a GitHub task; emits a directional implementation plan (INTENT). Dropped in dagrunner's inbox. |
-| 2 | dagrunner (static feature pipeline) | local | The gated feature pipeline. The engine. Lives in its own repo. |
-| 3 | Four Phase-3 siblings | Camunda monorepo private `.claude/`, run in the worktree | Interactive Claude Code commands acting on Camunda (see §9). |
+| #   | Component                                | Runs where                                           | Role                                                                                                                                                                                           |
+| --- | ---------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **Glean Agent (Feature Task Companion)** | Glean                                                | Ingests a GitHub task; emits a directional implementation plan (INTENT/why). dagrunner's expand-guide writes the code-level HOW. The plan is dagrunner's inbox input — no GitHub issue needed. |
+| 2   | **dagrunner (static feature pipeline)**  | local machine                                        | The gated feature pipeline. The heart of the system.                                                                                                                                           |
+| 3   | **Three Phase-3 siblings**               | Camunda monorepo private `.claude/`, run in worktree | Interactive human-driven commands acting on Camunda: `/seed-data` (c8ctl seeding of a human-started OC), `ci-babysit`, `pr-triage`. See §9.                                                    |
+
+Phase 3 is three LOCAL siblings (/seed-data + ci-babysit + pr-triage) — one substrate, enterprise subscription locally. `/pr-review` is NOT a dagrunner sibling: it stays a private standalone command for reviewing OTHERS' PRs (see §9). gh-aw and dynamic-workflows-in-pipeline are not used (see §9 rationale).
 
 ---
 
@@ -44,7 +46,7 @@ North star: **strip everything predictive out of the front of the pipeline; deci
    [VERIFY-ELECTION] human: "run runtime verification? [y/n]"
         |  n -> verify-guide skipped -> pr
         |  y ↓
-  verify-guide (haiku, INFO-ONLY: writes seeding-spec.json + tour-spec.json + manual-test.md)
+  verify-guide (haiku, INFO-ONLY: writes seeding-spec.json + manual-test.md)
         |  ★ GATE 3: human runs the manual test (or invokes /verify-demo)
   pr (haiku)               -> opens the PR (git push / gh run OUTSIDE the sandbox — see §5)
   reflect                  ★ GATE 4: per-proposal accept/reject (post-PR, skippable)
@@ -56,6 +58,7 @@ North star: **strip everything predictive out of the front of the pipeline; deci
 **Adversarial verifier:** a second-order discriminator (not a 7th reviewer) — reads the reviewers' findings in isolated context, grounds each against the diff, drops/downgrades ungrounded ones. Triggered by runtime finding-count threshold N (default 3), NOT an upstream flag.
 
 **findings.json schema:**
+
 ```
 { run_id, timestamp,
   triage: { touches_public_api, touches_runtime, touches_schema_or_proto, performance_sensitive },
@@ -63,6 +66,7 @@ North star: **strip everything predictive out of the front of the pipeline; deci
   adversarial_verifier_run: bool,
   findings: [{ reviewer_dimension, severity, confidence, file, line, claim, grounded }] }
 ```
+
 Reviewer selection (from diff-triage): correctness + test-adequacy always; api-stability when touches_public_api; distributed-systems when touches_runtime; migration-safety when touches_schema_or_proto; performance when triage judges it.
 
 **Gates:** all checkpoint-and-exit, single-awaiting-gate invariant, conversation-led reject (resume same session + feedback artifact). Gates live ONLY on static nodes.
@@ -91,6 +95,7 @@ Reviewer selection (from diff-triage): correctness + test-adequacy always; api-s
 Seeded into each worktree `.claude/settings.json`, loaded via `settingSources:["project"]`, node `cwd` = worktree. Distinct from the build-time `bypassPermissions` posture used by the agent that BUILDS dagrunner.
 
 Goal: free inside the worktree, read anywhere, mutation/network outside hard-blocked, no prompts before a gate.
+
 - `defaultMode: acceptEdits`; `additionalDirectories` includes the per-run artifact path (else every node prompts — the #1 prompt pitfall).
 - `allow: [Read, Bash(git *), Bash(npm run *), Bash(npx tsc *)]`; `deny: rm -rf, sudo, force-push, .env/secrets read+write`.
 - `sandbox.enabled` (macOS Seatbelt) + `autoAllowBashIfSandboxed` + network `allowedDomains` (anthropic, npm, github). Out-of-worktree mutation is kernel-blocked; network is proxied+allowlisted, NOT cut off (WebFetch/WebSearch run in-process, unaffected).
@@ -108,7 +113,7 @@ Goal: free inside the worktree, read anywhere, mutation/network outside hard-blo
 
 ## 7. classify — REMOVED (returns Phase 5/6)
 
-No classify node. Reviewer-selection moved into review's diff-triage step (reads the diff — better input than predicting from the plan). Former classify outputs relocated: needs_runtime -> human verify-election; recommend_pr_review -> human reads `dagrun status`; run_adversarial_verifier -> finding-count threshold; risk -> removed; touches_* -> review diff-triage.
+No classify node. Reviewer-selection moved into review's diff-triage step (reads the diff — better input than predicting from the plan). Former classify outputs relocated: needs*runtime -> human verify-election; recommend_pr_review -> human reads `dagrun status`; run_adversarial_verifier -> finding-count threshold; risk -> removed; touches*\* -> review diff-triage.
 
 **Principle (governs classify's return):** classify earns a node only when it ROUTES the graph, not when it annotates the change. Change-AREA is diff-derivable (downstream). Task-TYPE (feature/bug/tech-debt) is not derivable from a not-yet-existent diff and reshapes the graph upfront -> returns Phase 5/6 as an upfront task-type router.
 
@@ -119,15 +124,6 @@ No classify node. Reviewer-selection moved into review's diff-triage step (reads
 - **reflect gate:** per-proposal, post-PR, skippable (never blocks the PR).
 - **apply-reflection guardrails (HARD):** (1) path allowlist — only `*.local.md` / private `.claude/` variants; refuse source, committed CLAUDE.md, state.json, dagrunner repo, .git; (2) private-only, never `git add`, paths in `.git/info/exclude`; (3) exact-approved-diffs only (mechanical applier, no re-reasoning); (4) snapshot-before-apply to `runs/<run-id>/reflect/backup/`, expose `dagrun revert-reflection`.
 
-## 7c. verify-guide (info-only) + /verify-demo
-
-verify-seed (cluster automation) was REMOVED — it structurally conflicts with the sandbox (needs Docker/broad-network/host-ports) and is negative-ROI. Replaced by **verify-guide**: a haiku info-only node (no cluster, can't fail that way) emitting two machine-consumable artifacts as the contract for `/verify-demo`:
-- `seeding-spec.json`: `{ deployments[], instances[], expected_observations[] }`.
-- `tour-spec.json`: `{ feature_summary, breakpoints[]{file,line,why,what_to_observe}, before_path[] }` — file:line computed from the diff (verify-guide has diff context; do NOT defer location-derivation to verify-demo). `before_path` empty for pure additions.
-- plus human-readable `manual-test.md`.
-
-`/verify-demo` (Phase 3 siblings 1+2) consumes these — see §9.
-
 ---
 
 ## 8. Cost & model tiering
@@ -136,37 +132,45 @@ Per-node tiering in the validated workflow-def (load-time model-string validatio
 
 ---
 
-## 9. Phase 3 siblings — FOUR interactive Claude Code commands
+## 9. Phase 3 siblings — THREE interactive Claude Code commands
 
-All four: Claude Code commands in the **Camunda monorepo's private `.claude/`** (alongside `/pr-review`, gitignored via `.git/info/exclude`), **copied into each worktree by dagrunner's seed/sync** and RUN inside the worktree (where the built code, PR branch, cluster, and tour-spec file:line refs live). Edit the canonical copy in DEVHARNESS_SRC; the worktree copy is ephemeral. Interactive, human-driven, **NOT sandboxed** (they need Docker, host ports, `gh`, broad network — exactly why they're commands, not nodes). Run under CLAUDE_CONFIG_DIR=~/.claude-work. Built one at a time, in order.
+All three: Claude Code commands in the **Camunda monorepo's private `.claude/`** (alongside `/pr-review`, gitignored via `.git/info/exclude`), **copied into each worktree by dagrunner's seed/sync** and RUN inside the worktree (where the built code, PR branch, cluster, and tour-spec refs live). Edit the canonical copy in DEVHARNESS_SRC; the worktree copy is ephemeral. Interactive, human-driven, **NOT sandboxed** (they need Docker, host ports, `gh`, broad network — exactly why they're commands, not nodes). Run under CLAUDE_CONFIG_DIR=~/.claude-work. Built one at a time, in order.
 
-### 9.1 /verify-demo environment creator (Sibling 1)
-Consumes `tour-spec.json` + the existing OC run configuration. Stands up a debuggable headless OC (broker+gateway) via the Debugger MCP Server (DMS) JetBrains plugin + Elasticsearch in Docker; places the tour breakpoints. **Linchpin (spike first): can DMS SET breakpoints programmatically, not just inspect?** Degrade gracefully (emit manual breakpoint instructions) if not. Emits `environment.json` (gateway addr, ES URL) for Sibling 2.
+> DROPPED: the dedicated "/verify-demo environment creator" (DMS-based cluster + breakpoint placement). The **c8ctl dev plugin** spins up a configured local OC smoothly, making a separate cluster-creator command unnecessary. The **Debugger MCP Server (DMS)** is parked for a FUTURE bug-fix / issue-investigation workflow (where programmatic breakpoints aid an investigating agent) — it has no role in the feature-task workflow. `tour-spec.json` is still emitted by verify-guide and remains useful as a human-readable code-trail in `manual-test.md`; it is simply not consumed by an automated breakpoint-placer for now.
 
-### 9.2 /verify-demo seed-data creator (Sibling 2)
-Consumes `seeding-spec.json` + `environment.json`. Seeds via **c8ctl**: resolve abstract deployments to concrete BPMN (spec gives descriptions, not files), deploy, start instances with variables, capture instance keys, confirm `expected_observations[]` reachable (ES doc present; REST call recorded but not asserted — the human observes the value at the tour).
+### 9.1 seed-data (Sibling 1)
 
-### 9.3 ci-babysit (Sibling 3)
+- Assumes the human has ALREADY spun up a local Orchestration Cluster via the **c8ctl dev plugin** (smooth, human-driven — this command does NOT create or tear down the cluster).
+- Consumes `seeding-spec.json` (from the verify-guide node). Seeds the running cluster via **c8ctl**: resolve abstract deployments to concrete BPMN (the spec gives descriptions, not files), deploy `deployments[]`, start `instances[]` with their variables, capture instance keys, and confirm `expected_observations[]` are reachable (ES doc present; REST call recorded but not asserted — the human observes the value).
+- If no OC is reachable, fail loud telling the human to start one first.
+- Named generically (`/seed-data`, not demo-specific) so it is reusable for manual testing, reproduction, and investigation — not only feature demos.
+
+### 9.2 ci-babysit (Sibling 2)
+
 Local: monitors CI on the open PR, rebases/fixes/re-verifies. Needs the local verify cluster + private context (why it's local, not gh-aw). Uses `gh` (un-sandboxed — fine, it's a command). Borrow crev's `--since` for incremental re-review. Operates over the PR lifetime — the worktree must persist (don't `cleanup` until the PR is closed).
 
-### 9.4 pr-triage (Sibling 4)
+### 9.3 pr-triage (Sibling 3)
+
 Local: polls the PR for new review comments (bots + humans + crev), classifies each, drafts replies into artifacts, surfaces for per-comment human approve/post. **NEVER auto-posts.** gh-aw was deliberately rejected (its async edge is cancelled by the human gate; safe-outputs governance is redundant with never-auto-post; data-governance cost not worth it). Revisit gh-aw only if this becomes team-scale, multi-repo, no-single-human-gate infra.
 
 ### Removed from scope
+
 **/pr-review**: kept as a private standalone command for reviewing OTHERS' PRs; removed from dagrunner scope (redundant on own PRs given in-pipeline review + Copilot + human + crev). No dynamic-workflow rebuild. Dynamic workflows are not used anywhere in dagrunner.
 
 ---
 
 ## 10. Phase roadmap
 
-| Phase | Scope | Status |
-|---|---|---|
-| 1 | Engine + spine + thin slice + Gate 1; state/resume/worktrees/artifacts/hooks/launcher; `dagrun report` | ✅ done |
-| 2a | preflight + runtime permission/sandbox model; review (diff-triage + finding-count verifier); fix (gated) | ✅ done |
-| 2b | verify-election + verify-guide + Gate 3; pr; reflect + reflect-gate + apply-reflection | ✅ done |
-| 3 | Four siblings in order: (1) /verify-demo env [DMS], (2) /verify-demo seed [c8ctl], (3) ci-babysit, (4) pr-triage. All local, human-driven. | in progress |
-| 4 | Live `dagrun ui` (Node-http + SSE + vanilla HTML, localhost-only, scrubbed) | someday |
-| 5/6 | Multi-task-type support (bug/tech-debt/refactor); classify RETURNS as upfront task-type router | future |
+| Phase   | Scope                                                                                                                                                                                                                                                                                           | Status             | Gated by                              |
+| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ------------------------------------- |
+| **1**   | Engine + spine + thin slice + Gate 1; state/resume/worktrees/artifacts/hooks/launcher; `dagrun report` static HTML. (Built classify/expand-guide/implement — classify-as-a-node since RETIRED; its logic moved into review's diff-triage.)                                                      | ✅ DONE & hardened | —                                     |
+| **2a**  | (1) Preflight + runtime permission/sandbox/network model [FIRST]; (2) review node (diff-triage self-select + fan-out + finding-count-gated verifier -> findings schema); (3) fix node (gated, self-verifying). Built, fixture-passed, post-fixture restructure (classify removal etc.) applied. | ✅ DONE            | —                                     |
+| **2b**  | verify-election + verify-guide (doc-only; cluster automation REMOVED, see §7c) + Gate 3; pr node; reflect -> reflect-gate -> apply-reflection (4 guardrails); rerun + revert-reflection commands; PR post-process outside sandbox.                                                              | ✅ DONE            | 2a complete                           |
+| **3**   | Three interactive siblings, in order: (1) /seed-data [c8ctl, assumes human-started OC], (2) ci-babysit, (3) pr-triage. All local, human-driven.                                                                                                                                                 | later              | SDK-credit check; pin CLI/SDK version |
+| **4**   | Live `dagrun ui` (Node-http + SSE + vanilla HTML, localhost-only, scrubbed)                                                                                                                                                                                                                     | someday            | —                                     |
+| **5/6** | Multi-task-type support (bug/tech-debt/refactor); classify RETURNS as an upfront task-type router                                                                                                                                                                                               | future             | —                                     |
+
+Key insight: Phase 2 is fully unblocked (pure SDK). With gh-aw and dynamic-workflows dropped from scope, Phase 3 (two local siblings) is also pure SDK — its only remaining open items are the SDK-credit check and the CLI/SDK version pin.
 
 Open items (not Phase-3 blockers): confirm post-2026-06-15 Agent SDK credit pool covers volume; pin Claude Code CLI/SDK version (a `-p` regression once returned empty result while billing — `produces` check catches the empty half); some preflight checks + content-addressed cache may be partial in code.
 

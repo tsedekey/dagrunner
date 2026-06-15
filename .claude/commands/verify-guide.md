@@ -1,7 +1,7 @@
 # /verify-guide — Produce Verification Specs (Information-Only)
 
-Read the feature diff and run artifacts to produce a seeding spec, a code-tour spec, and a
-human-readable manual-test document for Gate 3. **No cluster, Docker, Maven, or network access.**
+Read the feature diff and run artifacts to produce a seeding spec and a human-readable
+manual-test document for Gate 3. **No cluster, Docker, Maven, or network access.**
 This node only reads context and writes artifacts — it cannot fail the way verify-seed did.
 
 You have access to the following env vars:
@@ -17,7 +17,7 @@ You have access to the following env vars:
 ## Step 1 — Read inputs
 
 ```bash
-# Full feature diff (this is the source of truth for file:line breakpoints)
+# Full feature diff
 cd "$DAGRUN_WORKTREE" && git diff origin/main...HEAD
 
 # Artifacts from earlier nodes (check existence before reading)
@@ -33,8 +33,8 @@ cat "$DAGRUN_RUN_DIR/fix/summary.md" 2>/dev/null
 
 ## Step 2 — Produce `$DAGRUN_ARTIFACTS/seeding-spec.json`
 
-Based on the diff and the plan, specify what data a human (or a future `/verify-demo` command)
-should seed to demonstrate this feature end-to-end. The schema is:
+Based on the diff and the plan, specify what data a human (or `/seed-data`) should seed to
+demonstrate this feature end-to-end. The schema is:
 
 ```json
 {
@@ -55,7 +55,8 @@ should seed to demonstrate this feature end-to-end. The schema is:
     {
       "where": "elasticsearch|operate|tasklist|rest-api|logs",
       "what": "<field or observable>",
-      "expected_value": "<what to look for>"
+      "expected_value": "<what to look for>",
+      "how": "<concrete steps to find it — e.g. 'open Operate, navigate to instance X, check field Y'>"
     }
   ]
 }
@@ -66,106 +67,68 @@ Rules:
 - Derive everything from the diff — use the actual changed code paths to decide what to seed.
 - `expected_observations` must reference the specific fields or behavior introduced by this PR
   (e.g. the exact Elasticsearch field, the REST API response field, the log message).
+- Each `how` must be a concrete, actionable step the human can follow without guessing.
 - Keep it minimal: the minimum seeding that proves the feature works, not a full test suite.
 - Write valid JSON to `$DAGRUN_ARTIFACTS/seeding-spec.json`.
 
 ---
 
-## Step 3 — Produce `$DAGRUN_ARTIFACTS/tour-spec.json`
+## Step 3 — Produce `$DAGRUN_ARTIFACTS/manual-test.md`
 
-Produce a guided code-trail of the change, with concrete file:line breakpoints resolved from
-the diff. A human developer (or IDE debugger) should be able to follow this tour to observe
-the feature executing.
+Render a human-readable, step-by-step verification guide. The human verifier will:
 
-```json
-{
-  "feature_summary": "<one-paragraph summary of what this PR does>",
-  "breakpoints": [
-    {
-      "file": "<relative path from repo root>",
-      "line": <integer — must be a real line in the post-change file>,
-      "why": "<why this location matters for the feature>",
-      "what_to_observe": "<what to look at / watch in the debugger at this point>"
-    }
-  ],
-  "before_path": [
-    {
-      "file": "<relative path>",
-      "line": <integer — pre-change line>,
-      "note": "<what this line used to do, for contrast>"
-    }
-  ]
-}
-```
+1. Have an Orchestration Cluster already running (they set that up themselves).
+2. Run `/seed-data` to seed the cluster from `seeding-spec.json`.
+3. Follow this document to verify the feature works.
 
-Rules:
-
-- `breakpoints` are **ordered**: they form a tour — entry point first, then the key call sites,
-  then the output/persistence point.
-- All `file` + `line` values in `breakpoints` MUST resolve to real lines in the post-change
-  worktree. Derive them from the diff: look at the `+` lines (additions) and the unchanged
-  context around them.
-- `before_path` shows removed or modified lines for contrast. For **pure additions** (new files
-  or entirely new code blocks), `before_path` may be an empty array — that is correct, not an error.
-- Minimum 2 breakpoints; maximum 8. Pick the highest-signal locations.
-- Write valid JSON to `$DAGRUN_ARTIFACTS/tour-spec.json`.
-
-**Verifying your line numbers:** After writing tour-spec.json, spot-check at least one breakpoint:
-
-```bash
-sed -n "<line>p" "$DAGRUN_WORKTREE/<file>"
-```
-
-Confirm the output matches your `what_to_observe` note. If it doesn't, correct the line number.
-
----
-
-## Step 4 — Produce `$DAGRUN_ARTIFACTS/manual-test.md`
-
-Render a human-readable test guide from the two specs above. This is what Gate 3 presents to
-the reviewer. Structure:
+Structure:
 
 ```markdown
 # Manual Verification Guide — <feature name from plan.md>
 
 ## Feature summary
 
-<feature_summary from tour-spec.json>
+<One paragraph describing what this PR does and what behavior it introduces.
+Derived from the diff and plan — write it for a human who hasn't read the code.>
 
-## What to seed
+## Prerequisites
 
-### Deploy
+- A local Orchestration Cluster is running. Start one via `c8ctl dev` if not already up.
+- You are in the feature worktree (the worktree path for this run).
 
-<For each deployment in seeding-spec.json: what to deploy and why>
+## Step 1 — Seed the cluster
 
-### Start instances
+Run the `/seed-data` command. It reads `seeding-spec.json` and will:
 
-<For each instance: process ID, variables, why>
+**Deploy:**
+<For each deployment: what it is and why it exercises the feature>
 
-### Expected observations
+**Start instances:**
+<For each instance: process ID, key variables, and why this instance is needed>
 
-| Where | What to look for | Expected value |
-| ----- | ---------------- | -------------- |
-| ...   | ...              | ...            |
+Wait for `/seed-data` to confirm all deployments and instances are active before continuing.
 
-## Code tour (breakpoints for the debugger)
+## Step 2 — Verify the feature
 
-Follow in order:
+Follow these steps in order. Each step corresponds to an expected observation introduced by this PR.
 
-| #   | File | Line | Why | What to observe |
-| --- | ---- | ---- | --- | --------------- |
-| 1   | ...  | ...  | ... | ...             |
+<For each expected_observation in seeding-spec.json, produce a numbered step:>
 
-<If before_path is non-empty:>
-### Before (contrast)
-| File | Line | Note |
-|------|------|------|
-| ...  | ...  | ...  |
+### N. <short label for what is being verified>
+
+**Where:** <the system to check — e.g. Operate, Elasticsearch, Tasklist, REST API, logs>
+
+**What to do:** <the concrete how from seeding-spec.json — exactly what to navigate to or query>
+
+**Expected result:** <the expected_value — what you should see if the feature is working>
+
+<Repeat for each observation.>
 
 ## Notes for the reviewer
 
-<Any non-obvious interaction with the running system — e.g. timing, required feature flags,
-known limitations of this approach. Leave empty if nothing to add.>
+<Any non-obvious interactions with the running system — e.g. timing (wait N seconds for indexing),
+required feature flags, known limitations of this approach, or edge cases to watch for.
+Leave this section empty if there is nothing to add.>
 ```
 
 ---
@@ -173,7 +136,7 @@ known limitations of this approach. Leave empty if nothing to add.>
 ## Constraints
 
 - **Read-only from the worktree.** Do not modify any file under `$DAGRUN_WORKTREE`.
-- Write all three artifacts to `$DAGRUN_ARTIFACTS/` only.
+- Write both artifacts to `$DAGRUN_ARTIFACTS/` only.
 - No Maven, Docker, `java`, `curl`, or any cluster command.
-- All file:line values in tour-spec.json must be verified against the actual post-change files.
-- seeding-spec.json and tour-spec.json must be valid JSON (no trailing commas, no comments).
+- `seeding-spec.json` must be valid JSON (no trailing commas, no comments).
+- Every verification step in `manual-test.md` must be concrete and actionable — no vague instructions like "check the database".

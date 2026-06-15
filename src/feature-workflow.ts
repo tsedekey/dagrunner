@@ -157,7 +157,7 @@ export const featureWorkflow: Workflow = {
       dependsOn: ["fix"],
       command: "/verify-guide",
       model: "haiku",
-      produces: ["seeding-spec.json", "tour-spec.json", "manual-test.md"],
+      produces: ["seeding-spec.json", "manual-test.md"],
       optional: true, // election=n pre-marks this skipped; optional prevents cascade-block on pr
       gate: { maxIterations: 5, onReject: "revise-self" }, // Gate 3: human reviews manual-test.md
     },
