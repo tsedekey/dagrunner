@@ -84,6 +84,17 @@ if [[ -d "${SRC_CLAUDE}/commands" ]]; then
   fi
 fi
 
+if [[ -d "${SRC_CLAUDE}/scripts" ]]; then
+  mkdir -p "${DEST_CLAUDE}/scripts"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a "${SRC_CLAUDE}/scripts/" "${DEST_CLAUDE}/scripts/" \
+      || block "SessionStart: rsync of .claude/scripts/ failed (exit $?)"
+  else
+    cp -r "${SRC_CLAUDE}/scripts/." "${DEST_CLAUDE}/scripts/" 2>/dev/null \
+      || true
+  fi
+fi
+
 # --- sync .devharness/ -------------------------------------------------------
 
 SRC_DEVHARNESS="${DEVHARNESS_SRC}/.devharness"
