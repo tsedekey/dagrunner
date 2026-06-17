@@ -8,10 +8,13 @@ status: approved
 # run-id collision guard
 
 ## Context (read first)
+
 The run-id is built in `src/run-engine.ts` (~L116–119):
 
 ```ts
-const slug = basename(planPath, ".md").replace(/[^a-z0-9-]/gi, "-").toLowerCase();
+const slug = basename(planPath, ".md")
+  .replace(/[^a-z0-9-]/gi, "-")
+  .toLowerCase();
 const runId = `${slug}-${Date.now()}`;
 ```
 
@@ -22,6 +25,7 @@ run-dir/state and collides on the worktree + branch. Realistic trigger: scripted
 kickoffs of the same plan.
 
 ## Root cause / rationale
+
 `Date.now()` is already millisecond-resolution, so this is NOT a precision problem — adding
 more digits wouldn't fix it. The real gap: the id **assumes** timestamp uniqueness and
 nothing asserts the run-dir is fresh before writing into it. Same failure class as the
@@ -30,11 +34,12 @@ retries/scripts.
 
 ## The change (directional)
 
-| File / module / function | Type | Change (directional) | Why |
-|---|---|---|---|
+| File / module / function                            | Type   | Change (directional)                                                                                                                                                 | Why                                                           |
+| --------------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
 | `src/run-engine.ts` (runId construction, ~L116–119) | MODIFY | After computing `runId`, guarantee uniqueness: append a short branch-safe random suffix, and assert the target run-dir does not already exist (fail loud if it does) | close the same-ms collision window without a silent overwrite |
 
 **Things to get right**
+
 - `Date.now()` is already ms — the fix is uniqueness/collision handling, not resolution.
 - `runId` flows into `feature/<runId>` — any suffix must be git-branch-safe (lowercase
   alphanumeric; no spaces/slashes/dots). base36 or hex is fine.
@@ -50,6 +55,7 @@ retries/scripts.
   add a uniqueness tail.
 
 ## Validation (prove it — evidence, not assertion)
+
 - **Deterministic (mock executor / unit):** pin the clock (mock `Date.now()` to a constant)
   and construct the run-id twice for the same plan → assert two **distinct** run-ids and two
   distinct run-dir paths. This is the crisp proof.
@@ -60,6 +66,7 @@ retries/scripts.
   just the after-fix pass.
 
 ## Done criteria (delta-specific)
+
 - run-id construction guarantees uniqueness for same-slug, same-ms starts; chosen posture
   logged in `DECISIONS.md`.
 - Suffix (if used) is git-branch-safe and `feature/<runId>` creation still succeeds.
@@ -67,6 +74,7 @@ retries/scripts.
 - Integration evidence: two distinct run-dirs + branches from back-to-back same-plan kickoffs.
 
 ## Out of scope
+
 - Changing slug derivation or the readable `<slug>-<timestamp>` scheme (only add a tail).
 - Concurrency/locking redesign — `acquireLock` stays as-is; this is id uniqueness, not run
   mutual-exclusion.

@@ -15,6 +15,7 @@ Read it now. It is self-contained and was written for a fresh session with no ac
 authoring conversation. If it is missing or empty, stop and say so.
 
 ## Ground truth (read before building)
+
 - `docs/dagrunner-master-architecture.md` — canonical source of WHY. The plan is the WHAT
   for this change.
 - Load only the `architecture-spec` skill slice your change touches; don't read all of it.
@@ -22,6 +23,7 @@ authoring conversation. If it is missing or empty, stop and say so.
   doc, the doc is stale — note it and reconcile (see Anti-drift).
 
 ## Golden rules (dagrunner invariants — never weaken)
+
 - Reuse Claude Code primitives; build only cross-process/worktree gaps. No new deps beyond
   the Agent SDK.
 - Artifacts are the only cross-node channel — read/written by absolute path; nodes never
@@ -34,6 +36,7 @@ authoring conversation. If it is missing or empty, stop and say so.
   where needed.
 
 ## Build harness (how to work)
+
 - You are a **coordinator that delegates to tool-restricted subagents** and keeps your own
   context lean. You own the plan + master doc; you do **not** write implementation code
   yourself.
@@ -47,6 +50,7 @@ authoring conversation. If it is missing or empty, stop and say so.
   only for integration acceptance. Fresh-model verification pass on any load-bearing piece.
 
 ## Autonomy protocol (if run unattended)
+
 - NEVER end a turn with a question. On ambiguity: pick the master-doc-aligned default, log
   `{decision, options, choice, rationale}` to `DECISIONS.md`, proceed.
 - Build-time posture: `bypassPermissions` + the fail-closed deny-guard hook. (Build-time,
@@ -56,6 +60,7 @@ authoring conversation. If it is missing or empty, stop and say so.
 - Run under `CLAUDE_CONFIG_DIR=~/.claude-work`; `ANTHROPIC_API_KEY` unset.
 
 ## Anti-drift (do this in the SAME commit as the code)
+
 - Update `docs/dagrunner-master-architecture.md` to match what you built — WHY, not a
   changelog.
 - Append any judgment calls to `DECISIONS.md`.
@@ -63,6 +68,7 @@ authoring conversation. If it is missing or empty, stop and say so.
   master doc §9 too.
 
 ## Done
+
 - Every deliverable in the plan meets its stated done-criteria, proven by runnable evidence
   (captured transcript / before-after diff / produced artifact), not prose.
 - `npm run verify-baseline` exits 0.

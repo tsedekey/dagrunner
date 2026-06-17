@@ -20,7 +20,8 @@
     "test:unit": "node --test --import tsx ./src/**/*.test.ts",
     "smoke": "node --import tsx ./test/smoke/smoke.ts",
     "dagrun": "node --import tsx ./src/cli.ts",
-    "verify-baseline": "npm ci && npm run typecheck && npm test && npm run smoke"
+    "verify-baseline": "npm ci && npm run typecheck && npm test && npm run smoke",
+    "bundle": "bash scripts/make-bundle.sh"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.170"

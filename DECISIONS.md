@@ -145,3 +145,11 @@ Format: `<block> · <decision> · <why>`
 ## split-claude-build-vs-payload
 
 - packaging-payload-files · `payload/` NOT added to `package.json`'s `files` field · options: (a) add `"payload"` to files so it is published with the npm package, (b) defer since dagrun runs from source today (`tsx ./src/cli.ts`) and the gap pre-existed this move; choice: defer (option b) · rationale: `dagrun` is not distributed via npm today — it runs from source. `files: ["dist"]` already excluded `.claude/` and would equally exclude `payload/`. Adding `payload/` to `files` is the correct forward-fix when/if an npm-distributed binary is built, but doing it now would be premature. Pre-existing gap inherited, not created.
+
+## rename-pipeline-nodes-expand-verify
+
+- rename-clean-break · no state.json migration added · plan explicitly called clean-break; in-flight runs with old ids should be cleaned up manually before the cutover; adding migration logic would contradict the plan and add untested complexity
+
+- rename-toy-repo-commit · toy-repo inner git committed after rename · the preflight check runs `git status` in DEVHARNESS_SRC (which the smoke test sets to the toy-repo); uncommitted changes fail preflight; had to commit inside the toy-repo git after the `mv` to unblock the smoke run
+
+- rename-workflow-fixture-comment · FIXTURE_BAD_MODEL JSDoc updated from "expand-guide" to "classify" · the fixture uses id "classify" (not "expand-guide"); the comment was a pre-existing error in the original code that was exposed by the rename sweep
