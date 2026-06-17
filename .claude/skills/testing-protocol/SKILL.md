@@ -68,6 +68,44 @@ Passing all six = v1 ships.
 - A live 6-way reviewer fan-out — those nodes are phase-2 config; validate the join logic with tier-1
   mock tests instead.
 
+## Unit-test conventions (established by backfill 2a — follow for all future Tier A tests)
+
+**Where tests live:** co-located `*.test.ts` alongside the module they cover (`src/core/lock.ts` →
+`src/core/lock.test.ts`). The `npm test` glob `./src/**/*.test.ts` picks them up automatically.
+
+**How to run:**
+
+- All: `npm test` (via `node --test --import tsx ./src/**/*.test.ts`)
+- One file: `node --test --import tsx src/core/lock.test.ts`
+
+**Framework:** Node.js built-ins only — `node:test` + `node:assert/strict`. No Jest, Vitest, or
+test-framework deps.
+
+**FS fixtures:** `mkdtempSync(join(tmpdir(), 'dr-<prefix>-'))` for throwaway dirs. Never touch
+`~/.local/share/dagrunner` or any real dagrunner home.
+
+**In-module fixtures:** for validation tests, use the `FIXTURE_*` constants exported from the module
+under test (e.g. `workflow.ts` exports `FIXTURE_VALID`, `FIXTURE_CYCLE`, etc.). Do not invent
+parallel fixture objects in the test file.
+
+**`process.exit()` behavior:** test via `spawnSync` (child process), not `assert.throws`. Write a
+tiny inline script to a temp dir that calls the function, run it with
+`spawnSync('node', ['--import', 'tsx', scriptPath])`, and assert exit code + stderr content.
+
+**Determinism rule:** no real network, no SDK calls, no `Date.now()` assertions. Inject/mock the
+clock where time appears; test ISO-string shape not exact values.
+
+**Characterization, not correction:** these tests lock current behavior. If a test surfaces a bug,
+log it in `DECISIONS.md` and file a separate change — do NOT silently fix production behavior inside
+a test-backfill plan.
+
+**Teeth check:** for any guard (validation throw, cycle detection, schema rejection), temporarily
+remove the guard, run the relevant test, confirm it goes red, then restore. A test that cannot fail
+is not a test. Capture the red output in the build report.
+
+**Tier boundary:** Tier A = pure/FS-only modules (state, lock, workflow, settings-seed, dag). Do NOT
+unit-test `run-engine`, `sdk-runner`, or `launcher` in Tier A — smoke owns them (Tier C).
+
 ## Reuse
 
 Mirror crev's ajv-style schema-validation test pattern for `classify.json` and synthesized findings
