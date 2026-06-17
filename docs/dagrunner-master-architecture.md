@@ -1,7 +1,7 @@
 # dagrunner — Master Architecture (Source of Truth)
 
-Status: Canonical, reconciled with the built code through Phase 2b. This is the source of truth for Phase 3 sibling implementation. Each sibling build also gets its own implementation plan.
-Last updated: 2026-06-14
+Status: Canonical, reconciled with the built code through Phase 3 (all three siblings built). Each sibling build also gets its own implementation plan. Cross-references cleaned up after the /verify-demo split into /seed-data.
+Last updated: 2026-06-15 (cross-reference cleanup pass)
 Owner: Eddie Tsedeke
 
 ---
@@ -47,7 +47,7 @@ Phase 3 is three LOCAL siblings (/seed-data + ci-babysit + pr-triage) — one su
         |  n -> verify-guide skipped -> pr
         |  y ↓
   verify-guide (haiku, INFO-ONLY: writes seeding-spec.json + manual-test.md)
-        |  ★ GATE 3: human runs the manual test (or invokes /verify-demo)
+        |  ★ GATE 3: human runs the manual test (or invokes /seed-data)
   pr (haiku)               -> opens the PR (git push / gh run OUTSIDE the sandbox — see §5)
   reflect                  ★ GATE 4: per-proposal accept/reject (post-PR, skippable)
   apply-reflection (writes worktree-private + DEVHARNESS_SRC private .claude/** only; 4 guardrails)
@@ -134,9 +134,9 @@ Per-node tiering in the validated workflow-def (load-time model-string validatio
 
 ## 9. Phase 3 siblings — THREE interactive Claude Code commands
 
-All three: Claude Code commands in the **Camunda monorepo's private `.claude/`** (alongside `/pr-review`, gitignored via `.git/info/exclude`), **copied into each worktree by dagrunner's seed/sync** and RUN inside the worktree (where the built code, PR branch, cluster, and tour-spec refs live). Edit the canonical copy in DEVHARNESS_SRC; the worktree copy is ephemeral. Interactive, human-driven, **NOT sandboxed** (they need Docker, host ports, `gh`, broad network — exactly why they're commands, not nodes). Run under CLAUDE_CONFIG_DIR=~/.claude-work. Built one at a time, in order.
+All three: Claude Code commands in the **Camunda monorepo's private `.claude/`** (alongside `/pr-review`, gitignored via `.git/info/exclude`), **copied into each worktree by dagrunner's seed/sync** and RUN inside the worktree (where the built code, PR branch, and cluster live). Edit the canonical copy in DEVHARNESS_SRC; the worktree copy is ephemeral. Interactive, human-driven, **NOT sandboxed** (they need Docker, host ports, `gh`, broad network — exactly why they're commands, not nodes). Run under CLAUDE_CONFIG_DIR=~/.claude-work. Built one at a time, in order.
 
-> DROPPED: the dedicated "/verify-demo environment creator" (DMS-based cluster + breakpoint placement). The **c8ctl dev plugin** spins up a configured local OC smoothly, making a separate cluster-creator command unnecessary. The **Debugger MCP Server (DMS)** is parked for a FUTURE bug-fix / issue-investigation workflow (where programmatic breakpoints aid an investigating agent) — it has no role in the feature-task workflow. `tour-spec.json` is still emitted by verify-guide and remains useful as a human-readable code-trail in `manual-test.md`; it is simply not consumed by an automated breakpoint-placer for now.
+> DROPPED: the dedicated "/verify-demo environment creator" (DMS-based cluster + breakpoint placement). The **c8ctl dev plugin** spins up a configured local OC smoothly, making a separate cluster-creator command unnecessary. The **Debugger MCP Server (DMS)** is parked for a FUTURE bug-fix / issue-investigation workflow (where programmatic breakpoints aid an investigating agent) — it has no role in the feature-task workflow. verify-guide emits only `seeding-spec.json` + `manual-test.md` (see §3); the code-trail the old `tour-spec.json` carried is now folded into the human-readable `manual-test.md`, and no automated breakpoint-placer consumes it.
 
 ### 9.1 seed-data (Sibling 1)
 
@@ -147,11 +147,44 @@ All three: Claude Code commands in the **Camunda monorepo's private `.claude/`**
 
 ### 9.2 ci-babysit (Sibling 2)
 
-Local: monitors CI on the open PR, rebases/fixes/re-verifies. Needs the local verify cluster + private context (why it's local, not gh-aw). Uses `gh` (un-sandboxed — fine, it's a command). Borrow crev's `--since` for incremental re-review. Operates over the PR lifetime — the worktree must persist (don't `cleanup` until the PR is closed).
+Local: monitors CI on the open PR, rebases on base, fixes failing checks (scoped to making CI green — never a backdoor for feature changes), and re-verifies before pushing. Needs the local cluster (human-started via the c8ctl dev plugin) for runtime re-verification + private context (why it's local, not gh-aw). Uses `gh` and `git push` (un-sandboxed — fine, it's a command); rebase pushes use `--force-with-lease`, never blind `--force`.
+
+**Human gate (never auto):** the **draft -> ready flip** is ci-babysit's defining gate — when CI is green and re-verification passes, it surfaces the readiness summary and the `gh pr ready` command but NEVER flips the PR itself. Readiness is not latched: new commits/failures reopen the work and re-present the gate.
+
+**Poll/trigger machinery (built here, reused by pr-triage):** ci-babysit owns the Claude Code Desktop scheduled-task / poll loop and the crev-style `--since <prior-run-id>` incremental pattern (act only on new commits/failures since the last tick; checkpoint-and-exit per tick, state on disk). pr-triage (§9.3) imports this loop rather than building a second one.
+
+Operates over the PR lifetime — the worktree must persist (don't `cleanup` until the PR is closed).
 
 ### 9.3 pr-triage (Sibling 3)
 
-Local: polls the PR for new review comments (bots + humans + crev), classifies each, drafts replies into artifacts, surfaces for per-comment human approve/post. **NEVER auto-posts.** gh-aw was deliberately rejected (its async edge is cancelled by the human gate; safe-outputs governance is redundant with never-auto-post; data-governance cost not worth it). Revisit gh-aw only if this becomes team-scale, multi-repo, no-single-human-gate infra.
+Local: polls the open PR for new review comments across **three gh API endpoints** — inline review
+comments (`pulls/{pr}/comments`), PR-level issue comments (`issues/{pr}/comments`), and review
+summaries (`pulls/{pr}/reviews`) — classifies each, drafts replies as artifacts in
+`pr-triage/drafts/`, and surfaces a **per-comment human approve/post gate**. **NEVER auto-posts.**
+
+**Bot detection:** `user.type == "Bot"` is reliable and must be used as the primary signal.
+Login `[bot]` suffix is NOT reliable — Copilot inline surfaces as `"Copilot"` with no suffix
+but `user.type == "Bot"`. Never use the login suffix as the sole test.
+
+**Triage-state lifecycle per comment:** `seen → drafted → {posted | skipped | superseded}`.
+Edited comments re-enter as `superseded` — the prior draft is archived to `prior_draft_file`,
+not silently overwritten. This ensures the human always sees what changed.
+
+**Coexistence contract with ci-babysit:** ci-babysit owns all git mutations (rebase, fix, push).
+pr-triage owns the comment conversation only. pr-triage MUST NOT call `git push`, stage files,
+edit source files, or commit. The two commands share the same worktree but have strict domain
+separation enforced by convention.
+
+**Artifact path:** `~/.local/share/dagrunner/runs/<run-id>/pr-triage/` — drafts live in
+`pr-triage/drafts/<comment-id>.md`; triage state in `pr-triage/triage-state.json`.
+
+**Poll machinery:** reuses ci-babysit's scheduled-task / poll loop and `--since` incremental
+pattern (§9.2) — it does NOT build a second loop; per tick it ingests only new/edited comments
+since the last processed marker.
+
+gh-aw deliberately rejected (its async edge is cancelled by the human gate; safe-outputs
+governance redundant with never-auto-post; data-governance cost not worth it). Revisit only if
+this becomes team-scale, multi-repo, no-single-human-gate infra.
 
 ### Removed from scope
 
@@ -161,18 +194,18 @@ Local: polls the PR for new review comments (bots + humans + crev), classifies e
 
 ## 10. Phase roadmap
 
-| Phase   | Scope                                                                                                                                                                                                                                                                                           | Status             | Gated by                              |
-| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ------------------------------------- |
-| **1**   | Engine + spine + thin slice + Gate 1; state/resume/worktrees/artifacts/hooks/launcher; `dagrun report` static HTML. (Built classify/expand-guide/implement — classify-as-a-node since RETIRED; its logic moved into review's diff-triage.)                                                      | ✅ DONE & hardened | —                                     |
-| **2a**  | (1) Preflight + runtime permission/sandbox/network model [FIRST]; (2) review node (diff-triage self-select + fan-out + finding-count-gated verifier -> findings schema); (3) fix node (gated, self-verifying). Built, fixture-passed, post-fixture restructure (classify removal etc.) applied. | ✅ DONE            | —                                     |
-| **2b**  | verify-election + verify-guide (doc-only; cluster automation REMOVED, see §7c) + Gate 3; pr node; reflect -> reflect-gate -> apply-reflection (4 guardrails); rerun + revert-reflection commands; PR post-process outside sandbox.                                                              | ✅ DONE            | 2a complete                           |
-| **3**   | Three interactive siblings, in order: (1) /seed-data [c8ctl, assumes human-started OC], (2) ci-babysit, (3) pr-triage. All local, human-driven.                                                                                                                                                 | later              | SDK-credit check; pin CLI/SDK version |
-| **4**   | Live `dagrun ui` (Node-http + SSE + vanilla HTML, localhost-only, scrubbed)                                                                                                                                                                                                                     | someday            | —                                     |
-| **5/6** | Multi-task-type support (bug/tech-debt/refactor); classify RETURNS as an upfront task-type router                                                                                                                                                                                               | future             | —                                     |
+| Phase   | Scope                                                                                                                                                                                                                                                                                           | Status             | Gated by    |
+| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ----------- |
+| **1**   | Engine + spine + thin slice + Gate 1; state/resume/worktrees/artifacts/hooks/launcher; `dagrun report` static HTML. (Built classify/expand-guide/implement — classify-as-a-node since RETIRED; its logic moved into review's diff-triage.)                                                      | ✅ DONE & hardened | —           |
+| **2a**  | (1) Preflight + runtime permission/sandbox/network model [FIRST]; (2) review node (diff-triage self-select + fan-out + finding-count-gated verifier -> findings schema); (3) fix node (gated, self-verifying). Built, fixture-passed, post-fixture restructure (classify removal etc.) applied. | ✅ DONE            | —           |
+| **2b**  | verify-election + verify-guide (doc-only; cluster automation REMOVED, see §9) + Gate 3; pr node; reflect -> reflect-gate -> apply-reflection (4 guardrails); rerun + revert-reflection commands; PR post-process outside sandbox.                                                               | ✅ DONE            | 2a complete |
+| **3**   | Three interactive siblings, in order: (1) /seed-data [c8ctl, assumes human-started OC], (2) ci-babysit, (3) pr-triage. All local, human-driven.                                                                                                                                                 | ✅ DONE            | —           |
+| **4**   | Live `dagrun ui` (Node-http + SSE + vanilla HTML, localhost-only, scrubbed)                                                                                                                                                                                                                     | someday            | —           |
+| **5/6** | Multi-task-type support (bug/tech-debt/refactor); classify RETURNS as an upfront task-type router                                                                                                                                                                                               | future             | —           |
 
-Key insight: Phase 2 is fully unblocked (pure SDK). With gh-aw and dynamic-workflows dropped from scope, Phase 3 (two local siblings) is also pure SDK — its only remaining open items are the SDK-credit check and the CLI/SDK version pin.
+Key insight: Phase 2 and Phase 3 are complete. Phases 4–6 remain future work.
 
-Open items (not Phase-3 blockers): confirm post-2026-06-15 Agent SDK credit pool covers volume; pin Claude Code CLI/SDK version (a `-p` regression once returned empty result while billing — `produces` check catches the empty half); some preflight checks + content-addressed cache may be partial in code.
+Open items: confirm Agent SDK credit pool covers volume; pin Claude Code CLI/SDK version (a `-p` regression once returned empty result while billing — `produces` check catches the empty half); some preflight checks + content-addressed cache may be partial in code.
 
 ---
 
@@ -183,4 +216,6 @@ Open items (not Phase-3 blockers): confirm post-2026-06-15 Agent SDK credit pool
 - `gh`/network mutations must run un-sandboxed.
 - Unattended pipeline runs: never auto-approve a gate; subagents never end a turn with a question.
 - Schema is single-source-of-truth, owned by dagrunner, never duplicated.
-- Each sibling plan front-loads a tool-introspection spike (DMS / c8ctl) — verify the installed surface, don't assume from docs.
+- Each sibling plan front-loads a tool-introspection spike (c8ctl for /seed-data; the `gh` CI-status surface for ci-babysit; the `gh` review-comment surface for pr-triage) — verify the installed surface, don't assume from docs.
+- ci-babysit and pr-triage share a worktree but have hard domain separation: ci-babysit owns git mutations (rebase, fix, commit, push); pr-triage owns the comment conversation (never calls git push, never edits source files, never stages/commits).
+- pr-triage bot detection: use `user.type == "Bot"` — do NOT rely on `[bot]` login suffix (Copilot inline has type=Bot but login="Copilot" with no suffix).
