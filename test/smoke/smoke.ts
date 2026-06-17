@@ -32,7 +32,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, "..", "..");
-const CLI = join(PROJECT_ROOT, "src", "cli.ts");
+const CLI = join(PROJECT_ROOT, "src", "cli", "cli.ts");
 const TOY_PLAN_PATH = join(__dirname, "fixtures", "toy-plan.md");
 const TOY_REPO_PATH = join(__dirname, "fixtures", "toy-repo");
 

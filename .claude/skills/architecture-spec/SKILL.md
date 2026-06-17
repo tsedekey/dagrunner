@@ -140,7 +140,7 @@ entry: `{ ts, node, sessionId, event, detail }`.
 Tiers: `haiku` (mechanical), `sonnet` (default reasoning), omit (unpinned → opusplan reaches Opus).
 Assignments: classify=haiku; expand=unpinned; reviewers test-adequacy/api-stability/migration-
 safety=sonnet, correctness/distributed-systems/performance=unpinned; synthesize-and-fix=unpinned;
-verify-seed=haiku; pr=haiku; reflect=sonnet; apply-reflection=sonnet. Validate model strings at load.
+verify=haiku; pr=haiku; reflect=sonnet; apply-reflection=sonnet. Validate model strings at load.
 Budget: per-run `--max-budget-usd` (hard ceiling, works on subscription auth) PLUS optional per-node
 `maxBudget` for unpinned/Opus-eligible nodes. On run-cap hit → checkpoint-and-exit, resume at higher
 cap. SessionEnd writes per-node cost into state.json; status shows total vs cap; reflect flags
@@ -168,11 +168,11 @@ revise-self, produces guide.md)→ 3 implement(unpinned, worktree diff + summary
 6 api-stability(sonnet, when touches_public_api, optional) 7 distributed-systems(unpinned, when
 touches_runtime, optional) 8 performance(unpinned, when perf_sensitive, optional) 9 migration-safety
 (sonnet, when touches_schema_or_proto, optional)→ 10 synthesize-and-fix(unpinned, Stop-hook
-convergence)→ 11 verify-seed(haiku, when needs_runtime, **verify gate** rerun:verify-seed)→ 12 pr
+convergence)→ 11 verify(haiku, when needs_runtime, **verify gate** rerun:verify)→ 12 pr
 (haiku, body+PR URL)→ 13 reflect(sonnet, **reflect gate**, revise-self)→ 14 apply-reflection(sonnet,
 edits worktree .claude/** only). Three gates, sequential, never concurrent. classify.json flags
 `{touches_public_api, touches_runtime, perf_sensitive, touches_schema_or_proto, needs_runtime: bool;
-risk: low|med|high}` drive all conditional reviewers + verify-seed.
+risk: low|med|high}` drive all conditional reviewers + verify.
 **v1 cut line = nodes 1→2→3 + the review gate.\*\* Nodes 4-14 are phase-2 config additions.
 apply-reflection targets worktree-private gitignored files only — never a Camunda PR.
 

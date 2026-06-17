@@ -12,7 +12,7 @@
 
 import { execSync } from "node:child_process";
 import { join } from "node:path";
-import type { DagrunnerConfig } from "./xdg.js";
+import type { DagrunnerConfig } from "../config/xdg.js";
 
 // ---------------------------------------------------------------------------
 // NodeLaunchEnv

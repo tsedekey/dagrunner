@@ -7,7 +7,7 @@
     "node": ">=20.10.0"
   },
   "bin": {
-    "dagrun": "./dist/cli.js"
+    "dagrun": "./dist/cli/cli.js"
   },
   "files": [
     "dist"
@@ -19,7 +19,7 @@
     "test": "node --test --import tsx ./src/**/*.test.ts",
     "test:unit": "node --test --import tsx ./src/**/*.test.ts",
     "smoke": "node --import tsx ./test/smoke/smoke.ts",
-    "dagrun": "node --import tsx ./src/cli.ts",
+    "dagrun": "node --import tsx ./src/cli/cli.ts",
     "verify-baseline": "npm ci && npm run typecheck && npm test && npm run smoke",
     "bundle": "bash scripts/make-bundle.sh"
   },

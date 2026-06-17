@@ -26,22 +26,22 @@ import {
 export const activeRun: { runDir?: string; homeDir?: string } = {};
 import { join, basename } from "node:path";
 import { homedir, tmpdir } from "node:os";
-import type { Workflow } from "./types.js";
-import type { DagrunnerConfig } from "./xdg.js";
-import { readState, writeState } from "./state.js";
-import type { RunState, NodeState, NodeStatus } from "./state.js";
+import type { Workflow } from "../core/types.js";
+import type { DagrunnerConfig } from "../config/xdg.js";
+import { readState, writeState } from "../core/state.js";
+import type { RunState, NodeState, NodeStatus } from "../core/state.js";
 import type { ExecutionCtx } from "./mock-executor.js";
-import { reconcileRunningNodes } from "./dag.js";
-import { runDag } from "./dag.js";
-import { acquireLock, releaseLock } from "./lock.js";
+import { reconcileRunningNodes } from "../core/dag.js";
+import { runDag } from "../core/dag.js";
+import { acquireLock, releaseLock } from "../core/lock.js";
 import { makeSDKRunner } from "./sdk-runner.js";
-import { featureWorkflow } from "./feature-workflow.js";
-import { loadWorkflow } from "./workflow.js";
+import { featureWorkflow } from "../workflow/feature-workflow.js";
+import { loadWorkflow } from "../workflow/workflow.js";
 import {
   readSourcePassthrough,
   readWorkProfileMcpServers,
   buildSeededSettings,
-} from "./settings-seed.js";
+} from "../config/settings-seed.js";
 
 // ---------------------------------------------------------------------------
 // Ctx builder
@@ -143,7 +143,7 @@ export async function startRun(opts: {
   // node-run settings.json. Without this, a source repo with no .claude/commands/
   // causes /classify (and siblings) to return immediately with cost=0 and no
   // structured output — the SDK treats unknown slash commands as no-ops.
-  const dagrunnerRoot = new URL("../", import.meta.url).pathname;
+  const dagrunnerRoot = new URL("../../", import.meta.url).pathname;
   const destClaude = join(worktreePath, ".claude");
   mkdirSync(join(destClaude, "commands"), { recursive: true });
   mkdirSync(join(destClaude, "hooks"), { recursive: true });
@@ -698,7 +698,7 @@ export async function rerunNode(opts: {
 
   // Re-seed .claude/ so any changes to commands, hooks, or settings-seed.ts
   // take effect without needing a new full run (e.g. allowedDomains fixes).
-  const dagrunnerRoot = new URL("../", import.meta.url).pathname;
+  const dagrunnerRoot = new URL("../../", import.meta.url).pathname;
   const destClaude = join(worktreePath, ".claude");
   const srcCommands = join(dagrunnerRoot, "payload", "commands");
   const srcHooks = join(dagrunnerRoot, ".claude", "hooks");

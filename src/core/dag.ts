@@ -12,7 +12,7 @@ import { join } from "node:path";
 import type { Node, Workflow, Ctx } from "./types.js";
 import type { NodeStatus, RunState } from "./state.js";
 import { writeState } from "./state.js";
-import type { NodeExecutor } from "./mock-executor.js";
+import type { NodeExecutor } from "../runtime/mock-executor.js";
 
 // ---------------------------------------------------------------------------
 // computeReadyNodes

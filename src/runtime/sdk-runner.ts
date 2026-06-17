@@ -27,10 +27,10 @@ import type {
   NodeExecResult,
   ExecutionCtx,
 } from "./mock-executor.js";
-import type { Node } from "./types.js";
-import type { DagrunnerConfig } from "./xdg.js";
+import type { Node } from "../core/types.js";
+import type { DagrunnerConfig } from "../config/xdg.js";
 import { applyNodeEnv, buildNodeEnv } from "./launcher.js";
-import { readWorkProfileMcpServers } from "./settings-seed.js";
+import { readWorkProfileMcpServers } from "../config/settings-seed.js";
 
 // ---------------------------------------------------------------------------
 // helpers

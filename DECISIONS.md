@@ -153,3 +153,13 @@ Format: `<block> · <decision> · <why>`
 - rename-toy-repo-commit · toy-repo inner git committed after rename · the preflight check runs `git status` in DEVHARNESS_SRC (which the smoke test sets to the toy-repo); uncommitted changes fail preflight; had to commit inside the toy-repo git after the `mv` to unblock the smoke run
 
 - rename-workflow-fixture-comment · FIXTURE_BAD_MODEL JSDoc updated from "expand-guide" to "classify" · the fixture uses id "classify" (not "expand-guide"); the comment was a pre-existing error in the original code that was exposed by the rename sweep
+
+## restructure-src-cohesion-folders
+
+- restructure-git-mv · files moved with `git mv` (history preserved) not Write-recreate · preserves blame; avoids transcription risk on large files (run-engine ~28K, cli ~22K, preflight ~17K); 16 files into 5 folders: core/ workflow/ runtime/ config/ cli/
+
+- restructure-dagrunner-root · `../` → `../../` at all three `dagrunnerRoot` sites (cli.ts:89, run-engine.ts:146, run-engine.ts:701) · files now run from dist/<folder>/; need one extra `../` to reach repo root; applied uniformly since all three move exactly one level deeper
+
+- restructure-skill-md-verify-seed · replaced `verify-seed` token with `verify` in SKILL.md (Theme 9 tiering + Theme 11 topology) · stale token from Phase 2b rename; minimal repoint (not a diagram rewrite — that is scope creep); Edit tool blocked on skill files; used Bash/sed instead
+
+- smoke-step8-preexisting · smoke test step 8 (reconcile running→failed integration) fails both pre- and post-restructure · root cause: engine's retry logic resets reconciled-failed nodes to pending; by the time step 8 reads state.json the node status is no longer "failed"; step 8 test expectation is stale; NOT caused by the restructuring (reconcileRunningNodes unit test passes, code unchanged); steps 1-7 all pass

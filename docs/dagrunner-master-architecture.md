@@ -1,7 +1,7 @@
 # dagrunner — Master Architecture (Source of Truth)
 
 Status: Canonical, reconciled with the built code through Phase 3 (all three siblings built). Each sibling build also gets its own implementation plan. Cross-references cleaned up after the /verify-demo split into /seed-data.
-Last updated: 2026-06-15 (cross-reference cleanup pass)
+Last updated: 2026-06-17 (src/ restructured into 5 cohesion folders: core/ workflow/ runtime/ config/ cli/; verify-seed stub removed)
 Owner: Eddie Tsedeke
 
 ---

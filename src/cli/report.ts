@@ -8,7 +8,7 @@
  * DEVHARNESS_SRC is never emitted.
  */
 
-import type { RunState, NodeState, GateHistoryEntry } from "./state.js";
+import type { RunState, NodeState, GateHistoryEntry } from "../core/state.js";
 
 // ---------------------------------------------------------------------------
 // HTML-escape (prevents XSS from gate comments, paths, error strings)

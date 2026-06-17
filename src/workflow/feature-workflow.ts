@@ -10,7 +10,7 @@
  * on the proven engine.
  */
 
-import type { Workflow } from "./types.js";
+import type { Workflow } from "../core/types.js";
 
 // ---------------------------------------------------------------------------
 // classify.json JSON schema

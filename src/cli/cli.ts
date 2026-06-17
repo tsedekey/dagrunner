@@ -13,8 +13,8 @@ import {
   initHome,
   resolveHome,
   resolveConfig,
-} from "./xdg.js";
-import { releaseLock, readLock } from "./lock.js";
+} from "../config/xdg.js";
+import { releaseLock, readLock } from "../core/lock.js";
 import {
   cpSync,
   existsSync,
@@ -29,16 +29,16 @@ import { generateReport } from "./report.js";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
-import { assertAuth } from "./launcher.js";
-import { featureWorkflow } from "./feature-workflow.js";
+import { assertAuth } from "../runtime/launcher.js";
+import { featureWorkflow } from "../workflow/feature-workflow.js";
 import {
   startRun,
   resumeRun,
   rerunNode,
   listRuns,
   activeRun,
-} from "./run-engine.js";
-import { readState, writeState } from "./state.js";
+} from "../runtime/run-engine.js";
+import { readState, writeState } from "../core/state.js";
 import {
   runPreflight,
   printPreflightResult,
@@ -86,7 +86,7 @@ async function cmdPreflight(argv: string[]): Promise<void> {
   printPreflightResult(result);
 
   // Always show agent context so the user can verify what nodes will have access to.
-  const dagrunnerRoot = new URL("../", import.meta.url).pathname;
+  const dagrunnerRoot = new URL("../../", import.meta.url).pathname;
   const cacheDir = join(homedir(), ".cache", "dagrunner");
   const ctx = getAgentContext(dagrunnerRoot, config);
   const contextFile = writeAgentContextFile(

@@ -2,7 +2,7 @@
 
 Read the feature diff and run artifacts to produce a seeding spec and a human-readable
 manual-test document for Gate 3. **No cluster, Docker, Maven, or network access.**
-This node only reads context and writes artifacts — it cannot fail the way verify-seed did.
+This node only reads context and writes artifacts — it never touches Docker, Maven, or the cluster.
 
 You have access to the following env vars:
 

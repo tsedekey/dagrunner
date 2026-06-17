@@ -12,12 +12,12 @@ import { execSync } from "node:child_process";
 import { existsSync, readdirSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir, tmpdir } from "node:os";
-import type { DagrunnerConfig } from "./xdg.js";
+import type { DagrunnerConfig } from "../config/xdg.js";
 import {
   readSourcePassthrough,
   buildSeededSettings,
   readWorkProfileMcpServers,
-} from "./settings-seed.js";
+} from "../config/settings-seed.js";
 
 // ---------------------------------------------------------------------------
 // PreflightResult

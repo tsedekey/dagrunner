@@ -17,7 +17,7 @@
  * No external dependencies — hand-rolled validation only.
  */
 
-import type { ClassifyOutput, Workflow } from "./types.js";
+import type { ClassifyOutput, Workflow } from "../core/types.js";
 
 // ---------------------------------------------------------------------------
 // loadWorkflow

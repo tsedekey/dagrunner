@@ -2,7 +2,7 @@
  * dag.test.ts — Tier-1 deterministic unit tests for dagrunner (Block 3).
  *
  * Run with:
- *   node --test --import tsx src/dag.test.ts
+ *   node --test --import tsx src/core/dag.test.ts
  *
  * Test categories and expected status BEFORE Block 4 (engine) is built:
  *
@@ -54,7 +54,7 @@ import {
   FIXTURE_BAD_DEPENDS,
   FIXTURE_DUPLICATE_ID,
   FIXTURE_CYCLE,
-} from "./workflow.js";
+} from "../workflow/workflow.js";
 
 import { readState, writeState } from "./state.js";
 import type { RunState, NodeState } from "./state.js";

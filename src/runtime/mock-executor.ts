@@ -28,7 +28,7 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Node } from "./types.js";
+import type { Node } from "../core/types.js";
 
 // ---------------------------------------------------------------------------
 // Public types (engine author: swap NodeExecutor to go live)
