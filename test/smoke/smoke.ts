@@ -272,7 +272,7 @@ let RUN_ID = "";
 
 // ---------------------------------------------------------------------------
 // Step 6 — dagrun resume --approve --verify n (Gate 2)
-//          election=n -> verify-seed skipped -> pr -> reflect (Gate 4 pause)
+//          election=n -> verify-guide skipped -> pr -> reflect (Gate 4 pause)
 // ---------------------------------------------------------------------------
 
 {
@@ -303,11 +303,11 @@ let RUN_ID = "";
     "n",
     `verifyElection must be "n", got: ${String(stateRaw.verifyElection)}`,
   );
-  // verify-seed must be skipped.
+  // verify-guide must be skipped.
   assert.strictEqual(
-    stateRaw.nodes["verify-seed"]?.status,
+    stateRaw.nodes["verify-guide"]?.status,
     "skipped",
-    `verify-seed must be skipped, got: ${String(stateRaw.nodes["verify-seed"]?.status)}`,
+    `verify-guide must be skipped, got: ${String(stateRaw.nodes["verify-guide"]?.status)}`,
   );
   // pr must have run.
   assert.strictEqual(

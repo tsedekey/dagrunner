@@ -1,0 +1,147 @@
+# DECISIONS.md — dagrunner build
+
+Format: `<block> · <decision> · <why>`
+
+---
+
+## Block 1 (research)
+
+- block1 · crev resolution order is `~/.local/share/crev` BEFORE `~/.config/crev` (skill had them reversed) · crev-researcher confirmed against live `cmd/crev/paths.go:89-105`; dagrunner XDG resolution will follow the same order: `DAGRUNNER_HOME` → `~/.local/share/dagrunner` → binary walk-up → loud fail
+
+- block1 · crev Stop hook hard-blocks (`{"decision":"block"}`); PostToolUse grounding hook emits soft `systemMessage` (NOT a hard block) · confirmed from `validate-output.sh` vs `grounding-check.sh`; dagrunner classify schema validation will use the hard-block Stop hook pattern, not the soft one
+
+- block1 · crev budget cap detected via `subtype: "error_max_budget_usd"` JSON envelope · confirmed in `backend_claude.go:266-280`; dagrunner SDK output parser must handle this envelope for per-run and per-node budget caps
+
+- block1 · crev cache key includes: cacheVersion + PR head SHAs + backport upstream SHAs + release-line + agent .md content hash + rubric + schema + settings.json + model override + backend name · richer than skill doc; dagrunner node-skip key should include: input artifact SHAs + node prompt content + schema + model + backend
+
+- block1 · crev-researcher dispatched (camunda/crev accessible via gh) · crev-patterns skill was pre-populated; researcher confirmed/corrected it against live repo
+
+## Block 1 (research) — SDK surfaces (sdk-researcher confirmed from installed .d.ts v0.3.170)
+
+- block1 · systemPrompt preset format is `{ type: 'preset', preset: 'claude_code' }` (spec/Theme 0 omits the `type` field) · confirmed from sdk.d.ts; all node spawns must use full form
+
+- block1 · Stop hook blocks via top-level `{ decision: 'block', reason }` in SyncHookJSONOutput, NOT inside hookSpecificOutput.StopHookSpecificOutput · StopHookSpecificOutput only carries additionalContext; crev pattern confirmed same way
+
+- block1 · maxBudgetUsd (camelCase) is the SDK option; result carries total_cost_usd (number) and modelUsage (per-model breakdown) · authors must use camelCase, not snake_case
+
+- block1 · session resume: options.resume = sessionId (re-enter same session); options.forkSession = true to branch; session_id on both success and error result messages · capture from final result message (type === 'result'), not intermediate messages
+
+- block1 · hooks in options are typed callbacks (HookCallbackMatcher[]), not shell strings — shell hooks in .claude/settings.json require settingSources:["project"] to activate · both paths confirmed; dagrunner uses settings.json shell hooks for format/deny and typed callbacks for SessionEnd cost capture
+
+## Block 4 (DAG core) — fresh-model verification bugs
+
+- block4-fix · skipped dep must be non-blocking (same as done) in default join rule · computeReadyNodes treats "failed&&optional" as non-blocking but "skipped" as blocking; after optional-fail becomes skipped, downstream is stranded — fix: treat skipped as non-blocking too
+
+- block4-fix · skip propagation: after loop break, any stranded pending nodes must be marked skipped · run would report "done" with pending nodes if a skipped dep blocked downstream — fix: after loop, mark all remaining pending nodes skipped, then set final status
+
+- block4-fix · when predicate must only fire when all deps are terminal · evaluating when(ctx) before deps are done risks calling ctx.json() on missing artifacts — fix: add dep-readiness guard to the when-evaluation loop
+
+- block4-fix · gate checkpoint must commit all sibling results before returning · if awaiting-gate result appears before done sibling in results array, sibling is lost and becomes running→failed on reconcile — fix: process entire results array, stage gate return, commit all other results first then return
+
+## Block 3 (mock executor + tier-1 unit tests)
+
+- block3 · NodeExecResult / ExecutionCtx / NodeExecutor / NodeScenario / ScenarioMap types defined in mock-executor.ts (types.ts is off-limits per hard rules); engine author may relocate them to a shared types module in Block 4
+
+- block3 · Lock-release is the ENGINE CALLER's responsibility, not reconcileRunningNodes() · reconcileRunningNodes(state) takes only a RunState and returns the repaired state; it has no knowledge of the lockfile path. The engine's resume/start entrypoint calls reconcileRunningNodes then unlinkSync(activeLockPath). Test 6 demonstrates this two-step pattern: write lockfile, call reconcile (state fixed), then engine-side unlink (lock released). Both halves are asserted in the test.
+
+- block3 · createMockExecutor (not makeMockExecutor from the task's illustrative code) is the exported factory name · the task spec code blocks are illustrative; the baseline used createMockExecutor; renamed exports break Block 4 which imports from mock-executor.ts
+
+- block3 · reconcileRunningNodes (not reconcileState) is the exported function name · same reason as above; Block 4 engine-author imports reconcileRunningNodes from dag.ts per the test contract in dag.test.ts
+
+## Block 5 (launcher + env-propagation + XDG bootstrap)
+
+- block5 · computeHomePath() is internal (not resolveHome()) for the init command · resolveHome() fails loud if the path doesn't exist, so it cannot be used to bootstrap a fresh machine. init calls computeHomePath() (no existence check) then initHome() to create the tree. resolveHome() is exported for all non-init commands that require the home to already exist.
+
+- block5 · releaseLock imported at top level in cli.ts (no dynamic import) · --force override releases the stale lock synchronously before acquireLock; dynamic import was unnecessary since lock.ts is always needed. cmdStart is synchronous.
+
+- block5 · cache dir (~/.cache/dagrunner) NOT created in initHome
+
+## Block 7 (thin-slice nodes + gate/resume/state)
+
+- block7 · paused run releases active.lock on checkpoint-and-exit · spec says "one run at a time" + "resume is re-entry"; releasing on pause lets another `dagrun start` proceed while a gate is pending; resume re-acquires before any state mutation; logged per advisor guidance
+
+- block7 · iteration counter = count of feedback-*.md files on disk · single source of truth — avoids double-count between sdk-runner (which sets awaiting-gate iteration) and resumeRun (which increments on reject); feedback files are written by resumeRun before resetting node to pending, so the runner's readdirSync count on next run is accurate
+
+- block7 · haiku model string is "claude-haiku-4-5" (not "claude-haiku-4-5-20251001") · DECISIONS.md block1 confirmed sonnet as "claude-sonnet-4-6"; haiku full dated string unavailable in installed SDK; using short alias which the SDK resolves; can be corrected to full ID when confirmed
+
+## Phase 1.5 hardening (pre-real-run)
+
+- hardening-item1 · haiku model ID corrected to full dated string "claude-haiku-4-5-20251001" · confirmed via claude-api skill models table; short alias "claude-haiku-4-5" was a temporary placeholder; pinned to full ID per Item 1 spec
+
+- block7 · maxIterations terminal-choice: at limit, print guidance and exit 0; do not auto-fail · spec: "At maxIterations, pause with terminal choice (approve-as-is / abort / force), NEVER auto-fail"; non-interactive --reject at limit prints message and exits; interactive path on a separate future pass
+
+- block7 · loadWorkflow called in startRun (not at import time) · workflow is a const so static validity is guaranteed; call serves as belt-and-suspenders check for dynamically constructed workflows
+
+## Block 5 (fresh-model verification findings)
+
+- block5-verify · --force is unconditional override of any competing run (v1 deliberate) · fresh-model flagged it as dangerous for live runs; spec says "--force override" with no constraint; for v1 single-run builds the human invoking --force is explicitly requesting override; no change needed
+
+- block5-verify · cmdStart discards resolveConfig result (known stub) · fresh-model flagged that config is loaded for DEVHARNESS_SRC validation but not stored; this is intentional — cmdStart is a stub, Block 7 will rewrite it with the real engine call that uses config; no change needed in Block 5
+
+- block5-verify · corrupt active.lock silently overwritten (fixed) · readLock returns null when file exists but is unparseable; the null check let the overwrite proceed; fixed in lock.ts: null from readLock when file exists is now a loud fatal error · acceptance test only checks runs/worktrees/inbox/store under DAGRUNNER_HOME; cache is a separate XDG root. Will add in Block 7 if needed, keeping Block 5 scope minimal.
+
+## Phase 2a — D1 (preflight + runtime permission model)
+
+- phase2a-D1 · sdk-runner drops bypassPermissions in favour of acceptEdits · runtime nodes must NOT bypass permissions — the permission boundary must exist before any node mutates the real repo. Build harness (.claude/settings.json) retains bypassPermissions (build-time only). Confirmed with advisor.
+
+- phase2a-D1 · additionalDirectories = [runDir] (not per-node artifactsDir) · run-dir root covers all node artifact subdirs without needing to re-seed on each node. This is the most likely source of unexpected prompts per handoff §3.1a.
+
+- phase2a-D1 · agents dir seeded into worktree alongside commands+hooks · startRun previously copied commands+hooks but not agents; review node's subagent dispatch silently fails without the agent .md files in the worktree's .claude/agents/.
+
+- phase2a-D1 · preflight branch check defaults to "main" and is NOT a hard fail when skip-preflight is needed · the preflight check warns on wrong branch but the acceptance target (dagrunner-fixture) uses "main" as base. The check is configurable via --base-branch.
+
+## Phase 2a — D2 (review node)
+
+- phase2a-D2 · review is ONE static DAG node (no when predicate); conditional reviewer fan-out is inside the /review command · the superseded design had six static nodes. A single node keeps the DAG simple; the command handles classify-based routing internally.
+
+- phase2a-D2 · crev reviewer dimension mapping · crev (camunda/crev) ships specialist agents but the crev-patterns skill does not enumerate their exact names. Our six dimensions (correctness, test-adequacy, api-stability, distributed-systems, performance, migration-safety) come directly from the handoff spec §3.2 and cover the Camunda codebase's risk surfaces. Differences vs crev: crev has no separate "test-adequacy" specialist (covered inline); crev has no "migration-safety" specialist (our addition for schema/proto review); crev's distributed-systems specialist is present and is our closest direct borrow. We drop crev's "code-style" dimension (handled by format hooks, not a reviewer). Net: two new dimensions (test-adequacy, migration-safety), one confirmed borrow (distributed-systems), one confirmed absent in crev (api-stability as a named dimension). Logged per handoff §3.2 requirement.
+
+- phase2a-D2 · run_adversarial_verifier + recommend_pr_review added to classify schema · run_adversarial_verifier drives the adversarial verifier subagent dispatch in /review; recommend_pr_review is advisory only (no Phase 2a action). Both are boolean, required, and validated at load.
+
+- phase2a-D2 · adversarial verifier annotates grounded: bool but does NOT drop findings · caller filters on grounded; keeping ungrounded findings with grounded:false gives the fix node full visibility into what was verified vs. what was claimed.
+
+## Phase 2a — D3 (fix node)
+
+- phase2a-D3 · fix node uses revisionInstruction to override default "rewrite artifact" prompt · the default gate-resume prompt says "rewrite {artifact}" which is wrong for fix (the product is the worktree diff, not summary.md). revisionInstruction is a template supporting {artifactsDir} substitution, allowing fix to say "revise CODE + update summary".
+
+- phase2a-D3 · Gate 2 reuses existing gate infrastructure (no new machinery) · sdk-runner session-resume + feedback file + run-engine reject path handle the full "reject → revise same session → re-pause" loop. Only the revisionInstruction changes the revision directive.
+
+## Phase 2b — verify-election + verify-guide + Gate 3
+
+- phase2b-verify-guide · verify-seed REMOVED, replaced by verify-guide (information-only, haiku) · cluster bring-up (Maven, Docker, ES, AIO JVM) conflicts with the runtime sandbox — it requires Docker, broad network, host ports, and out-of-tree writes that the sandbox forbids. Lifting the sandbox for that one node breaks the security model for all other nodes. Automation is also negative-ROI: manual cluster bring-up is faster. verify-guide produces seeding-spec.json + tour-spec.json + manual-test.md from the diff alone — no cluster, no network. Phase 3 will consume these specs in /verify-demo (interactive, outside dagrunner). See: docs/phase2b-change-order-verify.md.
+
+- phase2b-verify-seed-model-reverted · verify-seed was upgraded to sonnet; that decision is void — verify-seed is removed · verify-guide runs on haiku (information-only; no retry loops, no build diagnosis, no Glean queries needed)
+
+- phase2b-loop-impl · retry loop logic was planned for verify-seed; no longer needed · verify-guide cannot fail the way verify-seed did; LoopConfig remains unimplemented in the engine (logged for Phase 3 if persistent convergence loops needed for other nodes)
+
+- phase2b-election · verify-election answer stored in state.json (verifyElection: "y"|"n"), not as a file artifact · handoff §2 says "captured into state.json"; storing in state avoids the ctx.json hardcode problem and keeps election orthogonal to the artifact channel
+
+- phase2b-verify-guide-optional · verify-guide has optional:true so pre-skipping it (election=n) doesn't cascade-block pr · dag.ts skipped-dep logic: skipped dep is non-blocking only when the dep node has optional:true; without this flag, pr would be stranded when election=n
+
+- phase2b-ctx-json-fix · ctx.json(nodeId) hardcode changed from classify.json to output.json · classify is removed; ctx.json was dead code; output.json is the natural structured-output artifact name for any future node using outputSchema
+
+- phase2b-pr-deps · pr depends on both ["fix", "verify-guide"] · verify-guide is optional, so its skip is non-blocking; explicit dep on fix ensures pr never starts before the worktree diff is finalised; transitive dependency is not sufficient (dag.ts only checks direct deps)
+
+## Phase 2b — pr node
+
+- phase2b-no-pr-flag · pr opening gated by DAGRUN_NO_PR env var (default: open PR) · fixture runs must not pollute GitHub; env var is simpler than a start flag (no CLI plumbing needed); pr node always writes body.md regardless
+
+## Phase 2b — reflect + apply-reflection
+
+- phase2b-reflect-gate-skippable · GateConfig.skippable:true added; interactive quit marks node skipped and continues run · handoff: "Skipping (quit/--reject) still completes the run done (PR already shipped)"; skippable=true on reflect gate prevents it from blocking run completion; quit path updated in resumeRun to write skipped state and recurse
+
+- phase2b-apply-reflection-joinrule · apply-reflection uses joinRule:none-failed-min-one-success to auto-skip when reflect is skipped · when reflect is skipped (skippable quit), apply-reflection must never run (nothing to apply); this joinRule requires at least one dep to be done; Bug-2 cleanup in runDag marks it skipped at run end
+
+- phase2b-notes-md · expand-guide and implement commands updated to emit optional notes.md side-artifact · reflect's Flavor-1 synthesis reads notes.md from both nodes; absence is not a failure (not in produces); guidance added to command prompts without workflow changes
+
+## Sandbox additionalDirectories — DEVHARNESS_SRC + dagrunnerHome
+
+- sandbox-additional-dirs · DEVHARNESS_SRC and dagrunnerHome added to additionalDirectories in buildSeededSettings · apply-reflection must write CLAUDE.local.md into the real DEVHARNESS_SRC tree (not the worktree copy) and write proposals to DAGRUNNER_HOME/store/ (sibling of runDir); sandbox was blocking both; scope decision: all nodes get write access to DEVHARNESS_SRC — prompt-discipline is the guard for cross-tree writes, not the sandbox boundary
+
+## Siblings (interactive Claude Code commands)
+
+- sibling-pr-triage-local-not-gh-aw · pr-triage is a local interactive command (not a gh-aw workflow) · three reasons: (1) `gh` has a TLS cert mismatch with the sandbox proxy — same lesson as the `pr` node and ci-babysit; siblings are commands so `gh` works; (2) gh-aw's async-agent edge is cancelled by the per-comment human gate — there is nothing to gain from async when a human must approve each post; (3) the data-governance cost of routing private PR/review content through gh-aw's container is not worth it; the command also needs the private worktree for grounding, which gh-aw's container cannot reach. Revisit gh-aw ONLY if pr-triage becomes team-scale, multi-repo, no-single-human-gate infrastructure.
+
+## split-claude-build-vs-payload
+
+- packaging-payload-files · `payload/` NOT added to `package.json`'s `files` field · options: (a) add `"payload"` to files so it is published with the npm package, (b) defer since dagrun runs from source today (`tsx ./src/cli.ts`) and the gap pre-existed this move; choice: defer (option b) · rationale: `dagrun` is not distributed via npm today — it runs from source. `files: ["dist"]` already excluded `.claude/` and would equally exclude `payload/`. Adding `payload/` to `files` is the correct forward-fix when/if an npm-distributed binary is built, but doing it now would be premature. Pre-existing gap inherited, not created.

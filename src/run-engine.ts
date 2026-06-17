@@ -148,9 +148,9 @@ export async function startRun(opts: {
   mkdirSync(join(destClaude, "commands"), { recursive: true });
   mkdirSync(join(destClaude, "hooks"), { recursive: true });
   mkdirSync(join(destClaude, "agents"), { recursive: true });
-  const srcCommands = join(dagrunnerRoot, ".claude", "commands");
+  const srcCommands = join(dagrunnerRoot, "payload", "commands");
   const srcHooks = join(dagrunnerRoot, ".claude", "hooks");
-  const srcAgents = join(dagrunnerRoot, ".claude", "agents");
+  const srcAgents = join(dagrunnerRoot, "payload", "agents");
   if (!existsSync(srcCommands)) {
     throw new Error(
       `dagrun: bundled commands not found at ${srcCommands} — package installation may be broken`,
@@ -700,9 +700,9 @@ export async function rerunNode(opts: {
   // take effect without needing a new full run (e.g. allowedDomains fixes).
   const dagrunnerRoot = new URL("../", import.meta.url).pathname;
   const destClaude = join(worktreePath, ".claude");
-  const srcCommands = join(dagrunnerRoot, ".claude", "commands");
+  const srcCommands = join(dagrunnerRoot, "payload", "commands");
   const srcHooks = join(dagrunnerRoot, ".claude", "hooks");
-  const srcAgents = join(dagrunnerRoot, ".claude", "agents");
+  const srcAgents = join(dagrunnerRoot, "payload", "agents");
   if (existsSync(srcCommands))
     cpSync(srcCommands, join(destClaude, "commands"), { recursive: true });
   if (existsSync(srcHooks))

@@ -6,7 +6,7 @@ sometimes relevant lives in a skill, not here.
 ## What you are building
 
 A thin **TypeScript** binary (`dagrun`) that orchestrates a DAG of Claude Code agent runs. It is a
-**standalone project** in this folder — NOT the Camunda monorepo. One-shot v1 build.
+**standalone project** in this folder — NOT the Camunda monorepo.
 
 ## The reuse law (most important rule)
 
@@ -51,18 +51,8 @@ spawning. A var set after spawn, or only inside a prompt, is invisible to the Se
 artifact writes. Also: the SDK does NOT load `.claude/settings.json` (hooks/deny rules) unless
 `settingSources: ["project"]` is set in `query()` options.
 
-## Autonomy (this is an unattended overnight run)
-
-- **NEVER stop to ask the user anything.** On ANY ambiguity, choose the spec-aligned default, append
-  to `DECISIONS.md`, and continue. Returning a question instead of a result is a protocol failure.
-- **Commit after every passing block.** `git commit -m "block N: <name>"`.
-- **Isolate-and-continue on failure.** Retry once; if still failing, mark blocked, commit safe work,
-  move to the next independent block. Never halt the whole run for one block.
-- **You delegate, you do not implement.** Dispatch to the named subagent, verify its acceptance gate,
-  sequence. Keep your own context to plan + state.
-
 ## Where design decisions live
 
 The full locked design is the `architecture-spec` skill, chunked by theme. Load only the slice a
-block needs. The build plan + sequencing is `HANDOFF.md`. Borrowed patterns are the `crev-patterns`
-skill. Test protocol is the `testing-protocol` skill.
+block needs. Borrowed patterns are the `crev-patterns` skill. Test protocol is the
+`testing-protocol` skill.

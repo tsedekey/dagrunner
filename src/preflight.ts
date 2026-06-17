@@ -264,13 +264,13 @@ export function getAgentContext(
   const passthrough = readSourcePassthrough(config.DEVHARNESS_SRC);
 
   const commands = listItems(
-    join(dagrunnerRoot, ".claude", "commands"),
+    join(dagrunnerRoot, "payload", "commands"),
     "dagrunner",
     join(config.DEVHARNESS_SRC, ".claude", "commands"),
     "DEVHARNESS_SRC",
   );
   const agents = listItems(
-    join(dagrunnerRoot, ".claude", "agents"),
+    join(dagrunnerRoot, "payload", "agents"),
     "dagrunner",
     join(config.DEVHARNESS_SRC, ".claude", "agents"),
     "DEVHARNESS_SRC",
