@@ -19,7 +19,7 @@ the closest spec-aligned choice.
 - **Workflow format:** typed TS objects (not runtime YAML) — mistyped model / bad dependsOn / missing
   gate become load errors.
 - **Scope of v1:** complete ENGINE, thin-slice CONTENT. Build the full DAG core; ship only
-  `classify → expand-guide [review gate] → implement` as v1 workflow content. Remaining feature nodes
+  `classify → expand [review gate] → implement` as v1 workflow content. Remaining feature nodes
   are config additions on the proven engine.
 - **One app, three workflow definitions, one binary** (`dagrun <workflow> …`). ci-babysit and
   review-triage are separate scheduled run-types — SPECCED here, BUILT in phase 2.
@@ -138,7 +138,7 @@ entry: `{ ts, node, sessionId, event, detail }`.
 ## Theme 9 — Model tiering & cost
 
 Tiers: `haiku` (mechanical), `sonnet` (default reasoning), omit (unpinned → opusplan reaches Opus).
-Assignments: classify=haiku; expand-guide=unpinned; reviewers test-adequacy/api-stability/migration-
+Assignments: classify=haiku; expand=unpinned; reviewers test-adequacy/api-stability/migration-
 safety=sonnet, correctness/distributed-systems/performance=unpinned; synthesize-and-fix=unpinned;
 verify-seed=haiku; pr=haiku; reflect=sonnet; apply-reflection=sonnet. Validate model strings at load.
 Budget: per-run `--max-budget-usd` (hard ceiling, works on subscription auth) PLUS optional per-node
@@ -162,7 +162,7 @@ Crash recovery: on start/resume, reconcile state.json vs `git worktree list` + l
 
 ## Theme 11 — The feature pipeline (full topology)
 
-Nodes (each reviewer is a real node): 1 classify(haiku)→ 2 expand-guide(unpinned, **review gate**,
+Nodes (each reviewer is a real node): 1 classify(haiku)→ 2 expand(unpinned, **review gate**,
 revise-self, produces guide.md)→ 3 implement(unpinned, worktree diff + summary.md)→ reviewers
 4 correctness(unpinned, always, optional:false) 5 test-adequacy(sonnet, always, optional:false)
 6 api-stability(sonnet, when touches_public_api, optional) 7 distributed-systems(unpinned, when

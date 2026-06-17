@@ -238,7 +238,7 @@ export async function resumeRun(opts: {
   config: DagrunnerConfig;
   approve?: boolean;
   rejectComment?: string;
-  /** Non-interactive election answer: 'y' = run verify-guide, 'n' = skip. */
+  /** Non-interactive election answer: 'y' = run verify, 'n' = skip. */
   verify?: "y" | "n";
 }): Promise<void> {
   const { runId, homeDir, config } = opts;
@@ -441,9 +441,9 @@ export async function resumeRun(opts: {
   }
 
   // verify-election: conducted once, after fix (Gate 2) is approved.
-  // Only applies when the workflow has a verify-guide node and election is not yet recorded.
+  // Only applies when the workflow has a verify node and election is not yet recorded.
   if (state.verifyElection === undefined) {
-    const hasVerifySeed = workflow.nodes.some((n) => n.id === "verify-guide");
+    const hasVerifySeed = workflow.nodes.some((n) => n.id === "verify");
     const fixDone = state.nodes["fix"]?.status === "done";
     if (hasVerifySeed && fixDone) {
       let electionAnswer: "y" | "n";
@@ -454,7 +454,7 @@ export async function resumeRun(opts: {
         );
       } else {
         process.stdout.write(
-          "\nRun verify-guide (produces seeding spec + code tour, no cluster)? [y/n] > ",
+          "\nRun verify (produces seeding spec + manual-test guide, no cluster)? [y/n] > ",
         );
         const answer = await readOneLine();
         electionAnswer = answer.trim() === "y" ? "y" : "n";
@@ -467,14 +467,14 @@ export async function resumeRun(opts: {
       };
 
       if (electionAnswer === "n") {
-        // Pre-mark verify-guide as skipped so the DAG routes directly to pr.
-        const verifySeedNodeState = state.nodes["verify-guide"];
+        // Pre-mark verify as skipped so the DAG routes directly to pr.
+        const verifySeedNodeState = state.nodes["verify"];
         if (verifySeedNodeState !== undefined) {
           state = {
             ...state,
             nodes: {
               ...state.nodes,
-              "verify-guide": {
+              verify: {
                 ...verifySeedNodeState,
                 status: "skipped",
                 endedAt: new Date().toISOString(),
@@ -486,7 +486,7 @@ export async function resumeRun(opts: {
           "dagrun: skipping runtime verification — proceeding to pr\n",
         );
       } else {
-        process.stdout.write("dagrun: will run verify-guide + Gate 3\n");
+        process.stdout.write("dagrun: will run verify + Gate 3\n");
       }
 
       writeState(stateFile, state);

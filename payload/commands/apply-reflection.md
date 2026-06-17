@@ -118,9 +118,9 @@ Revert with: dagrun revert-reflection <DAGRUN_RUN_ID>
 
 ## Flavor-2 (dagrunner improvements) — logged to store
 
-| #   | Target                           | Action | Outcome         |
-| --- | -------------------------------- | ------ | --------------- |
-| 1   | .claude/commands/expand-guide.md | update | logged to store |
+| #   | Target                     | Action | Outcome         |
+| --- | -------------------------- | ------ | --------------- |
+| 1   | .claude/commands/expand.md | update | logged to store |
 
 Store location: <STORE_DIR>/proposals.jsonl
 

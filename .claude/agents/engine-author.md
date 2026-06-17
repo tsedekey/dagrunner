@@ -37,7 +37,7 @@ block, not all at once). Build against the mock executor + tier-1 tests that alr
 ## Block 7 — thin-slice nodes + gate/resume/state
 
 - Nodes: `classify` (haiku, structured output → `classify.json`, captured deterministically by the
-  runner), `expand-guide` (unpinned, review gate, writes `guide.md` via Write tool to `$DAGRUN_ARTIFACTS`),
+  runner), `expand` (unpinned, review gate, writes `guide.md` via Write tool to `$DAGRUN_ARTIFACTS`),
   `implement` (unpinned, worktree diff + `implement/summary.md`).
 - Worktree: `git worktree add ~/.local/share/dagrunner/worktrees/<run-id> -b feature/<issue>-<slug>`.
   Teardown is a SEPARATE `dagrun cleanup <run-id>` — never automatic.

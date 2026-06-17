@@ -1,6 +1,6 @@
-Read the implementation guide at $DAGRUN_ARTIFACTS/../expand-guide/guide.md.
+Read the implementation guide at $DAGRUN_ARTIFACTS/../expand/guide.md.
 
-Also check for any reviewer feedback files at $DAGRUN_ARTIFACTS/../expand-guide/feedback-\*.md.
+Also check for any reviewer feedback files at $DAGRUN_ARTIFACTS/../expand/feedback-\*.md.
 If any feedback files exist, incorporate those instructions into the implementation — they represent
 reviewer requests that were not fully addressed in the guide itself.
 
@@ -27,7 +27,7 @@ git status --short
 
 If the working tree is already clean (nothing to commit), note it in summary.md and skip the commit.
 
-Otherwise commit with a title derived from the first heading in `$DAGRUN_ARTIFACTS/../expand-guide/guide.md`:
+Otherwise commit with a title derived from the first heading in `$DAGRUN_ARTIFACTS/../expand/guide.md`:
 
 ```bash
 git commit -m "feat: <concise title ≤70 chars from guide.md>"

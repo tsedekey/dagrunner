@@ -177,26 +177,26 @@ export function validateClassifyOutput(data: unknown): ClassifyOutput {
 // ---------------------------------------------------------------------------
 
 /**
- * A minimal valid workflow: expand-guide → implement (with dependency).
+ * A minimal valid workflow: expand → implement (with dependency).
  */
 export const FIXTURE_VALID: Workflow = {
   name: "fixture-valid",
   nodes: [
     {
-      id: "expand-guide",
-      command: "/expand-guide",
+      id: "expand",
+      command: "/expand",
       model: "haiku",
     },
     {
       id: "implement",
       command: "/implement",
-      dependsOn: ["expand-guide"],
+      dependsOn: ["expand"],
     },
   ],
 };
 
 /**
- * Invalid: node "expand-guide" declares model "opus" which is not a ModelTier.
+ * Invalid: node "classify" declares model "opus" which is not a ModelTier.
  * Cast through unknown to bypass compile-time narrowing — the runtime check
  * must catch what the type system cannot (e.g. data loaded from disk/JSON).
  */
@@ -212,7 +212,7 @@ export const FIXTURE_BAD_MODEL: Workflow = {
 };
 
 /**
- * Invalid: "expand-guide" depends on "nonexistent" which is not declared.
+ * Invalid: "expand" depends on "nonexistent" which is not declared.
  */
 export const FIXTURE_BAD_DEPENDS: Workflow = {
   name: "fixture-bad-depends",
@@ -223,8 +223,8 @@ export const FIXTURE_BAD_DEPENDS: Workflow = {
       model: "haiku",
     },
     {
-      id: "expand-guide",
-      command: "/expand-guide",
+      id: "expand",
+      command: "/expand",
       dependsOn: ["nonexistent"],
     },
   ],

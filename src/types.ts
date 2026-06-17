@@ -81,7 +81,7 @@ export type Node = {
   /** Predicate evaluated at scheduling time; false → node is skipped. */
   when?: (ctx: Ctx) => boolean;
   /**
-   * Slash command or skill reference, e.g. "/expand-guide" or "skill:review".
+   * Slash command or skill reference, e.g. "/expand" or "skill:review".
    */
   command: string;
   /** Model tier. Omit = unpinned (opusplan chooses). */

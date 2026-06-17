@@ -62,7 +62,7 @@ fi
 # --- sync .claude/commands/ only — never touch settings.json ----------------
 #
 # We only sync the commands/ subdirectory from DEVHARNESS_SRC so users can
-# override the seeded classify/expand-guide/implement prompts with their own.
+# override the seeded classify/expand/implement prompts with their own.
 # We deliberately EXCLUDE settings.json: dagrunner seeds a minimal node-run
 # settings.json (hooks only, no build-harness deny-guard) and that file must
 # survive untouched. A blanket sync of all of .claude/ would overwrite it with

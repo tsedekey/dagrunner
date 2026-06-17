@@ -1,4 +1,4 @@
-# /verify-guide — Produce Verification Specs (Information-Only)
+# /verify — Produce Verification Specs (Information-Only)
 
 Read the feature diff and run artifacts to produce a seeding spec and a human-readable
 manual-test document for Gate 3. **No cluster, Docker, Maven, or network access.**
@@ -22,8 +22,8 @@ cd "$DAGRUN_WORKTREE" && git diff origin/main...HEAD
 
 # Artifacts from earlier nodes (check existence before reading)
 cat "$DAGRUN_RUN_DIR/plan/plan.md" 2>/dev/null
-cat "$DAGRUN_RUN_DIR/expand-guide/guide.md" 2>/dev/null
-cat "$DAGRUN_RUN_DIR/expand-guide/notes.md" 2>/dev/null
+cat "$DAGRUN_RUN_DIR/expand/guide.md" 2>/dev/null
+cat "$DAGRUN_RUN_DIR/expand/notes.md" 2>/dev/null
 cat "$DAGRUN_RUN_DIR/implement/notes.md" 2>/dev/null
 cat "$DAGRUN_RUN_DIR/review/findings.json" 2>/dev/null
 cat "$DAGRUN_RUN_DIR/fix/summary.md" 2>/dev/null

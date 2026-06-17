@@ -12,7 +12,7 @@ and a before/after diff.
 cd "$DAGRUN_WORKTREE" && git diff origin/main...HEAD
 
 # Side-artifacts (optional — check existence before reading)
-cat "$DAGRUN_RUN_DIR/expand-guide/notes.md" 2>/dev/null
+cat "$DAGRUN_RUN_DIR/expand/notes.md" 2>/dev/null
 cat "$DAGRUN_RUN_DIR/implement/notes.md" 2>/dev/null
 cat "$DAGRUN_RUN_DIR/review/notes.md" 2>/dev/null
 cat "$DAGRUN_RUN_DIR/fix/notes.md" 2>/dev/null
@@ -73,7 +73,7 @@ Format (same numbered-section structure as Flavor 1):
 
 **Target**: `<exact file path in the dagrunner repo>`
 **Change type**: `add | update | delete`
-**Rationale**: <Which friction signal? e.g. "expand-guide needed 3 rejections because guide.md
+**Rationale**: <Which friction signal? e.g. "expand needed 3 rejections because guide.md
 lacked error-handling section — prompt is missing that constraint">
 **Diff**:
 

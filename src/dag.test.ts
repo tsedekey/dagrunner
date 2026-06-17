@@ -122,8 +122,8 @@ test("[must pass now] Test 4b — unknown dependsOn throws with node name", () =
     (err: unknown) => {
       assert.ok(err instanceof Error);
       assert.ok(
-        err.message.includes("expand-guide"),
-        `Expected node name 'expand-guide' in: ${err.message}`,
+        err.message.includes("expand"),
+        `Expected node name 'expand' in: ${err.message}`,
       );
       assert.ok(
         err.message.includes("nonexistent"),
@@ -198,7 +198,7 @@ test("[must pass now] Test 5 — state.json round-trip", () => {
         cost: 0.0012,
         sessionId: "sess-abc",
       }),
-      "expand-guide": makeNodeState({
+      expand: makeNodeState({
         status: "awaiting-gate",
         startedAt: "2026-06-10T00:03:00.000Z",
         iteration: 1,
@@ -501,7 +501,7 @@ test("[expected-fail until Block4] Test 6 — reconcile: running node becomes fa
     sourcePlanPath: "/tmp/plan.md",
     nodes: {
       classify: makeNodeState({ status: "done", cost: 0.001 }),
-      "expand-guide": makeNodeState({
+      expand: makeNodeState({
         status: "running", // stuck — process was killed
         startedAt: "2026-06-10T00:01:00.000Z",
         cost: 0,
@@ -512,7 +512,7 @@ test("[expected-fail until Block4] Test 6 — reconcile: running node becomes fa
   const reconciled = reconcileRunningNodes(original);
 
   assert.equal(
-    reconciled.nodes["expand-guide"]?.status,
+    reconciled.nodes["expand"]?.status,
     "failed",
     "Node stuck in 'running' must be marked 'failed' after reconcile",
   );

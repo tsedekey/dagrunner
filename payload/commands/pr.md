@@ -22,11 +22,11 @@ All output files go to `$DAGRUN_ARTIFACTS/` (the value printed above).
 Read each of these inputs:
 
 - `$DAGRUN_RUN_DIR/plan/plan.md`
-- `$DAGRUN_RUN_DIR/expand-guide/guide.md`
+- `$DAGRUN_RUN_DIR/expand/guide.md`
 - `$DAGRUN_RUN_DIR/implement/summary.md`
 - `$DAGRUN_RUN_DIR/review/findings.json`
 - `$DAGRUN_RUN_DIR/fix/summary.md`
-- `$DAGRUN_RUN_DIR/verify-guide/manual-test.md` (optional — skip if absent)
+- `$DAGRUN_RUN_DIR/verify/manual-test.md` (optional — skip if absent)
 
 ## Step 2 — Compose the PR body
 
@@ -39,7 +39,7 @@ cat > "$DAGRUN_ARTIFACTS/body.md" << 'BODY'
 
 <2–4 sentences. What this PR does and why — goal and purpose only.
 Draw from guide.md and implement/summary.md. No bullet lists, no sub-headers,
-no review/fix recap. If verify-guide ran, one sentence noting it was produced.>
+no review/fix recap. If verify ran, one sentence noting it was produced.>
 
 ## Checklist
 

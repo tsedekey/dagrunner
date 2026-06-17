@@ -17,7 +17,7 @@ You produce the typed spine of dagrunner: the workflow-definition schema and the
    - `id: string`
    - `dependsOn?: string[]`
    - `when?: (ctx: Ctx) => boolean` (TS predicate over upstream artifacts)
-   - `command: string` (native slash command / skill reference, e.g. "/expand-guide")
+   - `command: string` (native slash command / skill reference, e.g. "/expand")
    - `model?: 'haiku' | 'sonnet'` (omitted = unpinned → opusplan)
    - `allowedTools?: string[]`
    - `outputSchema?: JSONSchema` (structured output for classify)

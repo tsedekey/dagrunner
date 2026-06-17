@@ -112,8 +112,8 @@ let RUN_ID = "";
 
 // ---------------------------------------------------------------------------
 // Step 2 — dagrun start feature --plan toy-plan.md
-//          expand-guide (Gate 1) → awaiting-gate → exits
-//          (classify node removed in Phase 2a — pipeline now starts at expand-guide)
+//          expand (Gate 1) → awaiting-gate → exits
+//          (classify node removed in Phase 2a — pipeline now starts at expand)
 // ---------------------------------------------------------------------------
 
 {
@@ -127,7 +127,7 @@ let RUN_ID = "";
   const result = runCli(
     ["start", "feature", "--plan", TOY_PLAN_PATH],
     HOME_ENV,
-    180_000, // 3 minutes for one real API call (expand-guide)
+    180_000, // 3 minutes for one real API call (expand)
   );
 
   assert.strictEqual(
@@ -155,11 +155,11 @@ let RUN_ID = "";
     "classify dir must NOT exist (classify node removed in Phase 2a)",
   );
 
-  // Confirm guide.md was produced by expand-guide.
-  const guidePath = join(runDir, "expand-guide", "guide.md");
+  // Confirm guide.md was produced by expand.
+  const guidePath = join(runDir, "expand", "guide.md");
   assert.ok(existsSync(guidePath), `guide.md must exist at ${guidePath}`);
 
-  console.log(`step 2 passed: start -> expand-guide -> gate (run: ${RUN_ID})`);
+  console.log(`step 2 passed: start -> expand -> gate (run: ${RUN_ID})`);
 }
 
 // ---------------------------------------------------------------------------
@@ -199,7 +199,7 @@ let RUN_ID = "";
   );
 
   const runDir = join(HOME, "runs", RUN_ID);
-  const feedback1 = join(runDir, "expand-guide", "feedback-1.md");
+  const feedback1 = join(runDir, "expand", "feedback-1.md");
   assert.ok(existsSync(feedback1), `feedback-1.md must exist at ${feedback1}`);
   // Run must be paused again after revise.
   assert.ok(
@@ -272,7 +272,7 @@ let RUN_ID = "";
 
 // ---------------------------------------------------------------------------
 // Step 6 — dagrun resume --approve --verify n (Gate 2)
-//          election=n -> verify-guide skipped -> pr -> reflect (Gate 4 pause)
+//          election=n -> verify skipped -> pr -> reflect (Gate 4 pause)
 // ---------------------------------------------------------------------------
 
 {
@@ -303,11 +303,11 @@ let RUN_ID = "";
     "n",
     `verifyElection must be "n", got: ${String(stateRaw.verifyElection)}`,
   );
-  // verify-guide must be skipped.
+  // verify must be skipped.
   assert.strictEqual(
-    stateRaw.nodes["verify-guide"]?.status,
+    stateRaw.nodes["verify"]?.status,
     "skipped",
-    `verify-guide must be skipped, got: ${String(stateRaw.nodes["verify-guide"]?.status)}`,
+    `verify must be skipped, got: ${String(stateRaw.nodes["verify"]?.status)}`,
   );
   // pr must have run.
   assert.strictEqual(
@@ -326,7 +326,7 @@ let RUN_ID = "";
     `run must be paused at reflect gate, got status: ${stateRaw.status}`,
   );
   console.log(
-    "step 6 passed: Gate 2 approve --verify n -> pr -> reflect gate (Gate 4 pause)",
+    "step 6 passed: Gate 2 approve --verify n -> verify skipped -> pr -> reflect gate (Gate 4 pause)",
   );
 }
 

@@ -50,8 +50,8 @@ step, capturing a transcript. Provide a tiny `toy-plan.md` and a throwaway toy g
 
 1. `dagrun init` → XDG home tree created (assert dirs exist).
 2. `dagrun start feature --plan toy-plan.md` → `classify` runs (haiku, **valid JSON** — assert schema),
-   `expand-guide` runs (unpinned), checkpoints at the **review gate**, process exits.
-3. `dagrun status` shows `expand-guide: awaiting-gate`, a cost figure, the worktree path.
+   `expand` runs (unpinned), checkpoints at the **review gate**, process exits.
+3. `dagrun status` shows `expand: awaiting-gate`, a cost figure, the worktree path.
 4. `dagrun resume --reject "add error handling section"` → node revises **in the same session**
    (assert sessionId unchanged, feedback-1.md written), re-pauses.
 5. `dagrun resume --approve` → `implement` runs, a diff exists in the worktree, the format hook fired,

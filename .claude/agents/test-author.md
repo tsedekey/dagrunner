@@ -33,8 +33,8 @@ A runnable script (bash or node) that drives the real thin slice end to end usin
 flags, asserting each step, capturing a transcript:
 
 1. `dagrun init` → XDG tree exists.
-2. `dagrun start feature --plan toy-plan.md` → classify (valid JSON) → expand-guide → awaiting-gate → exits.
-3. `dagrun status` shows `expand-guide: awaiting-gate` + cost + worktree path.
+2. `dagrun start feature --plan toy-plan.md` → classify (valid JSON) → expand → awaiting-gate → exits.
+3. `dagrun status` shows `expand: awaiting-gate` + cost + worktree path.
 4. `dagrun resume --reject "add error handling section"` → revises in same session → re-pauses.
 5. `dagrun resume --approve` → implement runs, worktree diff present, format hook fired → `done`.
 6. Kill mid-implement, `dagrun resume` → reconciles (running→failed) → re-runs clean.
