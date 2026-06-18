@@ -64,6 +64,9 @@ in place — never duplicated.
   runs `/dr-build docs/changes/that.md`.
 - Distinct from the **feature-task** plan template, which feeds Camunda features _into_
   dagrunner's pipeline. Keep the two directions separate.
+- Builds follow **TDD for the deterministic layer**: failing test first, then green; bug fixes start
+  with a failing regression test. Model-judgment behaviour stays evidence-based (`smoke:live` + human),
+  never force-TDD'd. (Encoded in `/dr-build`; conventions in the `testing-protocol` skill.)
 
 ## Namespace discipline (locked)
 

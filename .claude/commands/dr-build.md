@@ -49,6 +49,24 @@ authoring conversation. If it is missing or empty, stop and say so.
 - Reuse the v1 test discipline: mock node executor for deterministic engine tests; live runs
   only for integration acceptance. Fresh-model verification pass on any load-bearing piece.
 
+## Test-driven build (deterministic layer)
+For changes to **deterministic / plumbing** logic (the `testing-protocol` Tier-1 layer — engine,
+state, validation, config, path/seed resolution, generated-artifact shape):
+- Write the **failing test first** (red), implement to green, then refactor. The test ships in the
+  same commit as the code.
+- A bug fix starts with a **failing regression test** that reproduces the bug.
+- Follow the `testing-protocol` skill's conventions (co-located `*.test.ts`, mock executor,
+  determinism). `verify-baseline` runs `smoke:mock` as the gate.
+
+This sharpens "show evidence, never assert": for deterministic work, the evidence is a test that
+demonstrably fails without your change.
+
+**Boundary — do NOT force TDD where it doesn't fit.** Model-judgment behaviour (review quality,
+node-prompt wording) can't be unit-tested first; it stays evidence-based — proven by `smoke:live` +
+human review. Never write a vacuous test to satisfy the rule. When a change touches node prompts
+(`payload/commands/*.md`), run `smoke:live` before considering it done.
+  
+
 ## Autonomy protocol (if run unattended)
 
 - NEVER end a turn with a question. On ambiguity: pick the master-doc-aligned default, log
