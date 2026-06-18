@@ -71,6 +71,12 @@ if (!existsSync(join(TOY_REPO_PATH, ".git"))) {
     'git init && echo "# toy repo" > README.md && git add README.md && git commit -m "init"',
     { cwd: TOY_REPO_PATH, stdio: "inherit" },
   );
+} else {
+  // Reset to committed baseline each run — prevents cross-run dirty accumulation
+  execSync("git reset --hard HEAD && git clean -fd", {
+    cwd: TOY_REPO_PATH,
+    stdio: "inherit",
+  });
 }
 
 // ---------------------------------------------------------------------------
