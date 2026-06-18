@@ -43,7 +43,7 @@ Phase 3 is three LOCAL siblings (/seed-data + ci-babysit + pr-triage) — one su
      - adversarial verifier ONLY if findings count > N (default 3)
         |  -> review/findings.json
   fix (consumes findings, mutates worktree, self-verifies)  ★ GATE 2: accept/reject fixes
-   [VERIFY-ELECTION] human: "run runtime verification? [y/n]"
+   [VERIFY-ELECTION] surfaces manual_test_recommendation from findings.json (advisory); human: "run runtime verification? [y/n]"
         |  n -> verify skipped -> pr
         |  y ↓
   verify (haiku, INFO-ONLY: writes seeding-spec.json + manual-test.md)
@@ -61,9 +61,10 @@ Phase 3 is three LOCAL siblings (/seed-data + ci-babysit + pr-triage) — one su
 
 ```
 { run_id, timestamp,
-  triage: { touches_public_api, touches_runtime, touches_schema_or_proto, performance_sensitive },
+  triage: { touches_public_api, touches_runtime, touches_schema_or_proto, performance_sensitive, touches_ui },
   reviewers_run: [string], reviewers_skipped: [{name,reason}],
   adversarial_verifier_run: bool,
+  manual_test_recommendation: { recommended: bool, surface: "ui"|"api"|"none", rationale: string },
   findings: [{ reviewer_dimension, severity, confidence, file, line, claim, grounded }] }
 ```
 

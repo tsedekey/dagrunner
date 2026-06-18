@@ -12,12 +12,13 @@ Get the diff of all changes introduced by this worktree branch relative to the b
 git diff origin/main...HEAD
 ```
 
-Read the diff and set these four booleans:
+Read the diff and set these five booleans:
 
 - `touches_public_api`: does the diff add or change a public API endpoint, public method signature, or exported interface?
 - `touches_runtime`: does it change runtime/async/distributed behavior, job workers, or concurrency logic?
 - `touches_schema_or_proto`: does it add or change a DB schema, proto definition, Avro schema, or migration file?
 - `performance_sensitive`: could it affect hot-path latency, throughput, or memory use?
+- `touches_ui`: does the diff add or change UI components, templates, CSS, routing, or user-facing strings in a frontend?
 
 Use **only the diff** as input (not the plan). This triage is an internal step — do not write it as a separate artifact.
 
@@ -35,7 +36,7 @@ Determine which reviewers to run:
 - `reviewer-migration-safety` — if `touches_schema_or_proto`
 - `reviewer-performance` — if `performance_sensitive`
 
-Save the triage booleans in memory — you will write them into findings.json in Step 4.
+Save all five triage booleans in memory — you will write them into findings.json in Step 4, including `manual_test_recommendation` (computed from `touches_public_api` and `touches_ui`).
 
 ---
 
@@ -80,11 +81,17 @@ Write the following JSON object to `$DAGRUN_ARTIFACTS/findings.json`:
     "touches_public_api": true/false,
     "touches_runtime": true/false,
     "touches_schema_or_proto": true/false,
-    "performance_sensitive": true/false
+    "performance_sensitive": true/false,
+    "touches_ui": true/false
   },
   "reviewers_run": ["<names of reviewers that completed successfully>"],
   "reviewers_skipped": [{ "name": "...", "reason": "..." }],
   "adversarial_verifier_run": true/false,
+  "manual_test_recommendation": {
+    "recommended": "<true if touches_public_api OR touches_ui, else false>",
+    "surface": "<'ui' if touches_ui; 'api' if touches_public_api and not touches_ui; 'none' otherwise>",
+    "rationale": "<one sentence: why a manual test is or is not worthwhile for this change>"
+  },
   "findings": [
     {
       "reviewer_dimension": "correctness|test-adequacy|api-stability|distributed-systems|performance|migration-safety",
@@ -127,4 +134,4 @@ those are already in findings.json.
 - `reviewers_skipped` must be an array (empty `[]` if all reviewers ran successfully).
 - Every finding must have all seven fields including `grounded`.
 - An empty findings array `"findings": []` is valid and correct when no issues are found.
-- `triage` must always be present with all four boolean fields.
+- `triage` must always be present with all five boolean fields (including `touches_ui`).

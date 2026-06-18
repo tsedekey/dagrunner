@@ -51,12 +51,14 @@ export const FINDINGS_SCHEMA = {
         touches_runtime: { type: "boolean" },
         touches_schema_or_proto: { type: "boolean" },
         performance_sensitive: { type: "boolean" },
+        touches_ui: { type: "boolean" },
       },
       required: [
         "touches_public_api",
         "touches_runtime",
         "touches_schema_or_proto",
         "performance_sensitive",
+        "touches_ui",
       ],
       additionalProperties: false,
     },
@@ -74,6 +76,16 @@ export const FINDINGS_SCHEMA = {
       },
     },
     adversarial_verifier_run: { type: "boolean" },
+    manual_test_recommendation: {
+      type: "object",
+      properties: {
+        recommended: { type: "boolean" },
+        surface: { type: "string", enum: ["ui", "api", "none"] },
+        rationale: { type: "string" },
+      },
+      required: ["recommended", "surface", "rationale"],
+      additionalProperties: false,
+    },
     findings: {
       type: "array",
       items: {
@@ -110,6 +122,7 @@ export const FINDINGS_SCHEMA = {
     "reviewers_run",
     "reviewers_skipped",
     "adversarial_verifier_run",
+    "manual_test_recommendation",
     "findings",
   ],
   additionalProperties: false,

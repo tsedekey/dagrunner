@@ -13,7 +13,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { makeRunId } from "./run-engine.js";
+import { makeRunId, formatVerifyRecommendation } from "./run-engine.js";
 
 // ---------------------------------------------------------------------------
 // makeRunId
@@ -42,4 +42,106 @@ test("makeRunId: filename without .md extension — .md stripped only", () => {
 test("makeRunId: timestamp zero produces slug-0", () => {
   const result = makeRunId("/x/simple.md", 0);
   assert.equal(result, "simple-0");
+});
+
+// ---------------------------------------------------------------------------
+// formatVerifyRecommendation
+// ---------------------------------------------------------------------------
+
+const makeFindings = (
+  recommended: boolean,
+  surface: string,
+  rationale: string,
+) => ({
+  run_id: "r",
+  timestamp: "t",
+  triage: {
+    touches_public_api: false,
+    touches_runtime: false,
+    touches_schema_or_proto: false,
+    performance_sensitive: false,
+    touches_ui: false,
+  },
+  reviewers_run: [],
+  reviewers_skipped: [],
+  adversarial_verifier_run: false,
+  manual_test_recommendation: { recommended, surface, rationale },
+  findings: [],
+});
+
+test("formatVerifyRecommendation: api surface → recommended advisory with 'api'", () => {
+  const result = formatVerifyRecommendation(
+    makeFindings(true, "api", "adds a new REST endpoint"),
+  );
+  assert.ok(
+    result.includes("recommended"),
+    `expected 'recommended' in: ${result}`,
+  );
+  assert.ok(result.includes("api"), `expected 'api' in: ${result}`);
+  assert.ok(
+    result.includes("adds a new REST endpoint"),
+    `expected rationale in: ${result}`,
+  );
+});
+
+test("formatVerifyRecommendation: ui surface → recommended advisory with 'ui'", () => {
+  const result = formatVerifyRecommendation(
+    makeFindings(true, "ui", "modifies a user-facing component"),
+  );
+  assert.ok(
+    result.includes("recommended"),
+    `expected 'recommended' in: ${result}`,
+  );
+  assert.ok(result.includes("ui"), `expected 'ui' in: ${result}`);
+});
+
+test("formatVerifyRecommendation: none surface → not-recommended advisory", () => {
+  const result = formatVerifyRecommendation(
+    makeFindings(false, "none", "internal change only"),
+  );
+  assert.ok(
+    result.includes("not recommended"),
+    `expected 'not recommended' in: ${result}`,
+  );
+  assert.ok(
+    result.includes("internal change only"),
+    `expected rationale in: ${result}`,
+  );
+});
+
+test("formatVerifyRecommendation: api and ui produce distinct strings (teeth)", () => {
+  const api = formatVerifyRecommendation(makeFindings(true, "api", "endpoint"));
+  const ui = formatVerifyRecommendation(makeFindings(true, "ui", "component"));
+  assert.notEqual(
+    api,
+    ui,
+    "api and ui paths must produce distinct advisory text",
+  );
+});
+
+test("formatVerifyRecommendation: null input degrades to empty string", () => {
+  assert.equal(formatVerifyRecommendation(null), "");
+});
+
+test("formatVerifyRecommendation: missing manual_test_recommendation degrades to empty string", () => {
+  assert.equal(formatVerifyRecommendation({ run_id: "x" }), "");
+});
+
+test("formatVerifyRecommendation: malformed rec object (no recommended) degrades to empty string", () => {
+  assert.equal(
+    formatVerifyRecommendation({
+      manual_test_recommendation: { surface: "api" },
+    }),
+    "",
+  );
+});
+
+test("formatVerifyRecommendation: plain-text findings.json (mock executor output) degrades to empty string", () => {
+  // The mock executor writes plain text, not JSON — simulate what happens after JSON.parse fails.
+  // formatVerifyRecommendation receives a string (the result of parsing a non-JSON file would throw
+  // before reaching this function; here we test the string-input degrade path directly).
+  assert.equal(
+    formatVerifyRecommendation("# Mock artifact: findings.json\n"),
+    "",
+  );
 });

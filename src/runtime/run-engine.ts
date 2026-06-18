@@ -40,6 +40,31 @@ type ExecutorFactory = (
 ) => NodeExecutor;
 
 /**
+ * Format the advisory text shown at the verify-election from a parsed findings
+ * object. Returns "" on any degrade path (missing file, bad JSON, missing field)
+ * so the caller always degrades to the bare prompt rather than crashing.
+ * Exported for unit testing.
+ */
+export function formatVerifyRecommendation(findings: unknown): string {
+  if (typeof findings !== "object" || findings === null) return "";
+  const f = findings as Record<string, unknown>;
+  if (
+    typeof f["manual_test_recommendation"] !== "object" ||
+    f["manual_test_recommendation"] === null
+  )
+    return "";
+  const rec = f["manual_test_recommendation"] as Record<string, unknown>;
+  if (typeof rec["recommended"] !== "boolean") return "";
+  const surface = typeof rec["surface"] === "string" ? rec["surface"] : "none";
+  const rationale =
+    typeof rec["rationale"] === "string" ? rec["rationale"] : "";
+  if (rec["recommended"] === true) {
+    return `Observability advisory: manual test recommended — surface: ${surface}. ${rationale}`;
+  }
+  return `Observability advisory: manual test not recommended — ${rationale || "change has no observable UI or API surface"}`;
+}
+
+/**
  * Build a deterministic run ID from a plan path and a timestamp.
  * Exported for unit testing.
  */
@@ -468,6 +493,24 @@ export async function resumeRun(opts: {
     const hasVerifySeed = workflow.nodes.some((n) => n.id === "verify");
     const fixDone = state.nodes["fix"]?.status === "done";
     if (hasVerifySeed && fixDone) {
+      // Surface the observability recommendation from review/findings.json (fail-soft).
+      // Printed on both the interactive and --verify paths so it is always recorded.
+      let verifyAdvisory = "";
+      try {
+        const findingsPath = join(runDir, "review", "findings.json");
+        if (existsSync(findingsPath)) {
+          const findings = JSON.parse(
+            readFileSync(findingsPath, "utf8"),
+          ) as unknown;
+          verifyAdvisory = formatVerifyRecommendation(findings);
+        }
+      } catch {
+        // Degrade silently — recommendation is advisory, not load-bearing.
+      }
+      if (verifyAdvisory !== "") {
+        process.stdout.write(`\n${verifyAdvisory}\n`);
+      }
+
       let electionAnswer: "y" | "n";
       if (opts.verify !== undefined) {
         electionAnswer = opts.verify;

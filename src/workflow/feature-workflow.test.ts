@@ -187,6 +187,51 @@ test("FINDINGS_SCHEMA: triage sub-object required fields are in its properties",
   }
 });
 
+test("FINDINGS_SCHEMA: triage includes touches_ui as required boolean", () => {
+  const triage = FINDINGS_SCHEMA.properties.triage as Record<string, unknown>;
+  const required = triage["required"] as string[];
+  assert.ok(
+    required.includes("touches_ui"),
+    "touches_ui must be in triage.required",
+  );
+  const props = triage["properties"] as Record<string, Record<string, unknown>>;
+  assert.equal(
+    props["touches_ui"]?.["type"],
+    "boolean",
+    "touches_ui must be boolean",
+  );
+});
+
+test("FINDINGS_SCHEMA: manual_test_recommendation is a required top-level field", () => {
+  assert.ok(
+    FINDINGS_SCHEMA.required.includes("manual_test_recommendation"),
+    "manual_test_recommendation must be in top-level required",
+  );
+  const rec = FINDINGS_SCHEMA.properties.manual_test_recommendation as Record<
+    string,
+    unknown
+  >;
+  assert.equal(rec["type"], "object");
+  const recRequired = rec["required"] as string[];
+  assert.ok(recRequired.includes("recommended"), "recommended required");
+  assert.ok(recRequired.includes("surface"), "surface required");
+  assert.ok(recRequired.includes("rationale"), "rationale required");
+});
+
+test("FINDINGS_SCHEMA: manual_test_recommendation surface enum is ui|api|none", () => {
+  const rec = FINDINGS_SCHEMA.properties.manual_test_recommendation as Record<
+    string,
+    unknown
+  >;
+  const props = rec["properties"] as Record<string, Record<string, unknown>>;
+  const surfaceEnum = props["surface"]?.["enum"] as unknown[];
+  assert.deepEqual(
+    [...surfaceEnum].sort(),
+    ["api", "none", "ui"],
+    "surface enum must be exactly ui|api|none",
+  );
+});
+
 test("FINDINGS_SCHEMA: findings items severity enum is non-empty", () => {
   const findingsItems = (
     FINDINGS_SCHEMA.properties.findings as Record<string, unknown>
@@ -264,10 +309,16 @@ const VALID_FINDINGS = {
     touches_runtime: true,
     touches_schema_or_proto: false,
     performance_sensitive: false,
+    touches_ui: false,
   },
   reviewers_run: ["correctness", "test-adequacy"],
   reviewers_skipped: [{ name: "performance", reason: "not perf-sensitive" }],
   adversarial_verifier_run: true,
+  manual_test_recommendation: {
+    recommended: false,
+    surface: "none",
+    rationale: "change is internal — no observable UI or API surface",
+  },
   findings: [
     {
       reviewer_dimension: "correctness",
@@ -338,6 +389,83 @@ test("FINDINGS_SCHEMA: missing required field in triage sub-object fails (teeth)
     bad,
     FINDINGS_SCHEMA as unknown as Schema,
     "FINDINGS_SCHEMA missing triage field",
+  );
+});
+
+test("FINDINGS_SCHEMA: missing touches_ui in triage fails (teeth)", () => {
+  const bad = {
+    ...VALID_FINDINGS,
+    triage: {
+      touches_public_api: false,
+      touches_runtime: true,
+      touches_schema_or_proto: false,
+      performance_sensitive: false,
+      // touches_ui missing
+    },
+  };
+  assertInvalid(
+    bad,
+    FINDINGS_SCHEMA as unknown as Schema,
+    "FINDINGS_SCHEMA missing touches_ui",
+  );
+});
+
+test("FINDINGS_SCHEMA: missing manual_test_recommendation fails (teeth)", () => {
+  const { manual_test_recommendation: _, ...missing } = VALID_FINDINGS;
+  assertInvalid(
+    missing,
+    FINDINGS_SCHEMA as unknown as Schema,
+    "FINDINGS_SCHEMA missing manual_test_recommendation",
+  );
+});
+
+test("FINDINGS_SCHEMA: invalid manual_test_recommendation surface enum fails (teeth)", () => {
+  const bad = {
+    ...VALID_FINDINGS,
+    manual_test_recommendation: {
+      recommended: false,
+      surface: "logs", // not in enum
+      rationale: "test",
+    },
+  };
+  assertInvalid(
+    bad,
+    FINDINGS_SCHEMA as unknown as Schema,
+    "FINDINGS_SCHEMA bad surface enum",
+  );
+});
+
+test("FINDINGS_SCHEMA: manual_test_recommendation with api surface conforms", () => {
+  const good = {
+    ...VALID_FINDINGS,
+    triage: { ...VALID_FINDINGS.triage, touches_public_api: true },
+    manual_test_recommendation: {
+      recommended: true,
+      surface: "api",
+      rationale: "adds a new public REST endpoint",
+    },
+  };
+  assertValid(
+    good,
+    FINDINGS_SCHEMA as unknown as Schema,
+    "FINDINGS_SCHEMA api surface",
+  );
+});
+
+test("FINDINGS_SCHEMA: manual_test_recommendation with ui surface conforms", () => {
+  const good = {
+    ...VALID_FINDINGS,
+    triage: { ...VALID_FINDINGS.triage, touches_ui: true },
+    manual_test_recommendation: {
+      recommended: true,
+      surface: "ui",
+      rationale: "modifies a user-facing component",
+    },
+  };
+  assertValid(
+    good,
+    FINDINGS_SCHEMA as unknown as Schema,
+    "FINDINGS_SCHEMA ui surface",
   );
 });
 

@@ -219,3 +219,13 @@ Format: `<block> · <decision> · <why>`
 - backfill-2b-run-engine-test · `src/runtime/run-engine.test.ts` tests `makeRunId` only — the pure exported helper, not orchestration · `startRun`, `resumeRun`, `runDag`, and collaborators are Tier C (owned by smoke); this file tests only the extracted pure function with no orchestration dependencies; the file is explicitly scoped in its header comment to prevent drift
 
 - backfill-2b-golden-teeth-captured · teeth evidence captured by perturbation-run-revert for `buildSeededSettings` (SessionStart→SessionXtart) and `formatAgentContext` (acceptEdits→acceptXdits) · both goldens went red on a one-char change and green on revert; `report.golden.snap` teeth were already proven in-session during the .html→.snap rename incident (prettified snapshot failed, raw snapshot passed)
+
+## verify-election-observability-recommendation
+
+- verify-obs · manual_test_recommendation is a field in findings.json (NOT a new artifact) · "review = one findings.json contract" is a locked decision; adding a second artifact would require changes to the produces contract and DAG produces-check; a field is a schema extension (validate at load, no DAG plumbing changes); this is the justified choice for advisory data that is produced by review and consumed by run-engine
+
+- verify-obs · formatVerifyRecommendation reads the stored recommended/surface/rationale from findings.json; it does NOT recompute from triage booleans · computation (touches_public_api || touches_ui → recommended) lives in review.md (model judgment); the formatter is a pure rendering helper; keeping them separate preserves "code coordinates, model judges"
+
+- verify-obs · advisory printed BEFORE the opts.verify branch, covering both interactive prompt and --verify flag paths · single print placement means no code duplication; both headless/queue runs (--verify) and interactive runs see the advisory recorded in stdout; the election itself and its default are unchanged
+
+- verify-obs · fail-soft is the justified exception to fail-loud · the recommendation is advisory, not load-bearing; findings.json may be absent (verify-election runs even when review was skipped or malformed); a try/catch around file-read + JSON.parse + field-presence guards all three degrade paths; the bare prompt is always the fallback
