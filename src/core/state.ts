@@ -62,6 +62,8 @@ export type NodeState = {
   gateHistory: GateHistoryEntry[];
   /** Last error message if status === 'failed'. */
   error?: string;
+  /** Number of interrupt-driven retries consumed. Absent = 0. */
+  interruptRetries?: number;
 };
 
 // ---------------------------------------------------------------------------

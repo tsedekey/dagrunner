@@ -36,6 +36,8 @@ function makeNodeState(
   if (overrides.model !== undefined) base.model = overrides.model;
   if (overrides.sessionId !== undefined) base.sessionId = overrides.sessionId;
   if (overrides.error !== undefined) base.error = overrides.error;
+  if (overrides.interruptRetries !== undefined)
+    base.interruptRetries = overrides.interruptRetries;
   return base;
 }
 
@@ -169,5 +171,57 @@ test("readState: missing file throws", () => {
       assert.equal(nodeErr.code, "ENOENT");
       return true;
     },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Test: interruptRetries round-trip (present + absent-treated-as-zero)
+// ---------------------------------------------------------------------------
+
+test("state round-trip: interruptRetries persisted; absent field treated as 0", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dr-state-"));
+  const statePath = join(dir, "state.json");
+
+  const original: RunState = {
+    runId: "irr-rt-test",
+    workflow: "feature",
+    createdAt: "2026-06-18T00:00:00.000Z",
+    updatedAt: "2026-06-18T00:00:00.000Z",
+    status: "running",
+    worktreePath: "/tmp/wt",
+    branch: "feature/irr-rt-test",
+    sourcePlanPath: "/tmp/plan.md",
+    nodes: {
+      withRetries: makeNodeState({
+        status: "failed",
+        error: "process interrupted — reconciled on resume",
+        interruptRetries: 2,
+      }),
+      withoutRetries: makeNodeState({ status: "pending" }),
+    },
+  };
+
+  writeState(statePath, original);
+  const restored = readState(statePath);
+
+  assert.deepStrictEqual(restored, original);
+
+  // interruptRetries:2 must survive the round-trip.
+  assert.equal(
+    restored.nodes["withRetries"]?.interruptRetries,
+    2,
+    "interruptRetries must be preserved through JSON serialisation",
+  );
+
+  // Absent interruptRetries reads back as undefined (absent), treated as 0 by callers.
+  assert.equal(
+    restored.nodes["withoutRetries"]?.interruptRetries,
+    undefined,
+    "absent interruptRetries must remain absent (not written as null/0)",
+  );
+  assert.equal(
+    restored.nodes["withoutRetries"]?.interruptRetries ?? 0,
+    0,
+    "absent interruptRetries ?? 0 === 0 (backward-compat: missing ⇒ zero)",
   );
 });

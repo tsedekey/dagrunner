@@ -58,7 +58,9 @@ import {
 
 import { readState, writeState } from "./state.js";
 import type { RunState, NodeState } from "./state.js";
-import type { Node } from "./types.js";
+import type { Node, Workflow, Ctx } from "./types.js";
+import { createMockExecutor } from "../runtime/mock-executor.js";
+import type { NodeExecutor } from "../runtime/mock-executor.js";
 
 // ---------------------------------------------------------------------------
 // Helper: build a minimal NodeState with no optional fields set to undefined
@@ -82,6 +84,8 @@ function makeNodeState(
   if (overrides.model !== undefined) base.model = overrides.model;
   if (overrides.sessionId !== undefined) base.sessionId = overrides.sessionId;
   if (overrides.error !== undefined) base.error = overrides.error;
+  if (overrides.interruptRetries !== undefined)
+    base.interruptRetries = overrides.interruptRetries;
   return base;
 }
 
@@ -557,4 +561,252 @@ test("[expected-fail until Block4] Test 7 — optional dep skipped → downstrea
     ready.includes("b"),
     "b must be ready when its only dep (optional 'a') is skipped",
   );
+});
+
+// ---------------------------------------------------------------------------
+// Tests 8-9 — interrupt-retry cap (resetInterruptedNodes)
+// ---------------------------------------------------------------------------
+
+const INTERRUPT_ERROR = "process interrupted — reconciled on resume";
+
+test("interrupt-retry: under cap — resetInterruptedNodes resets to pending + increments counter", async () => {
+  const { resetInterruptedNodes } = (await import(DAG_MODULE)) as {
+    resetInterruptedNodes: (state: RunState, maxRetries: number) => RunState;
+  };
+
+  const state: RunState = {
+    runId: "irr-under",
+    workflow: "feature",
+    createdAt: "2026-06-18T00:00:00.000Z",
+    updatedAt: "2026-06-18T00:00:00.000Z",
+    status: "running",
+    worktreePath: "/tmp/wt",
+    branch: "feature/irr-under",
+    sourcePlanPath: "/tmp/plan.md",
+    nodes: {
+      "node-a": makeNodeState({
+        status: "failed",
+        error: INTERRUPT_ERROR,
+        // interruptRetries absent → treated as 0
+      }),
+    },
+  };
+
+  const result = resetInterruptedNodes(state, 2);
+
+  assert.equal(
+    result.nodes["node-a"]?.status,
+    "pending",
+    "under-cap node must reset to pending",
+  );
+  assert.equal(
+    result.nodes["node-a"]?.interruptRetries,
+    1,
+    "counter must increment to 1",
+  );
+});
+
+test("interrupt-retry: at cap — resetInterruptedNodes leaves node failed", async () => {
+  const { resetInterruptedNodes } = (await import(DAG_MODULE)) as {
+    resetInterruptedNodes: (state: RunState, maxRetries: number) => RunState;
+  };
+
+  const state: RunState = {
+    runId: "irr-cap",
+    workflow: "feature",
+    createdAt: "2026-06-18T00:00:00.000Z",
+    updatedAt: "2026-06-18T00:00:00.000Z",
+    status: "running",
+    worktreePath: "/tmp/wt",
+    branch: "feature/irr-cap",
+    sourcePlanPath: "/tmp/plan.md",
+    nodes: {
+      "node-a": makeNodeState({
+        status: "failed",
+        error: INTERRUPT_ERROR,
+        interruptRetries: 2, // at cap
+      }),
+    },
+  };
+
+  const result = resetInterruptedNodes(state, 2);
+
+  assert.equal(
+    result.nodes["node-a"]?.status,
+    "failed",
+    "at-cap node must stay failed",
+  );
+  assert.equal(
+    result.nodes["node-a"]?.interruptRetries,
+    2,
+    "counter must not change",
+  );
+});
+
+test("interrupt-retry: teeth-check — cap=0 means never retry (node stays failed on first interrupt)", async () => {
+  const { resetInterruptedNodes } = (await import(DAG_MODULE)) as {
+    resetInterruptedNodes: (state: RunState, maxRetries: number) => RunState;
+  };
+
+  const state: RunState = {
+    runId: "irr-zero",
+    workflow: "feature",
+    createdAt: "2026-06-18T00:00:00.000Z",
+    updatedAt: "2026-06-18T00:00:00.000Z",
+    status: "running",
+    worktreePath: "/tmp/wt",
+    branch: "feature/irr-zero",
+    sourcePlanPath: "/tmp/plan.md",
+    nodes: {
+      "node-a": makeNodeState({
+        status: "failed",
+        error: INTERRUPT_ERROR,
+        // interruptRetries absent → 0
+      }),
+    },
+  };
+
+  const result = resetInterruptedNodes(state, 0);
+
+  assert.equal(
+    result.nodes["node-a"]?.status,
+    "failed",
+    "cap=0: node must stay failed immediately",
+  );
+});
+
+test("interrupt-retry: under cap — runDag completes run after reset (mock executor, no SDK)", async () => {
+  const { resetInterruptedNodes, runDag } = (await import(DAG_MODULE)) as {
+    resetInterruptedNodes: (state: RunState, maxRetries: number) => RunState;
+    runDag: (
+      workflow: Workflow,
+      executor: NodeExecutor,
+      state: RunState,
+      opts: { ctx: Ctx; stateFile: string },
+    ) => Promise<RunState>;
+  };
+
+  const tmpDir = mkdtempSync(join(tmpdir(), "dr-irr-under-"));
+  const stateFile = join(tmpDir, "state.json");
+
+  const initialState: RunState = {
+    runId: "irr-run-under",
+    workflow: "feature",
+    createdAt: "2026-06-18T00:00:00.000Z",
+    updatedAt: "2026-06-18T00:00:00.000Z",
+    status: "running",
+    worktreePath: tmpDir,
+    branch: "feature/irr-run-under",
+    sourcePlanPath: "/tmp/plan.md",
+    nodes: {
+      "node-a": makeNodeState({ status: "failed", error: INTERRUPT_ERROR }),
+    },
+  };
+
+  // Apply interrupt-retry reset (under cap → pending).
+  const stateAfterReset = resetInterruptedNodes(initialState, 2);
+  assert.equal(stateAfterReset.nodes["node-a"]?.status, "pending");
+
+  writeState(stateFile, stateAfterReset);
+
+  const executor = createMockExecutor({ "node-a": "success" });
+  const ctx: Ctx = {
+    json: () => ({}),
+    read: () => "",
+    dir: (id: string) => join(tmpDir, id),
+  };
+
+  const result = await runDag(
+    { name: "feature", nodes: [{ id: "node-a", command: "/a" }] },
+    executor,
+    stateAfterReset,
+    { ctx, stateFile },
+  );
+
+  assert.equal(
+    result.status,
+    "done",
+    "run must complete done when interrupted node retries successfully",
+  );
+  assert.equal(result.nodes["node-a"]?.status, "done");
+});
+
+test("interrupt-retry: at cap — runDag ends failed without looping (terminates, no SDK call)", async () => {
+  const { resetInterruptedNodes, runDag } = (await import(DAG_MODULE)) as {
+    resetInterruptedNodes: (state: RunState, maxRetries: number) => RunState;
+    runDag: (
+      workflow: Workflow,
+      executor: NodeExecutor,
+      state: RunState,
+      opts: { ctx: Ctx; stateFile: string },
+    ) => Promise<RunState>;
+  };
+
+  const tmpDir = mkdtempSync(join(tmpdir(), "dr-irr-cap-"));
+  const stateFile = join(tmpDir, "state.json");
+
+  const initialState: RunState = {
+    runId: "irr-run-cap",
+    workflow: "feature",
+    createdAt: "2026-06-18T00:00:00.000Z",
+    updatedAt: "2026-06-18T00:00:00.000Z",
+    status: "running",
+    worktreePath: tmpDir,
+    branch: "feature/irr-run-cap",
+    sourcePlanPath: "/tmp/plan.md",
+    nodes: {
+      "node-a": makeNodeState({
+        status: "failed",
+        error: INTERRUPT_ERROR,
+        interruptRetries: 2, // at cap
+      }),
+    },
+  };
+
+  // Apply interrupt-retry reset (at cap → stays failed).
+  const stateAfterReset = resetInterruptedNodes(initialState, 2);
+  assert.equal(
+    stateAfterReset.nodes["node-a"]?.status,
+    "failed",
+    "at cap: must remain failed",
+  );
+
+  writeState(stateFile, stateAfterReset);
+
+  // The executor must never be called — node is already terminal.
+  let executorCallCount = 0;
+  const executor = createMockExecutor({});
+  const trackingExecutor: NodeExecutor = async (id, node, ctx) => {
+    executorCallCount++;
+    return executor(id, node, ctx);
+  };
+
+  const ctx: Ctx = {
+    json: () => ({}),
+    read: () => "",
+    dir: (id: string) => join(tmpDir, id),
+  };
+
+  const result = await runDag(
+    { name: "feature", nodes: [{ id: "node-a", command: "/a" }] },
+    trackingExecutor,
+    stateAfterReset,
+    { ctx, stateFile },
+  );
+
+  assert.equal(
+    result.status,
+    "failed",
+    "run must end failed when interrupted node exhausts cap",
+  );
+  assert.equal(result.nodes["node-a"]?.status, "failed");
+  assert.equal(
+    executorCallCount,
+    0,
+    "executor must never be called for a capped node — proves no infinite loop",
+  );
+
+  // Confirm stateFile was written (runDag settles to failed).
+  const written = readState(stateFile);
+  assert.equal(written.status, "failed");
 });

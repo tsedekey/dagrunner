@@ -31,8 +31,12 @@ import type { DagrunnerConfig } from "../config/xdg.js";
 import { readState, writeState } from "../core/state.js";
 import type { RunState, NodeState, NodeStatus } from "../core/state.js";
 import type { ExecutionCtx } from "./mock-executor.js";
-import { reconcileRunningNodes } from "../core/dag.js";
-import { runDag } from "../core/dag.js";
+import {
+  reconcileRunningNodes,
+  resetInterruptedNodes,
+  MAX_INTERRUPT_RETRIES,
+  runDag,
+} from "../core/dag.js";
 import { acquireLock, releaseLock } from "../core/lock.js";
 import { makeSDKRunner } from "./sdk-runner.js";
 import { featureWorkflow } from "../workflow/feature-workflow.js";
@@ -263,28 +267,23 @@ export async function resumeRun(opts: {
   const workflow = workflowFromState(state);
 
   // Any node that was running when the process was interrupted is marked
-  // failed by reconcileRunningNodes. Reset ALL such nodes to pending so
-  // they are retried — not just optional ones. For optional nodes the risk
-  // is silent skip cascade; for required nodes the risk is the run ending
-  // as "failed" even though the node only stopped because of Ctrl+C.
+  // failed by reconcileRunningNodes. Reset interrupted nodes to pending up
+  // to MAX_INTERRUPT_RETRIES times; beyond the cap, leave them failed so
+  // a genuinely broken node eventually settles the run to "failed".
+  const stateBefore = state;
+  state = resetInterruptedNodes(state, MAX_INTERRUPT_RETRIES);
   for (const [id, ns] of Object.entries(state.nodes)) {
-    if (
+    const prev = stateBefore.nodes[id];
+    if (ns.status === "pending" && prev?.status === "failed") {
+      process.stdout.write(
+        `dagrun: node "${id}" was interrupted — resetting to pending for retry (attempt ${String(ns.interruptRetries ?? 0)}/${String(MAX_INTERRUPT_RETRIES)})\n`,
+      );
+    } else if (
       ns.status === "failed" &&
       ns.error === "process interrupted — reconciled on resume"
     ) {
-      // Omit error/endedAt via destructuring — exactOptionalPropertyTypes
-      // forbids explicit `undefined` on optional properties.
-      const { error: _e, endedAt: _ea, ...nsRest } = ns;
-      state = {
-        ...state,
-        nodes: {
-          ...state.nodes,
-          [id]: { ...nsRest, status: "pending" },
-        },
-        updatedAt: new Date().toISOString(),
-      };
       process.stdout.write(
-        `dagrun: node "${id}" was interrupted — resetting to pending for retry\n`,
+        `dagrun: node "${id}" interrupted retry cap (${String(MAX_INTERRUPT_RETRIES)}) exceeded — leaving failed\n`,
       );
     }
   }

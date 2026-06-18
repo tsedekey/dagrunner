@@ -94,6 +94,45 @@ export function computeReadyNodes(
 }
 
 // ---------------------------------------------------------------------------
+// Interrupt-retry cap
+// ---------------------------------------------------------------------------
+
+/** Max times a process-interrupted node is reset to pending before it stays failed. */
+export const MAX_INTERRUPT_RETRIES = 2;
+
+const INTERRUPT_ERROR = "process interrupted — reconciled on resume";
+
+/**
+ * For each node that failed with the interrupt-reconcile error, reset it to
+ * pending (incrementing interruptRetries) if under cap, or leave it failed if
+ * at/over cap. Ordinary failures are untouched.
+ */
+export function resetInterruptedNodes(
+  state: RunState,
+  maxRetries: number,
+): RunState {
+  let nodes = { ...state.nodes };
+  let changed = false;
+  for (const [id, ns] of Object.entries(nodes)) {
+    if (ns.status !== "failed" || ns.error !== INTERRUPT_ERROR) continue;
+    const retries = ns.interruptRetries ?? 0;
+    if (retries < maxRetries) {
+      // Omit error/endedAt — exactOptionalPropertyTypes forbids explicit undefined.
+      const { error: _e, endedAt: _ea, ...nsRest } = ns;
+      nodes = {
+        ...nodes,
+        [id]: { ...nsRest, status: "pending", interruptRetries: retries + 1 },
+      };
+      changed = true;
+    }
+    // else: cap hit — leave as failed
+  }
+  return changed
+    ? { ...state, nodes, updatedAt: new Date().toISOString() }
+    : state;
+}
+
+// ---------------------------------------------------------------------------
 // reconcileRunningNodes
 // ---------------------------------------------------------------------------
 

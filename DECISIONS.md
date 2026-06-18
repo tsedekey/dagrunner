@@ -164,6 +164,18 @@ Format: `<block> · <decision> · <why>`
 
 - smoke-step8-flaky · smoke test step 8 (reconcile running→failed integration) is a **flaky timing-dependent** test, not a structural failure — restructure-independent · root cause: engine's retry logic resets reconciled-failed node to pending; the re-triggered `implement` node issues a **real API call** against the live toy run; if that call completes within the 60s `runCli` timeout the result is `done` (test expects `failed`); if the timeout fires first the state is left as `running` (test also expects `failed`); `failed` is only returned if the API call fast-fails; outcome is non-deterministic on any SDK latency; NOT caused by restructuring (steps 1-7 all pass and exercise the same reconcile → runDag paths through the restructured import graph; reconcileRunningNodes unit test passes); baseline confirmation absent due to stash/pop race in earlier baseline attempts — the timing-flakiness explanation is the accurate root cause and explains both the `running` and any past `done` results
 
+## fix-interrupt-retry-cap
+
+- fix-interrupt-retry-cap · `MAX_INTERRUPT_RETRIES = 2` (3 total attempts: original + 2 retries) · transient process kills deserve at least two retry chances before the run settles to failed; 3 total attempts matches common infra-retry conventions and keeps the cap visible in a single constant; making it CLI-configurable is deferred (constant suffices for v1)
+
+- fix-interrupt-retry-cap · `resetInterruptedNodes` is a pure exported function in `dag.ts`, not inline in `run-engine.ts` · pure seam enables deterministic tier-1 testing without running the full resume path; consistent with `reconcileRunningNodes` pattern; `run-engine.ts` calls it and handles logging (keeping dag.ts side-effect-free)
+
+- fix-interrupt-retry-cap · `interruptRetries` counter is separate from `iteration` (gate counter) · conflating them would corrupt gate-maxIterations semantics; the cap applies ONLY to nodes whose error is the exact interrupt-reconcile string, never to ordinary node failures
+
+- fix-interrupt-retry-cap · smoke step 8 de-flaked by asserting `implement !== "running"` (not `=== "failed"`) · the re-run after retry may complete done, failed, or timeout within 60s; the tier-1 mock-executor tests own the exact branch assertions; smoke proves only the reconcile plumbing (running→not-running)
+
+- fix-interrupt-retry-cap · coordinator self-edited (no author subagent delegated) · change is confined to 6 files with no cross-agent dependencies; spawning engine-author for a 25-line edit would have introduced hand-off overhead with no quality benefit; logged per autonomy protocol
+
 ## unit-test-backfill-2a (Tier A core tests)
 
 - backfill-2a-test-overlap · `workflow.test.ts` and `state.test.ts` partially overlap with `dag.test.ts` tests 4a-4d and 5/5b · intentional design: co-located `*.test.ts` files are the canonical home per the test conventions; `dag.test.ts` is preserved as-is because it also hosts the Block-4 expected-fail stubs (tests 1-3, 6, 7) that must stay in place for the engine author; deleting 4a-4d from dag.test.ts while those stubs exist would create a confusing split file — the overlap is cheap (pure, in-memory, sub-1ms per test)
