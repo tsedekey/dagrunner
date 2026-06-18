@@ -18,11 +18,11 @@ North star: **strip everything predictive out of the front of the pipeline; deci
 
 ## 2. System components
 
-| #   | Component                                | Runs where                                           | Role                                                                                                                                                                                     |
-| --- | ---------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | **Glean Agent (Feature Task Companion)** | Glean                                                | Ingests a GitHub task; emits a directional implementation plan (INTENT/why). dagrunner's expand writes the code-level HOW. The plan is dagrunner's inbox input — no GitHub issue needed. |
-| 2   | **dagrunner (static feature pipeline)**  | local machine                                        | The gated feature pipeline. The heart of the system.                                                                                                                                     |
-| 3   | **Three Phase-3 siblings**               | Camunda monorepo private `.claude/`, run in worktree | Interactive human-driven commands acting on Camunda: `/seed-data` (c8ctl seeding of a human-started OC), `ci-babysit`, `pr-triage`. See §9.                                              |
+| #   | Component                                | Runs where                                           | Role                                                                                                                                                                                                                                                 |
+| --- | ---------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **Glean Agent (Feature Task Companion)** | Glean                                                | Ingests a GitHub task; emits a directional implementation plan (INTENT/why). dagrunner's expand writes the code-level HOW and critically evaluates the plan's proposed implementation. The plan is dagrunner's inbox input — no GitHub issue needed. |
+| 2   | **dagrunner (static feature pipeline)**  | local machine                                        | The gated feature pipeline. The heart of the system.                                                                                                                                                                                                 |
+| 3   | **Three Phase-3 siblings**               | Camunda monorepo private `.claude/`, run in worktree | Interactive human-driven commands acting on Camunda: `/seed-data` (c8ctl seeding of a human-started OC), `ci-babysit`, `pr-triage`. See §9.                                                                                                          |
 
 Phase 3 is three LOCAL siblings (/seed-data + ci-babysit + pr-triage) — one substrate, enterprise subscription locally. `/pr-review` is NOT a dagrunner sibling: it stays a private standalone command for reviewing OTHERS' PRs (see §9). gh-aw and dynamic-workflows-in-pipeline are not used (see §9 rationale).
 
@@ -35,6 +35,10 @@ Phase 3 is three LOCAL siblings (/seed-data + ci-babysit + pr-triage) — one su
    [PREFLIGHT] (not a node; runs before the graph)
         |
   expand (unpinned)   ★ GATE 1: review the guide (conversation-led)
+                        → elaborates a usable implementation guide AND critically evaluates the plan's proposed
+                          implementation; surfaces a "Concerns / plan challenges" section in guide.md when the
+                          plan over-specifies, diverges from the source issue, or is incomplete (advisory — no
+                          hard block; human reviews at Gate 1)
   implement (unpinned)
   review (static node):
      - diff-triage first step (haiku): read diff -> touches_* flags

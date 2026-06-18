@@ -243,3 +243,17 @@ Format: `<block> · <decision> · <why>`
 - pin-versions · checkClaudeCliVersion extracted as pure TDD-able seam separate from runPreflight · the execSync("claude --version") call in runPreflight is not unit-testable without process stubbing; extracting the pure parse+compare logic as checkClaudeCliVersion(out, expected, skip) enables full unit coverage (parse, match, mismatch, unparseable, skip-bypass) without mocking; pattern mirrors backfill-2b-preflight-partial precedent
 
 - pin-versions · DAGRUN_SKIP_CLI_VERSION_CHECK=1 override provided · build or test scenarios may deliberately run against a different CLI version (e.g. testing a new version before updating the pin); a hard no-override would block that workflow; the env var is explicit and documented, consistent with fail-loud posture (bypass is intentional, not accidental)
+
+## expand-challenge (node-prompt change: expand now critically evaluates plans)
+
+- expand-challenge · prompt authored directly by coordinator, not delegated to engine-author · this change is pure prose (no TS code); delegating to a subagent would add latency without value; logged as deviation from the default delegate pattern
+
+- expand-challenge · "Concerns / plan challenges" section goes into guide.md — no new artifact · uses the existing Gate 1 channel; `produces` stays `guide.md`; inventing a new artifact or gate would violate the reuse-law
+
+- expand-challenge · concerns section omitted entirely on clean plans — explicit blessed outcome · the "if clean, omit" instruction prevents the model padding with marginal concerns to fill the section; over-flagging is the failure mode the plan warns against as "crying wolf"
+
+- expand-challenge · issue consultation is fail-soft: if no URL present, or URL unreachable, use requirement as stated · master doc §2 says "no GitHub issue needed" — issues are optional inbox inputs; the expand node must not fail when no issue link exists; sandbox allows github.com + api.github.com so WebFetch works for linked issues
+
+- expand-challenge · toy-repo fixture expand.md updated to match payload/commands/expand.md · the fixture is never executed (run-engine.ts line 344 cpSync overwrites it from payload/ at start time), but keeping it divergent creates misleading drift; kept in sync as documentation
+
+- expand-challenge · bad-plan.md fixture created at test/smoke/fixtures/bad-plan.md · over-specified plan (LRU cache, circuit-breaker, JWT auth, Micrometer for a trivial GET /hello) for manual smoke:live validation; not wired into smoke.ts (human-reviewed outcome)
