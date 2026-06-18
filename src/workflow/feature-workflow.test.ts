@@ -1,6 +1,6 @@
 /**
- * feature-workflow.test.ts — schema-contract tests for CLASSIFY_SCHEMA,
- * FINDINGS_SCHEMA, and featureWorkflow validity.
+ * feature-workflow.test.ts — schema-contract tests for FINDINGS_SCHEMA
+ * and featureWorkflow validity.
  *
  * Strategy: hand-rolled minimal JSON Schema validator covering the subset
  * these schemas use (type/properties/required/enum/items/additionalProperties).
@@ -15,11 +15,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import {
-  CLASSIFY_SCHEMA,
-  FINDINGS_SCHEMA,
-  featureWorkflow,
-} from "./feature-workflow.js";
+import { FINDINGS_SCHEMA, featureWorkflow } from "./feature-workflow.js";
 import { loadWorkflow } from "./workflow.js";
 
 // ---------------------------------------------------------------------------
@@ -137,31 +133,6 @@ function assertInvalid(value: unknown, schema: Schema, label = ""): void {
 }
 
 // ---------------------------------------------------------------------------
-// CLASSIFY_SCHEMA well-formedness
-// ---------------------------------------------------------------------------
-
-test("CLASSIFY_SCHEMA: required fields are a subset of defined properties", () => {
-  const props = Object.keys(CLASSIFY_SCHEMA.properties);
-  for (const req of CLASSIFY_SCHEMA.required) {
-    assert.ok(props.includes(req), `required field "${req}" not in properties`);
-  }
-});
-
-test("CLASSIFY_SCHEMA: additionalProperties:false is present", () => {
-  assert.equal(CLASSIFY_SCHEMA.additionalProperties, false);
-});
-
-test("CLASSIFY_SCHEMA: all property types are 'boolean'", () => {
-  for (const [name, prop] of Object.entries(CLASSIFY_SCHEMA.properties)) {
-    assert.equal(
-      (prop as Record<string, unknown>)["type"],
-      "boolean",
-      `property "${name}" must have type "boolean"`,
-    );
-  }
-});
-
-// ---------------------------------------------------------------------------
 // FINDINGS_SCHEMA well-formedness
 // ---------------------------------------------------------------------------
 
@@ -243,57 +214,6 @@ test("FINDINGS_SCHEMA: findings items severity enum is non-empty", () => {
     Array.isArray(severityEnum["enum"]) &&
       (severityEnum["enum"] as unknown[]).length > 0,
     "severity enum must be non-empty",
-  );
-});
-
-// ---------------------------------------------------------------------------
-// CLASSIFY_SCHEMA: conforming and non-conforming fixtures
-// ---------------------------------------------------------------------------
-
-const VALID_CLASSIFY = {
-  touches_public_api: true,
-  touches_runtime: false,
-  perf_sensitive: true,
-  touches_schema_or_proto: false,
-};
-
-test("CLASSIFY_SCHEMA: valid fixture conforms", () => {
-  assertValid(
-    VALID_CLASSIFY,
-    CLASSIFY_SCHEMA as unknown as Schema,
-    "CLASSIFY_SCHEMA valid",
-  );
-});
-
-test("CLASSIFY_SCHEMA: missing required field fails validation (teeth)", () => {
-  const missing = {
-    touches_public_api: true,
-    touches_runtime: false,
-    // perf_sensitive missing
-    touches_schema_or_proto: false,
-  };
-  assertInvalid(
-    missing,
-    CLASSIFY_SCHEMA as unknown as Schema,
-    "CLASSIFY_SCHEMA missing field",
-  );
-});
-
-test("CLASSIFY_SCHEMA: additional property fails validation (teeth)", () => {
-  const extra = { ...VALID_CLASSIFY, extra_field: true };
-  assertInvalid(
-    extra,
-    CLASSIFY_SCHEMA as unknown as Schema,
-    "CLASSIFY_SCHEMA extra field",
-  );
-});
-
-test("CLASSIFY_SCHEMA: wrong type for field fails validation (teeth)", () => {
-  const wrongType = { ...VALID_CLASSIFY, touches_public_api: "yes" };
-  assertInvalid(
-    wrongType,
-    CLASSIFY_SCHEMA as unknown as Schema,
-    "CLASSIFY_SCHEMA wrong type",
   );
 });
 

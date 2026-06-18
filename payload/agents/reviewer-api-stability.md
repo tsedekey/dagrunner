@@ -1,6 +1,6 @@
 ---
 name: reviewer-api-stability
-description: API-stability reviewer. Checks for breaking changes to public method signatures, REST endpoints, event schemas, or serialised types that downstream callers depend on. Runs when classify.touches_public_api is true. Returns findings as a JSON array.
+description: API-stability reviewer. Checks for breaking changes to public method signatures, REST endpoints, event schemas, or serialised types that downstream callers depend on. Runs when diff triage sets touches_public_api=true. Returns findings as a JSON array.
 tools: Read, Bash
 model: claude-sonnet-4-6
 ---

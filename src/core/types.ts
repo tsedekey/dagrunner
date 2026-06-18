@@ -88,7 +88,7 @@ export type Node = {
   model?: ModelTier;
   /** Tool names auto-allowed for this node's SDK session. */
   allowedTools?: string[];
-  /** JSON schema for structured output (classify node etc.). */
+  /** JSON schema for structured output. */
   outputSchema?: Record<string, unknown>;
   /** Artifact files this node must produce; verified post-run by the runner. */
   produces?: string[];
@@ -128,22 +128,4 @@ export type Workflow = {
   nodes: Node[];
   /** Max concurrent SDK sessions. Default 6. */
   maxParallel?: number;
-};
-
-// ---------------------------------------------------------------------------
-// classify.json schema
-// ---------------------------------------------------------------------------
-
-/**
- * Shape of the structured JSON object that the `classify` node emits.
- * Classify is DORMANT in v1 (removed from the production pipeline; returns in
- * Phase 5/6 as a task-type router: feature/bug/tech-debt).
- * Runner writes this from SDK `structured_output`; downstream `when` predicates
- * read it via `ctx.json('classify')`.
- */
-export type ClassifyOutput = {
-  touches_public_api: boolean;
-  touches_runtime: boolean;
-  perf_sensitive: boolean;
-  touches_schema_or_proto: boolean;
 };

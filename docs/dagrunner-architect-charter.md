@@ -98,4 +98,4 @@ Hooks are shared infra and stay in `.claude/hooks/`.
 ## Trajectory
 
 dagrunner today handles **feature tasks** only. Planned expansion to bug-fix / tech-debt /
-refactor task types (Phases 4–6), where `classify` returns as an upfront task-type router.
+refactor task types (Phases 4–6), where a task-type router will be designed fresh when needed.

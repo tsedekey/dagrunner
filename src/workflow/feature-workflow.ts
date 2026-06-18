@@ -13,29 +13,6 @@
 import type { Workflow } from "../core/types.js";
 
 // ---------------------------------------------------------------------------
-// classify.json JSON schema
-// DORMANT — classify node removed from production pipeline in Phase 2a.
-// Retained as a schema reference for Phase 5/6 revival as a task-type router.
-// ---------------------------------------------------------------------------
-
-export const CLASSIFY_SCHEMA = {
-  type: "object",
-  properties: {
-    touches_public_api: { type: "boolean" },
-    touches_runtime: { type: "boolean" },
-    perf_sensitive: { type: "boolean" },
-    touches_schema_or_proto: { type: "boolean" },
-  },
-  required: [
-    "touches_public_api",
-    "touches_runtime",
-    "perf_sensitive",
-    "touches_schema_or_proto",
-  ],
-  additionalProperties: false,
-} as const satisfies Record<string, unknown>;
-
-// ---------------------------------------------------------------------------
 // findings.json JSON schema (dagrunner-owned; single source of truth)
 // ---------------------------------------------------------------------------
 

@@ -7,8 +7,8 @@
  *      completes — the human approve step marks them done in run-engine.ts.
  *   3. On resume (ctx.sessionId set) + feedback present, feed feedback as the
  *      next user turn so Claude revises with full session memory (Theme 5).
- *   4. classify.json is written from SDK structured_output deterministically by
- *      the runner, not by the node itself.
+ *   4. Structured output (outputSchema nodes) is written from SDK structured_output
+ *      deterministically by the runner, not by the node itself.
  */
 
 import { query } from "@anthropic-ai/claude-agent-sdk";

@@ -1,6 +1,6 @@
 ---
 name: reviewer-distributed-systems
-description: Distributed-systems reviewer. Checks for correctness issues specific to distributed execution: idempotency, ordering, partial failure, backpressure, retry storms, split-brain, and Zeebe/Camunda-specific job-worker patterns. Runs when classify.touches_runtime is true.
+description: Distributed-systems reviewer. Checks for correctness issues specific to distributed execution: idempotency, ordering, partial failure, backpressure, retry storms, split-brain, and Zeebe/Camunda-specific job-worker patterns. Runs when diff triage sets touches_runtime=true.
 tools: Read, Bash
 ---
 

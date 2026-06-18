@@ -11,13 +11,10 @@
  *   4. All gate.onReject of form `rerun:<id>` reference known node IDs
  *   5. No cycles (Kahn's algorithm)
  *
- * Also exports validateClassifyOutput for runtime shape-checking of
- * classify.json artifacts.
- *
  * No external dependencies — hand-rolled validation only.
  */
 
-import type { ClassifyOutput, Workflow } from "../core/types.js";
+import type { Workflow } from "../core/types.js";
 
 // ---------------------------------------------------------------------------
 // loadWorkflow
@@ -132,47 +129,6 @@ export function loadWorkflow(def: Workflow): Workflow {
 }
 
 // ---------------------------------------------------------------------------
-// validateClassifyOutput
-// ---------------------------------------------------------------------------
-
-/**
- * Runtime shape-guard for classify.json artifacts.
- * Throws a descriptive error if data does not match ClassifyOutput.
- */
-export function validateClassifyOutput(data: unknown): ClassifyOutput {
-  if (data === null || typeof data !== "object" || Array.isArray(data)) {
-    throw new Error(
-      "validateClassifyOutput: expected a JSON object, got " +
-        (data === null ? "null" : Array.isArray(data) ? "array" : typeof data),
-    );
-  }
-
-  const obj = data as Record<string, unknown>;
-
-  const boolFields = [
-    "touches_public_api",
-    "touches_runtime",
-    "perf_sensitive",
-    "touches_schema_or_proto",
-  ] as const;
-
-  for (const field of boolFields) {
-    if (typeof obj[field] !== "boolean") {
-      throw new Error(
-        `validateClassifyOutput: field "${field}" must be boolean, got ${typeof obj[field]}`,
-      );
-    }
-  }
-
-  return {
-    touches_public_api: obj["touches_public_api"] as boolean,
-    touches_runtime: obj["touches_runtime"] as boolean,
-    perf_sensitive: obj["perf_sensitive"] as boolean,
-    touches_schema_or_proto: obj["touches_schema_or_proto"] as boolean,
-  };
-}
-
-// ---------------------------------------------------------------------------
 // Fixture workflows (consumed by the test-author)
 // ---------------------------------------------------------------------------
 
@@ -196,7 +152,7 @@ export const FIXTURE_VALID: Workflow = {
 };
 
 /**
- * Invalid: node "classify" declares model "opus" which is not a ModelTier.
+ * Invalid: node "step-a" declares model "opus" which is not a ModelTier.
  * Cast through unknown to bypass compile-time narrowing — the runtime check
  * must catch what the type system cannot (e.g. data loaded from disk/JSON).
  */
@@ -204,8 +160,8 @@ export const FIXTURE_BAD_MODEL: Workflow = {
   name: "fixture-bad-model",
   nodes: [
     {
-      id: "classify",
-      command: "/classify",
+      id: "step-a",
+      command: "/step-a",
       model: "opus" as unknown as "haiku",
     },
   ],
@@ -218,8 +174,8 @@ export const FIXTURE_BAD_DEPENDS: Workflow = {
   name: "fixture-bad-depends",
   nodes: [
     {
-      id: "classify",
-      command: "/classify",
+      id: "step-a",
+      command: "/step-a",
       model: "haiku",
     },
     {
@@ -231,19 +187,19 @@ export const FIXTURE_BAD_DEPENDS: Workflow = {
 };
 
 /**
- * Invalid: two nodes share the id "classify".
+ * Invalid: two nodes share the id "step-a".
  */
 export const FIXTURE_DUPLICATE_ID: Workflow = {
   name: "fixture-duplicate-id",
   nodes: [
     {
-      id: "classify",
-      command: "/classify",
+      id: "step-a",
+      command: "/step-a",
       model: "haiku",
     },
     {
-      id: "classify",
-      command: "/classify-again",
+      id: "step-a",
+      command: "/step-b",
     },
   ],
 };

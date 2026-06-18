@@ -59,11 +59,11 @@ test("state round-trip: write then read equals original", () => {
     branch: "feature/round-trip-test",
     sourcePlanPath: "/tmp/plan.md",
     nodes: {
-      classify: makeNodeState({
+      "step-a": makeNodeState({
         status: "done",
         startedAt: "2026-06-18T00:01:00.000Z",
         endedAt: "2026-06-18T00:02:00.000Z",
-        artifacts: ["/tmp/runs/round-trip-test/classify/classify.json"],
+        artifacts: ["/tmp/runs/round-trip-test/step-a/step-a.json"],
         model: "haiku",
         iteration: 0,
         cost: 0.0012,
@@ -110,7 +110,7 @@ test("state round-trip: optional fields absent from serialised NodeState", () =>
     branch: "feature/no-optionals-test",
     sourcePlanPath: "/tmp/plan.md",
     nodes: {
-      classify: makeNodeState({ status: "pending" }),
+      "step-a": makeNodeState({ status: "pending" }),
     },
   };
 
@@ -119,7 +119,7 @@ test("state round-trip: optional fields absent from serialised NodeState", () =>
 
   assert.deepStrictEqual(restored, original);
 
-  const nodeKeys = Object.keys(restored.nodes["classify"] ?? {});
+  const nodeKeys = Object.keys(restored.nodes["step-a"] ?? {});
   const requiredOnly = [
     "status",
     "artifacts",

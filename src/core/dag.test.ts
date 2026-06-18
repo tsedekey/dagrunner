@@ -108,8 +108,8 @@ test("[must pass now] Test 4a — bad model string throws with node name", () =>
     (err: unknown) => {
       assert.ok(err instanceof Error);
       assert.ok(
-        err.message.includes("classify"),
-        `Expected node name 'classify' in: ${err.message}`,
+        err.message.includes("step-a"),
+        `Expected node name 'step-a' in: ${err.message}`,
       );
       assert.ok(
         err.message.includes("opus") || err.message.includes("invalid model"),
@@ -144,8 +144,8 @@ test("[must pass now] Test 4c — duplicate node id throws with id name", () => 
     (err: unknown) => {
       assert.ok(err instanceof Error);
       assert.ok(
-        err.message.includes("classify"),
-        `Expected node id 'classify' in: ${err.message}`,
+        err.message.includes("step-a"),
+        `Expected node id 'step-a' in: ${err.message}`,
       );
       assert.ok(
         err.message.toLowerCase().includes("duplicate"),
@@ -192,11 +192,11 @@ test("[must pass now] Test 5 — state.json round-trip", () => {
     branch: "feature/4521-job-priority",
     sourcePlanPath: "/tmp/plan.md",
     nodes: {
-      classify: makeNodeState({
+      "step-a": makeNodeState({
         status: "done",
         startedAt: "2026-06-10T00:01:00.000Z",
         endedAt: "2026-06-10T00:02:00.000Z",
-        artifacts: ["/tmp/runs/4521/classify/classify.json"],
+        artifacts: ["/tmp/runs/4521/step-a/step-a.json"],
         model: "haiku",
         iteration: 0,
         cost: 0.0012,
@@ -240,7 +240,7 @@ test("[must pass now] Test 5b — state.json survives missing optional fields (n
     branch: "feature/test",
     sourcePlanPath: "/tmp/plan.md",
     nodes: {
-      classify: makeNodeState({ status: "pending" }),
+      "step-a": makeNodeState({ status: "pending" }),
     },
   };
 
@@ -250,7 +250,7 @@ test("[must pass now] Test 5b — state.json survives missing optional fields (n
   assert.deepStrictEqual(restored, original);
 
   // Paranoia: confirm no 'undefined' keys leaked into the node state.
-  const nodeKeys = Object.keys(restored.nodes["classify"] ?? {});
+  const nodeKeys = Object.keys(restored.nodes["step-a"] ?? {});
   const requiredOnly = [
     "status",
     "artifacts",
@@ -504,7 +504,7 @@ test("[expected-fail until Block4] Test 6 — reconcile: running node becomes fa
     branch: "feature/kill-test",
     sourcePlanPath: "/tmp/plan.md",
     nodes: {
-      classify: makeNodeState({ status: "done", cost: 0.001 }),
+      "step-a": makeNodeState({ status: "done", cost: 0.001 }),
       expand: makeNodeState({
         status: "running", // stuck — process was killed
         startedAt: "2026-06-10T00:01:00.000Z",
@@ -521,7 +521,7 @@ test("[expected-fail until Block4] Test 6 — reconcile: running node becomes fa
     "Node stuck in 'running' must be marked 'failed' after reconcile",
   );
   assert.equal(
-    reconciled.nodes["classify"]?.status,
+    reconciled.nodes["step-a"]?.status,
     "done",
     "Node already 'done' must remain 'done' after reconcile",
   );

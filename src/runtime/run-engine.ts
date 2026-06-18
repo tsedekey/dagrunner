@@ -316,8 +316,8 @@ export async function startRun(opts: {
 
   // Seed the worktree's .claude/ with dagrunner's bundled commands + hooks + a
   // node-run settings.json. Without this, a source repo with no .claude/commands/
-  // causes /classify (and siblings) to return immediately with cost=0 and no
-  // structured output — the SDK treats unknown slash commands as no-ops.
+  // causes node commands to return immediately with cost=0 and no output —
+  // the SDK treats unknown slash commands as no-ops.
   const dagrunnerRoot = new URL("../../", import.meta.url).pathname;
   const destClaude = join(worktreePath, ".claude");
   mkdirSync(join(destClaude, "commands"), { recursive: true });

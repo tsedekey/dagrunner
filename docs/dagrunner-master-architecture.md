@@ -149,11 +149,11 @@ Goal: free inside the worktree, read anywhere, mutation/network outside hard-blo
 
 ---
 
-## 8. classify — REMOVED (returns Phase 5/6)
+## 8. classify — REMOVED; task-type routing designed fresh when needed
 
 No classify node. Reviewer-selection moved into review's diff-triage step (reads the diff — better input than predicting from the plan). Former classify outputs relocated: needs*runtime -> human verify-election; recommend_pr_review -> human reads `dagrun status`; run_adversarial_verifier -> finding-count threshold; risk -> removed; touches*\* -> review diff-triage.
 
-**Principle (governs classify's return):** classify earns a node only when it ROUTES the graph, not when it annotates the change. Change-AREA is diff-derivable (downstream). Task-TYPE (feature/bug/tech-debt) is not derivable from a not-yet-existent diff and reshapes the graph upfront -> returns Phase 5/6 as an upfront task-type router.
+**Why classify is gone:** dormant code is drift risk — it reads as live, ages silently, and constrains future design. A future task-type router (feature/bug/tech-debt) earns a node only when it ROUTES the graph, not when it annotates. Change-AREA is diff-derivable; task-TYPE reshapes the graph upfront. That router will be designed fresh from current understanding when actually needed (Phase 5/6 or later) — not revived from stale scaffolding.
 
 ## 8b. reflect — self-improvement, two flavors
 
@@ -239,7 +239,7 @@ this becomes team-scale, multi-repo, no-single-human-gate infra.
 | **2b**  | verify-election + verify (doc-only; cluster automation REMOVED, see §9) + Gate 3; pr node; reflect -> reflect-gate -> apply-reflection (4 guardrails); rerun + revert-reflection commands; PR post-process outside sandbox.                                                                     | ✅ DONE            | 2a complete |
 | **3**   | Three interactive siblings, in order: (1) /seed-data [c8ctl, assumes human-started OC], (2) ci-babysit, (3) pr-triage. All local, human-driven.                                                                                                                                                 | ✅ DONE            | —           |
 | **4**   | Live `dagrun ui` (Node-http + SSE + vanilla HTML, localhost-only, scrubbed)                                                                                                                                                                                                                     | someday            | —           |
-| **5/6** | Multi-task-type support (bug/tech-debt/refactor); classify RETURNS as an upfront task-type router                                                                                                                                                                                               | future             | —           |
+| **5/6** | Multi-task-type support (bug/tech-debt/refactor); task-type router designed fresh when needed                                                                                                                                                                                                   | future             | —           |
 
 Key insight: Phase 2 and Phase 3 are complete. Phases 4–6 remain future work.
 

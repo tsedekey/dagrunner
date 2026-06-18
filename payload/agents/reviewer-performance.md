@@ -1,6 +1,6 @@
 ---
 name: reviewer-performance
-description: Performance reviewer. Identifies regressions in algorithmic complexity, hot-path allocations, N+1 query patterns, lock contention, and serialization overhead introduced by the diff. Runs when classify.perf_sensitive is true.
+description: Performance reviewer. Identifies regressions in algorithmic complexity, hot-path allocations, N+1 query patterns, lock contention, and serialization overhead introduced by the diff. Runs when diff triage sets performance_sensitive=true.
 tools: Read, Bash
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: reviewer-migration-safety
-description: Migration-safety reviewer. Checks DB schema migrations, Protobuf/Avro schema evolution, Elasticsearch mapping changes, and column-family key rotation for safety under zero-downtime deployment. Runs when classify.touches_schema_or_proto is true.
+description: Migration-safety reviewer. Checks DB schema migrations, Protobuf/Avro schema evolution, Elasticsearch mapping changes, and column-family key rotation for safety under zero-downtime deployment. Runs when diff triage sets touches_schema_or_proto=true.
 tools: Read, Bash
 model: claude-sonnet-4-6
 ---

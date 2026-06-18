@@ -113,7 +113,6 @@ let RUN_ID = "";
 // ---------------------------------------------------------------------------
 // Step 2 — dagrun start feature --plan toy-plan.md
 //          expand (Gate 1) → awaiting-gate → exits
-//          (classify node removed in Phase 2a — pipeline now starts at expand)
 // ---------------------------------------------------------------------------
 
 {
@@ -148,12 +147,6 @@ let RUN_ID = "";
 
   RUN_ID = runs[0] as string;
   const runDir = join(HOME, "runs", RUN_ID);
-
-  // No classify node — confirm it did NOT run.
-  assert.ok(
-    !existsSync(join(runDir, "classify")),
-    "classify dir must NOT exist (classify node removed in Phase 2a)",
-  );
 
   // Confirm guide.md was produced by expand.
   const guidePath = join(runDir, "expand", "guide.md");

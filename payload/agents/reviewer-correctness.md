@@ -1,6 +1,6 @@
 ---
 name: reviewer-correctness
-description: Correctness reviewer. Identifies logic bugs, null/boundary errors, concurrency hazards, error-handling gaps, and incorrect data transformations in the diff. Always runs (not conditional on classify flags). Returns findings as a JSON array.
+description: Correctness reviewer. Identifies logic bugs, null/boundary errors, concurrency hazards, error-handling gaps, and incorrect data transformations in the diff. Always runs (not conditional on diff triage flags). Returns findings as a JSON array.
 tools: Read, Bash
 ---
 
