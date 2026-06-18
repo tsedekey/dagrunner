@@ -38,6 +38,10 @@ export type GateHistoryEntry = {
   decision: "approve" | "reject";
   comment?: string;
   timestamp: string;
+  /** "night" when this was an auto-approval in unattended mode. */
+  mode?: "night";
+  /** Human-readable rationale for an auto-decision (e.g. "no concerns flagged"). */
+  basis?: string;
 };
 
 // ---------------------------------------------------------------------------

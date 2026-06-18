@@ -78,13 +78,15 @@ Reviewer selection (from diff-triage): correctness + test-adequacy always; api-s
 
 **Gates:** all checkpoint-and-exit, single-awaiting-gate invariant, conversation-led reject (resume same session + feedback artifact). Gates live ONLY on static nodes.
 
+**Night-mode (`dagrun start feature --night`):** unattended overnight execution. One rule — agent-decidable gates (Gate 1 = expand, Gate 2 = fix) are auto-approved when no "Concerns / plan challenges" heading is present in the gate artifact; the verify-election always pauses (human-only). A flagged concern or an unreadable/missing artifact also pauses (fail toward the human). Every auto-decision is logged to `gateHistory` with `mode: "night"` and `basis: "no concerns flagged"` for morning audit. `agentDecidable(nodeId)` is the exported predicate; `hasConcerns(content)` is the exported concern check (both pure, unit-tested).
+
 ---
 
 ## 3b. Validation — smoke:mock (per-plan gate) and smoke:live (occasional)
 
 `npm run verify-baseline` = `npm ci && typecheck && unit tests && smoke:mock`. The standing gate: run on every plan change.
 
-**smoke:mock** (`test/smoke/smoke-mock.ts`) drives the full gated featureWorkflow in-process using the mock executor — zero API calls, ~150 ms, deterministic. Asserts: gate pauses, produces-contract at every gate node, state transitions (awaiting-gate → paused → done), routing (verify skipped when election=n, runs when election=y), verifyElection stored in state.json. Does NOT assert model output quality or exact session IDs.
+**smoke:mock** (`test/smoke/smoke-mock.ts`) drives the full gated featureWorkflow in-process using the mock executor — zero API calls, ~150 ms, deterministic. Asserts: gate pauses, produces-contract at every gate node, state transitions (awaiting-gate → paused → done), routing (verify skipped when election=n, runs when election=y), verifyElection stored in state.json, night-mode auto-approvals (Run C: clean plan → Gate 1 + Gate 2 auto-approved → parked at verify-election; Run D: seeded concern → parked at Gate 1). Does NOT assert model output quality or exact session IDs.
 
 **smoke:live** (`test/smoke/smoke.ts`) runs the real 8-step pipeline with the SDK — requires `ANTHROPIC_API_KEY`, ~35 min. Proves API auth, real session-resume, structured output from live model, worktree diff. Run when node prompts change (`payload/commands/*.md`), when `sdk-runner.ts` changes, or once at build-queue end. A bad prompt that passes mock but breaks model behaviour won't surface until the next smoke:live — that is the accepted tradeoff. **Reflection wiring (step 6):** smoke seeds a known `reflections.md` into `pr/` before the resume call so the SessionEnd hook has a deterministic file to capture — this proves hook wiring + env propagation in a real session without gating on spontaneous model output. The hook logic is separately proven by the unit test (`src/hooks/session-end.test.ts`).
 
@@ -103,7 +105,7 @@ Reviewer selection (from diff-triage): correctness + test-adequacy always; api-s
 ## 4. The spine
 
 - **run-id = `<slug>-<timestamp>`** (the built format; no issue-number injection). Branch `feature/<slug>`. `makeRunId(planPath, now)` is exported from `run-engine.ts` for unit testing.
-- **state.json** per run: top-level (runId, workflow, status, worktreePath, branch, sourcePlanPath, costs) + per-node (status, timestamps, artifacts, model, iteration, gateHistory, interruptRetries?).
+- **state.json** per run: top-level (runId, workflow, status, worktreePath, branch, sourcePlanPath, costs) + per-node (status, timestamps, artifacts, model, iteration, gateHistory, interruptRetries?). `gateHistory` entries carry optional `mode: "night"` and `basis` fields when the decision was made by night-mode automation.
 - Checkpoint-and-exit at gates; reconcile-on-resume: `reconcileRunningNodes` marks any `running` node `failed` (crash recovery), then `resetInterruptedNodes` resets interrupt-reconciled nodes to `pending` up to `MAX_INTERRUPT_RETRIES` (currently 2, i.e. 3 total attempts) before leaving them permanently `failed`. Rationale: a transient Ctrl+C shouldn't permanently fail a resumable run, but an unbounded retry would never settle a genuinely broken node — the cap bounds both risks. The retry counter (`interruptRetries` on NodeState) is distinct from the gate iteration counter; stale-lock release follows reconcile.
 - One run at a time (global lockfile; verify cluster fixed ports). Paused runs release the lock; resume re-acquires.
 - Worktrees via `git worktree add` off DEVHARNESS_SRC; teardown deferred to explicit `dagrun cleanup` (never auto — manual test + PR-lifetime siblings need the worktree alive).
@@ -264,7 +266,7 @@ Open items: confirm Agent SDK credit pool covers volume; some preflight checks (
 - Every real-work `dagrun` runs with CLAUDE_CONFIG_DIR=~/.claude-work (alias `dagrun-work`); spawned sessions inherit config from the dagrun process. ANTHROPIC_API_KEY unset (subscription auth).
 - Siblings: canonical in Camunda private `.claude/`, run in worktree, edit in DEVHARNESS_SRC, persist worktree until PR done (esp. ci-babysit/pr-triage).
 - `gh`/network mutations must run un-sandboxed.
-- Unattended pipeline runs: never auto-approve a gate; subagents never end a turn with a question.
+- Unattended pipeline runs: never auto-approve a gate **unless `--night` is active and no concern is flagged** (see §3 night-mode). The one-rule policy: agent-decidable gates (Gate 1, Gate 2) auto-approve when `guide.md`/`summary.md` contains no "Concerns / plan challenges" heading; verify-election always pauses. Subagents never end a turn with a question.
 - Schema is single-source-of-truth, owned by dagrunner, never duplicated.
 - Each sibling plan front-loads a tool-introspection spike (c8ctl for /seed-data; the `gh` CI-status surface for ci-babysit; the `gh` review-comment surface for pr-triage) — verify the installed surface, don't assume from docs.
 - ci-babysit and pr-triage share a worktree but have hard domain separation: ci-babysit owns git mutations (rebase, fix, commit, push); pr-triage owns the comment conversation (never calls git push, never edits source files, never stages/commits).

@@ -297,3 +297,19 @@ Format: `<block> · <decision> · <why>`
 - deflake-reflection-capture-test · fix.md mandatory reflections.md write is preserved, but no longer load-bearing for test coverage · the "always write" fallback is still good practice but the test guarantee now comes from the hook unit test + seeded smoke, not from relying on a model to write a specific file
 
 - deflake-reflection-capture-test · smoke:live ≥1 spontaneous-output hard-assert REMOVED (replaced by seeded-entry assert) · the original assert was intentional as a "silent empty can never pass" gate but contradicted "absence is fine" — two semantics that can't coexist; the seeded assert preserves the "hook must fire" invariant deterministically without the contradiction
+
+## night-mode-unattended-feature-runs
+
+- night-mode · auto-approve predicate is `agentDecidable(nodeId)` (a Set containing "expand" and "fix") rather than a workflow-property flag · the gate classification is policy, not data — the set is small and closed for v1 (Gate 1 + Gate 2); a workflow field would couple schema to a policy that rarely changes and would need migration; the Set is the SSOT, exported as a pure function for unit testing
+
+- night-mode · concern detection is a heading regex on the artifact content, not a separate signal file · the "Concerns / plan challenges" heading is already the expand-challenge contract (DECISIONS.md § expand-challenge); regex avoids any new artifact contract; `hasConcerns(content)` is pure and unit-tested
+
+- night-mode · missing/unreadable artifact defaults to concerns=true (pause), not concerns=false (approve) · fail toward the human is the safety invariant; an approval without evidence is worse than an unnecessary pause; this covers race conditions and mock gaps
+
+- night-mode · verify-election always pauses — checked before re-running the DAG after fix auto-approval · verify-election is a human-only micro-gate by design (§3); the park must happen before the engine runs past it; the check is gated on `verifyElection === undefined && fix.status === "done" && hasVerifyNode` to avoid re-parking on subsequent resumes
+
+- night-mode · `GateHistoryEntry` extended with optional `mode?: "night"` and `basis?: string` · backward-compatible (existing entries simply lack these fields); morning reviewer sees which gates were auto-decided and why; no new model, just two optional fields on the existing type
+
+- night-mode · smoke:mock adds Run C (clean → auto-approve + park at verify-election) and Run D (seeded concern → park at Gate 1) · these are the primary validation gates per the plan; Run C uses the existing `gate-pause` scenario (clean content, no concerns); Run D uses the new `gate-pause-with-concerns` scenario added to mock-executor; smoke:live is not required (no prompt changes)
+
+- night-mode · `gate-pause-with-concerns` added to NodeScenario in mock-executor.ts · reuse of the mock executor injection seam; alternative (custom per-test factory writing to files) would duplicate artifact-write logic; adding the scenario is cheaper and consistent with the existing mock taxonomy

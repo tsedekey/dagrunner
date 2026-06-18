@@ -77,15 +77,18 @@ const mockFactory = (
 // State helper
 // ---------------------------------------------------------------------------
 
+type GateEntry = { decision: string; mode?: string; basis?: string };
+type NodeSnap = { status: string; gateHistory?: GateEntry[] };
+
 function readState(runDir: string): {
   status: string;
   verifyElection?: string;
-  nodes: Record<string, { status: string }>;
+  nodes: Record<string, NodeSnap>;
 } {
   return JSON.parse(readFileSync(join(runDir, "state.json"), "utf8")) as {
     status: string;
     verifyElection?: string;
-    nodes: Record<string, { status: string }>;
+    nodes: Record<string, NodeSnap>;
   };
 }
 
@@ -463,9 +466,161 @@ console.log(
 );
 
 // ---------------------------------------------------------------------------
+// RUN C — night-mode, clean plan: auto-approve Gate 1 + Gate 2, park at
+//          verify-election.  Uses the shared mockFactory (gate-pause writes
+//          clean artifacts with no concerns heading).
+// ---------------------------------------------------------------------------
+
+const HOME_C = `/tmp/dagrun-smoke-mock-c-${Date.now() + 2}`;
+mkdirSync(join(HOME_C, "runs"), { recursive: true });
+mkdirSync(join(HOME_C, "worktrees"), { recursive: true });
+
+await startRun({
+  workflow: featureWorkflow,
+  planPath: TOY_PLAN_PATH,
+  homeDir: HOME_C,
+  config,
+  executorFactory: mockFactory,
+  nightMode: true,
+});
+
+const runsC = readdirSync(join(HOME_C, "runs")).filter((d) =>
+  existsSync(join(HOME_C, "runs", d, "state.json")),
+);
+assert.ok(runsC.length > 0, "C: at least one run must exist");
+const RUN_ID_C = runsC[0] as string;
+const runDirC = join(HOME_C, "runs", RUN_ID_C);
+
+{
+  const state = readState(runDirC);
+  assert.strictEqual(
+    state.status,
+    "paused",
+    `C: expected paused at verify-election, got ${state.status}`,
+  );
+  assert.strictEqual(
+    state.verifyElection,
+    undefined,
+    `C: verifyElection must be unset (human has not decided yet)`,
+  );
+  assert.strictEqual(
+    state.nodes["expand"]?.status,
+    "done",
+    `C: expand must be auto-approved (done), got ${String(state.nodes["expand"]?.status)}`,
+  );
+  const expandGate = state.nodes["expand"]?.gateHistory?.at(-1);
+  assert.strictEqual(
+    expandGate?.mode,
+    "night",
+    `C: expand gateHistory last entry must have mode=night`,
+  );
+  assert.strictEqual(
+    expandGate?.basis,
+    "no concerns flagged",
+    `C: expand gateHistory last entry must have correct basis`,
+  );
+  assert.strictEqual(
+    state.nodes["fix"]?.status,
+    "done",
+    `C: fix must be auto-approved (done), got ${String(state.nodes["fix"]?.status)}`,
+  );
+  const fixGate = state.nodes["fix"]?.gateHistory?.at(-1);
+  assert.strictEqual(
+    fixGate?.mode,
+    "night",
+    `C: fix gateHistory last entry must have mode=night`,
+  );
+  assert.strictEqual(
+    fixGate?.basis,
+    "no concerns flagged",
+    `C: fix gateHistory last entry must have correct basis`,
+  );
+  assert.strictEqual(
+    state.nodes["verify"]?.status,
+    "pending",
+    `C: verify must be pending (parked before it ran), got ${String(state.nodes["verify"]?.status)}`,
+  );
+}
+console.log(
+  "step C passed: night-mode clean plan -> Gate 1 + Gate 2 auto-approved -> parked at verify-election",
+);
+
+// ---------------------------------------------------------------------------
+// RUN D — night-mode, seeded concern: park at Gate 1 (expand artifact has
+//          the "Concerns / plan challenges" heading).
+// ---------------------------------------------------------------------------
+
+const HOME_D = `/tmp/dagrun-smoke-mock-d-${Date.now() + 3}`;
+mkdirSync(join(HOME_D, "runs"), { recursive: true });
+mkdirSync(join(HOME_D, "worktrees"), { recursive: true });
+
+const concernsFactory = (
+  _config: DagrunnerConfig,
+  _runId: string,
+  _runDir: string,
+  _worktreePath: string,
+  _storeDir: string,
+) =>
+  createMockExecutor({
+    expand: "gate-pause-with-concerns", // guide.md contains concerns section
+    implement: "success",
+    review: "success",
+    fix: "gate-pause",
+    verify: "gate-pause",
+    pr: "success",
+  });
+
+await startRun({
+  workflow: featureWorkflow,
+  planPath: TOY_PLAN_PATH,
+  homeDir: HOME_D,
+  config,
+  executorFactory: concernsFactory,
+  nightMode: true,
+});
+
+const runsD = readdirSync(join(HOME_D, "runs")).filter((d) =>
+  existsSync(join(HOME_D, "runs", d, "state.json")),
+);
+assert.ok(runsD.length > 0, "D: at least one run must exist");
+const RUN_ID_D = runsD[0] as string;
+const runDirD = join(HOME_D, "runs", RUN_ID_D);
+
+{
+  const state = readState(runDirD);
+  assert.strictEqual(
+    state.status,
+    "paused",
+    `D: expected paused at Gate 1 (concerns), got ${state.status}`,
+  );
+  assert.strictEqual(
+    state.nodes["expand"]?.status,
+    "awaiting-gate",
+    `D: expand must remain awaiting-gate (night-mode parked due to concerns), got ${String(state.nodes["expand"]?.status)}`,
+  );
+  assert.strictEqual(
+    state.nodes["implement"]?.status,
+    "pending",
+    `D: implement must be pending (did not run), got ${String(state.nodes["implement"]?.status)}`,
+  );
+  // Confirm the artifact actually contains the concerns heading.
+  const guideContent = readFileSync(
+    join(runDirD, "expand", "guide.md"),
+    "utf8",
+  );
+  assert.ok(
+    /## Concerns \/ plan challenges/i.test(guideContent),
+    `D: guide.md must contain the concerns heading`,
+  );
+}
+console.log(
+  "step D passed: night-mode seeded concern -> parked at Gate 1 (expand awaiting-gate)",
+);
+
+// ---------------------------------------------------------------------------
 // Done
 // ---------------------------------------------------------------------------
 
 console.log(
-  "\nall smoke-mock steps passed (Run A: election=n, Run B: election=y)",
+  "\nall smoke-mock steps passed (Run A: election=n, Run B: election=y, Run C: night clean, Run D: night flagged)",
 );

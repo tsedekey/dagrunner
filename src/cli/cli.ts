@@ -105,7 +105,7 @@ async function cmdStart(argv: string[]): Promise<void> {
   if (workflowName === undefined || workflowName.startsWith("--")) {
     process.stderr.write(
       `dagrun start: missing <workflow> argument.\n` +
-        `Usage: dagrun start <workflow> --plan <file> [--max-budget-usd <n>] [--force]\n`,
+        `Usage: dagrun start <workflow> --plan <file> [--max-budget-usd <n>] [--force] [--night]\n`,
     );
     process.exit(1);
   }
@@ -122,6 +122,7 @@ async function cmdStart(argv: string[]): Promise<void> {
   }
 
   const force = hasFlag(argv, "--force");
+  const nightMode = hasFlag(argv, "--night");
   const maxBudgetStr = flagValue(argv, "--max-budget-usd");
   const maxBudgetUsd =
     maxBudgetStr !== undefined ? parseFloat(maxBudgetStr) : undefined;
@@ -158,6 +159,7 @@ async function cmdStart(argv: string[]): Promise<void> {
     config,
     ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
     ...(force ? { force: true } : {}),
+    ...(nightMode ? { nightMode: true } : {}),
   });
 }
 
@@ -647,7 +649,7 @@ function printHelp(): void {
       "Commands:",
       "  dagrun init [--home <path>]",
       "  dagrun preflight [--base-branch <branch>] [--config <file>]",
-      "  dagrun start <workflow> --plan <file> [--max-budget-usd <n>] [--force]",
+      "  dagrun start <workflow> --plan <file> [--max-budget-usd <n>] [--force] [--night]",
       '  dagrun resume <run-id> [--approve] [--reject "<comment>"] [--verify y|n]',
       "  dagrun status [<run-id>]",
       "  dagrun list",

@@ -65,6 +65,27 @@ export function formatVerifyRecommendation(findings: unknown): string {
   return `Observability advisory: manual test not recommended — ${rationale || "change has no observable UI or API surface"}`;
 }
 
+/** Node IDs that night-mode may auto-approve (Gate 1 + Gate 2). */
+const AGENT_DECIDABLE_GATES = new Set(["expand", "fix"]);
+
+/**
+ * True when night-mode may auto-decide the gate for nodeId.
+ * Expand (Gate 1) and fix (Gate 2) are agent-decidable; verify-election and
+ * all others are human-only. Exported for unit testing.
+ */
+export function agentDecidable(nodeId: string): boolean {
+  return AGENT_DECIDABLE_GATES.has(nodeId);
+}
+
+/**
+ * True if the artifact content contains a "Concerns / plan challenges" heading.
+ * Heading level 1–6; case-insensitive. Returns false on empty/missing content
+ * (no concerns = safe to proceed). Exported for unit testing.
+ */
+export function hasConcerns(content: string): boolean {
+  return /^#{1,6}\s+Concerns\s*\/\s*plan challenges/im.test(content);
+}
+
 /**
  * Build a deterministic run ID from a plan path and a timestamp.
  * Exported for unit testing.
@@ -281,6 +302,8 @@ export async function startRun(opts: {
   maxBudgetUsd?: number;
   force?: boolean;
   executorFactory?: ExecutorFactory;
+  /** Run unattended: auto-approve agent-decidable gates when no concerns are flagged. */
+  nightMode?: boolean;
 }): Promise<void> {
   const { workflow, planPath, homeDir, config, force } = opts;
 
@@ -398,6 +421,130 @@ export async function startRun(opts: {
 
   runPrPostProcess(readState(stateFile), runDir);
 
+  // Night-mode: auto-resolve agent-decidable gates in a loop.
+  if (opts.nightMode === true && result.status === "paused") {
+    let nightState = readState(stateFile);
+    // Safety cap: max 20 iterations (the real pipeline has 2 decidable gates).
+    for (let loops = 0; loops < 20; loops++) {
+      const gateEntry = Object.entries(nightState.nodes).find(
+        ([, ns]) => ns.status === "awaiting-gate",
+      );
+      if (gateEntry === undefined) break;
+      const [gateNodeId, gateNodeState] = gateEntry;
+
+      if (!agentDecidable(gateNodeId)) {
+        releaseLock(homeDir);
+        process.stdout.write(
+          `dagrun: [night] paused — "${gateNodeId}" requires human decision\n`,
+        );
+        process.stdout.write(`dagrun: resume with: dagrun resume ${runId}\n`);
+        return;
+      }
+
+      // Read the primary artifact and check for a concerns heading.
+      const gateNode = workflow.nodes.find((n) => n.id === gateNodeId);
+      const primaryFile = gateNode?.produces?.[0];
+      // Safe default: pause when artifact is missing/unreadable.
+      let concerns = true;
+      if (primaryFile !== undefined) {
+        const artifactPath = join(runDir, gateNodeId, primaryFile);
+        try {
+          if (existsSync(artifactPath)) {
+            concerns = hasConcerns(readFileSync(artifactPath, "utf8"));
+          }
+        } catch {
+          // unreadable → concerns stays true → pause
+        }
+      }
+
+      if (concerns) {
+        releaseLock(homeDir);
+        process.stdout.write(
+          `dagrun: [night] paused at gate "${gateNodeId}" — concerns flagged in artifact\n`,
+        );
+        process.stdout.write(`dagrun: resume with: dagrun resume ${runId}\n`);
+        return;
+      }
+
+      // Auto-approve: log to gateHistory with night-mode basis.
+      const autoTs = new Date().toISOString();
+      const basis = "no concerns flagged";
+      nightState = {
+        ...nightState,
+        nodes: {
+          ...nightState.nodes,
+          [gateNodeId]: {
+            ...gateNodeState,
+            status: "done",
+            gateHistory: [
+              ...gateNodeState.gateHistory,
+              {
+                decision: "approve" as const,
+                timestamp: autoTs,
+                mode: "night" as const,
+                basis,
+              },
+            ],
+          },
+        },
+        status: "running",
+        updatedAt: autoTs,
+      };
+      writeState(stateFile, nightState);
+      process.stdout.write(
+        `dagrun: [night] auto-approved "${gateNodeId}" — ${basis}\n`,
+      );
+
+      // Verify-election is human-only: always park after fix is auto-approved.
+      if (nightState.verifyElection === undefined) {
+        const hasVerifyNode = workflow.nodes.some((n) => n.id === "verify");
+        const fixDone = nightState.nodes["fix"]?.status === "done";
+        if (hasVerifyNode && fixDone) {
+          const parkState = {
+            ...nightState,
+            status: "paused" as const,
+            updatedAt: new Date().toISOString(),
+          };
+          writeState(stateFile, parkState);
+          releaseLock(homeDir);
+          process.stdout.write(
+            `dagrun: [night] paused at verify-election (human decision required)\n`,
+          );
+          process.stdout.write(
+            `dagrun: resume with: dagrun resume ${runId} --verify y|n\n`,
+          );
+          return;
+        }
+      }
+
+      // Re-run the DAG from the newly approved gate.
+      const nightResult = await runDag(workflow, executor, nightState, {
+        ctx,
+        stateFile,
+      });
+      runPrPostProcess(readState(stateFile), runDir);
+      nightState = readState(stateFile);
+
+      if (nightResult.status !== "paused") {
+        releaseLock(homeDir);
+        process.stdout.write(`dagrun: run ${runId} ${nightResult.status}\n`);
+        if (nightResult.status === "failed") process.exit(1);
+        return;
+      }
+    }
+    // Fell through safety cap — treat as a regular checkpoint.
+    releaseLock(homeDir);
+    const gateNode = Object.entries(nightState.nodes).find(
+      ([, ns]) => ns.status === "awaiting-gate",
+    );
+    process.stdout.write(
+      `dagrun: checkpointed at gate — node "${gateNode?.[0] ?? "unknown"}" awaiting review\n`,
+    );
+    process.stdout.write(`dagrun: resume with: dagrun resume ${runId}\n`);
+    return;
+  }
+
+  // Attended mode (default) — behavior unchanged.
   // Paused = gate checkpoint: release lock so another start can proceed.
   if (result.status === "paused") {
     releaseLock(homeDir);
