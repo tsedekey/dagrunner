@@ -13,7 +13,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { makeRunId, formatVerifyRecommendation } from "./run-engine.js";
+import {
+  makeRunId,
+  formatVerifyRecommendation,
+  findWorktreeScratch,
+  worktreeArtifactPatterns,
+} from "./run-engine.js";
 
 // ---------------------------------------------------------------------------
 // makeRunId
@@ -143,5 +148,108 @@ test("formatVerifyRecommendation: plain-text findings.json (mock executor output
   assert.equal(
     formatVerifyRecommendation("# Mock artifact: findings.json\n"),
     "",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// findWorktreeScratch
+// ---------------------------------------------------------------------------
+
+test("findWorktreeScratch: ignored artifact filename is flagged (!! prefix)", () => {
+  const result = findWorktreeScratch(["!! guide.md"], ["guide.md"]);
+  assert.deepEqual(result, ["guide.md"]);
+});
+
+test("findWorktreeScratch: untracked artifact filename is flagged (?? prefix)", () => {
+  const result = findWorktreeScratch(["?? guide.md"], ["guide.md"]);
+  assert.deepEqual(result, ["guide.md"]);
+});
+
+test("findWorktreeScratch: clean worktree returns empty array", () => {
+  const result = findWorktreeScratch([], ["guide.md", "summary.md"]);
+  assert.deepEqual(result, []);
+});
+
+test("findWorktreeScratch: glob suffix pattern *.tmp matches", () => {
+  const result = findWorktreeScratch(
+    ["!! scratch.tmp", "?? other.ts"],
+    ["*.tmp"],
+  );
+  assert.deepEqual(result, ["scratch.tmp"]);
+});
+
+test("findWorktreeScratch: glob suffix pattern *-state.json matches", () => {
+  const result = findWorktreeScratch(["!! dag-state.json"], ["*-state.json"]);
+  assert.deepEqual(result, ["dag-state.json"]);
+});
+
+test("findWorktreeScratch: non-matching untracked file is NOT flagged", () => {
+  const result = findWorktreeScratch(
+    ["?? src/legitimate-source.ts"],
+    ["guide.md"],
+  );
+  assert.deepEqual(result, []);
+});
+
+test("findWorktreeScratch: nested path — basename is used for matching", () => {
+  const result = findWorktreeScratch(["!! subdir/guide.md"], ["guide.md"]);
+  assert.deepEqual(result, ["subdir/guide.md"]);
+});
+
+test("findWorktreeScratch: multiple matches returned together", () => {
+  const result = findWorktreeScratch(
+    ["!! guide.md", "!! summary.md", "?? source.ts"],
+    ["guide.md", "summary.md"],
+  );
+  assert.deepEqual(result, ["guide.md", "summary.md"]);
+});
+
+test("findWorktreeScratch: malformed line without space is ignored (teeth)", () => {
+  // A porcelain line must be "XY path" (two status chars + space). Without the
+  // space, the parser should not crash and should return no matches.
+  const result = findWorktreeScratch(["!!guide.md"], ["guide.md"]);
+  assert.deepEqual(result, []);
+});
+
+// ---------------------------------------------------------------------------
+// worktreeArtifactPatterns
+// ---------------------------------------------------------------------------
+
+test("worktreeArtifactPatterns: includes all featureWorkflow produces filenames", () => {
+  const patterns = worktreeArtifactPatterns();
+  // All declared produces across featureWorkflow nodes.
+  const expected = [
+    "guide.md",
+    "summary.md",
+    "findings.json",
+    "seeding-spec.json",
+    "manual-test.md",
+    "body.md",
+    "camunda-knowledge.md",
+    "dagrunner-proposals.md",
+    "apply-summary.md",
+  ];
+  for (const name of expected) {
+    assert.ok(
+      patterns.includes(name),
+      `expected pattern "${name}" in worktreeArtifactPatterns()`,
+    );
+  }
+});
+
+test("worktreeArtifactPatterns: includes secondary scratch patterns", () => {
+  const patterns = worktreeArtifactPatterns();
+  for (const p of ["*.tmp", "*-state.json", "pr-meta.json", ".gitignore"]) {
+    assert.ok(patterns.includes(p), `expected secondary pattern "${p}"`);
+  }
+});
+
+test("worktreeArtifactPatterns: no duplicates", () => {
+  const patterns = worktreeArtifactPatterns();
+  const unique = new Set(patterns);
+  assert.equal(
+    patterns.length,
+    unique.size,
+    `duplicate patterns found: ${patterns.filter((p, i) => patterns.indexOf(p) !== i).join(", ")}`,
   );
 });

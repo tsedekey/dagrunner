@@ -74,6 +74,131 @@ export function makeRunId(planPath: string, now: number): string {
     .toLowerCase();
   return `${slug}-${now}`;
 }
+
+// ---------------------------------------------------------------------------
+// Worktree hygiene — structural scratch backstop
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns all known artifact filenames (from featureWorkflow.produces) plus
+ * secondary scratch patterns. Used for both .gitignore seeding and the
+ * advisory pre-pr scan. Exported for unit testing.
+ */
+export function worktreeArtifactPatterns(): string[] {
+  const names = new Set<string>();
+  for (const node of featureWorkflow.nodes) {
+    for (const f of node.produces ?? []) {
+      names.add(f);
+    }
+  }
+  // Secondary scratch patterns that aren't in produces.
+  for (const p of ["*.tmp", "*-state.json", "pr-meta.json", ".gitignore"]) {
+    names.add(p);
+  }
+  return Array.from(names);
+}
+
+/**
+ * Given lines from `git status --ignored --porcelain` and a list of patterns,
+ * return entries that look like leaked dagrunner artifacts. Both `!!` (ignored)
+ * and `??` (untracked) prefixes are checked — the former confirms the .gitignore
+ * seed is working, the latter catches patterns we forgot to include.
+ * Exported for unit testing.
+ */
+export function findWorktreeScratch(
+  statusLines: string[],
+  patterns: string[],
+): string[] {
+  const result: string[] = [];
+  for (const line of statusLines) {
+    if (line.length < 4) continue;
+    const xy = line.slice(0, 2);
+    if (xy !== "!!" && xy !== "??") continue;
+    if (line[2] !== " ") continue; // guard: must be "XY " not "XY<no-space>"
+    const filePath = line.slice(3).trim();
+    const name = filePath.split("/").pop() ?? filePath;
+    if (patterns.some((p) => matchesHygienePattern(name, p))) {
+      result.push(filePath);
+    }
+  }
+  return result;
+}
+
+function matchesHygienePattern(name: string, pattern: string): boolean {
+  if (pattern.startsWith("*")) return name.endsWith(pattern.slice(1));
+  return name === pattern;
+}
+
+/**
+ * Write a .gitignore to the worktree root seeded with dagrunner artifact and
+ * scratch patterns. The file lists itself so it doesn't appear in git status.
+ * Fail-soft: logs a warning on error and never throws.
+ */
+function seedWorktreeGitignore(worktreePath: string, patterns: string[]): void {
+  try {
+    const lines = [
+      "# dagrunner artifact backstop — auto-generated, do not edit",
+      ...patterns,
+      "",
+    ].join("\n");
+    writeFileSync(join(worktreePath, ".gitignore"), lines, "utf8");
+  } catch (err) {
+    process.stderr.write(
+      `dagrun: warning — could not seed worktree .gitignore: ${String(err)}\n`,
+    );
+  }
+}
+
+/**
+ * Run `git status --ignored --porcelain` in the worktree, find leaked artifact
+ * filenames, and emit an advisory warning to stdout + a scratch-warning.txt
+ * file in the run dir. Never throws; never blocks the caller.
+ */
+function scanWorktreeForLeaks(
+  worktreePath: string,
+  runDir: string,
+  patterns: string[],
+): void {
+  try {
+    const out = execSync("git status --ignored --porcelain", {
+      cwd: worktreePath,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const leaked = findWorktreeScratch(out.split("\n"), patterns);
+    if (leaked.length === 0) return;
+    const msg =
+      `dagrun: [advisory] pre-pr scan found ${String(leaked.length)} leaked artifact(s) in worktree:\n` +
+      leaked.map((f) => `  ${f}`).join("\n") +
+      "\n  These are excluded from git by .gitignore — they cannot be staged or committed.\n" +
+      "  A node prompt wrote to the worktree instead of $DAGRUN_ARTIFACTS. Fix the prompt.\n";
+    process.stdout.write(msg);
+    writeFileSync(join(runDir, "scratch-warning.txt"), msg, "utf8");
+  } catch (err) {
+    process.stderr.write(
+      `dagrun: warning — pre-pr scratch scan failed: ${String(err)}\n`,
+    );
+  }
+}
+
+/**
+ * Wrap an executor so that immediately before the `pr` node fires, the worktree
+ * is scanned for leaked artifacts. Advisory only — never blocks the pr node.
+ * Note: rerunNode does not use this wrapper (debug tool; intentional omission
+ * documented in DECISIONS.md).
+ */
+function wrapWithPrScan(
+  base: NodeExecutor,
+  worktreePath: string,
+  runDir: string,
+): NodeExecutor {
+  const patterns = worktreeArtifactPatterns();
+  return async (id, node, ctx) => {
+    if (id === "pr") scanWorktreeForLeaks(worktreePath, runDir, patterns);
+    return base(id, node, ctx);
+  };
+}
+
 import {
   reconcileRunningNodes,
   resetInterruptedNodes,
@@ -184,6 +309,11 @@ export async function startRun(opts: {
     stdio: "inherit",
   });
 
+  // Structural scratch backstop: seed .gitignore in the worktree so known
+  // artifact filenames can never be staged or committed even if a prompt
+  // accidentally writes to cwd instead of $DAGRUN_ARTIFACTS.
+  seedWorktreeGitignore(worktreePath, worktreeArtifactPatterns());
+
   // Seed the worktree's .claude/ with dagrunner's bundled commands + hooks + a
   // node-run settings.json. Without this, a source repo with no .claude/commands/
   // causes /classify (and siblings) to return immediately with cost=0 and no
@@ -251,11 +381,15 @@ export async function startRun(opts: {
   writeState(stateFile, state);
   process.stdout.write(`dagrun: starting run ${runId}\n`);
 
-  const executor = (opts.executorFactory ?? makeSDKRunner)(
-    config,
-    runId,
-    runDir,
+  const executor = wrapWithPrScan(
+    (opts.executorFactory ?? makeSDKRunner)(
+      config,
+      runId,
+      runDir,
+      worktreePath,
+    ),
     worktreePath,
+    runDir,
   );
   const ctx = makeCtx(runDir);
   const result = await runDag(workflow, executor, state, { ctx, stateFile });
@@ -559,11 +693,15 @@ export async function resumeRun(opts: {
   }
 
   // Re-run the DAG engine with the (possibly updated) state.
-  const executor = (opts.executorFactory ?? makeSDKRunner)(
-    config,
-    runId,
-    runDir,
+  const executor = wrapWithPrScan(
+    (opts.executorFactory ?? makeSDKRunner)(
+      config,
+      runId,
+      runDir,
+      state.worktreePath,
+    ),
     state.worktreePath,
+    runDir,
   );
   const ctx = makeCtx(runDir);
   const result = await runDag(workflow, executor, state, { ctx, stateFile });

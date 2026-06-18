@@ -9,18 +9,21 @@
 > Last updated: 2026-06-18.
 
 ## What dagrunner is
+
 A thin static TypeScript orchestrator (`dagrun`) that walks a feature change through a fixed,
 gated pipeline on the Camunda monorepo. Each node is a Claude Code Agent-SDK session in an
 isolated git worktree. Principle: **code coordinates, the model judges** — reuse Claude Code
 primitives, build only the cross-process/worktree gaps.
 
 ## Pipeline (current)
+
 `expand → implement → review → fix → verify → pr → reflect → apply-reflection`
 (`verify` is elected after Gate 2; `apply-reflection` follows the reflect gate.) Plus three
 human-driven sibling commands outside the pipeline: `ci-babysit`, `pr-triage`, `/seed-data`
 (canonical home: Camunda private `.claude/`).
 
 ## Repo structure (post-restructure)
+
 - `src/` in 5 cohesion folders: `core/` (dag, state, lock, types), `workflow/`, `runtime/`
   (run-engine, sdk-runner, mock-executor, launcher), `config/` (xdg, settings-seed), `cli/`
   (cli, preflight, report).
@@ -31,6 +34,7 @@ human-driven sibling commands outside the pipeline: `ci-babysit`, `pr-triage`, `
 - `scripts/` = dev helpers: `make-bundle.sh`, `build-queue.sh`, `zip-build-queue.sh`.
 
 ## Testing & the gate
+
 - **Tiers** per `testing-protocol`: unit (deterministic, mock executor) → `smoke:mock`
   (full gated pipeline in-process, fast/free/deterministic) → `smoke:live` (real-SDK 8-step,
   occasional).
@@ -42,6 +46,7 @@ human-driven sibling commands outside the pipeline: `ci-babysit`, `pr-triage`, `
   stays evidence-based (`smoke:live` + human). Encoded in `/dr-build`.
 
 ## How we work
+
 - Design/spec/grounding happen in **chat with the architect** (no live repo access — Eddie
   uploads a fresh **bundle** zip via `scripts/make-bundle.sh` before code-grounded work).
 - Execution is a **Claude Code build agent** via `/dr-build docs/changes/<plan>.md`. Plans use
@@ -52,6 +57,7 @@ human-driven sibling commands outside the pipeline: `ci-babysit`, `pr-triage`, `
   Headless permission posture (bypass + deny-guard) verified.
 
 ## Done this session
+
 build-vs-payload split · expand/verify rename (clean break) · src restructure + `verify-seed`
 stub deleted · unit-test backfill 2a (Tier A) + 2b (Tier B + golden + schema) · interrupt-retry
 cap (+ a latent `resume`/`start` exit-1 fix) · **smoke:mock/live split** (the keystone — gate is
@@ -59,6 +65,7 @@ now fast + deterministic) · verify-election observability recommendation · TDD
 `/dr-build` + charter. **Core hardening is complete.**
 
 ## Pending / next
+
 - **Reflect re-architecture** (the big one): make dagrunner's reflection **pure capture** (every
   node + both siblings + the human append to a durable run-lifecycle log); **delete the
   auto-apply subsystem** (`apply-reflection`, reflect-gate, the 4 guardrails); synthesis becomes
@@ -73,6 +80,7 @@ now fast + deterministic) · verify-election observability recommendation · TDD
   files changed.
 
 ## Reflection-harvest notes (banked for the reflect work)
+
 - The live-SDK smoke is irreducibly flaky as a per-plan gate — every real node is a flake point;
   a mock gate + occasional live is the right model (now implemented).
 - The independent queue gate caught a flaky build the builder's own verify passed — redundancy
@@ -81,5 +89,6 @@ now fast + deterministic) · verify-election observability recommendation · TDD
   run, the feedback-iteration regex) — characterization-first pays off.
 
 ## Pointers
+
 `docs/dagrunner-master-architecture.md` (WHY) · `docs/dagrunner-architect-charter.md` (role) ·
 `testing-protocol` skill (proof) · `DECISIONS.md` (build-time judgment calls).

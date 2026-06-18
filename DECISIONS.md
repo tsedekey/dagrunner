@@ -229,3 +229,7 @@ Format: `<block> · <decision> · <why>`
 - verify-obs · advisory printed BEFORE the opts.verify branch, covering both interactive prompt and --verify flag paths · single print placement means no code duplication; both headless/queue runs (--verify) and interactive runs see the advisory recorded in stdout; the election itself and its default are unchanged
 
 - verify-obs · fail-soft is the justified exception to fail-loud · the recommendation is advisory, not load-bearing; findings.json may be absent (verify-election runs even when review was skipped or malformed); a try/catch around file-read + JSON.parse + field-presence guards all three degrade paths; the bare prompt is always the fallback
+
+- worktree-hygiene · two-layer guard (gitignore-exclude seed = prevention; pre-pr advisory scan = visibility) instead of a hard block · nodes legitimately write source into the worktree, so scratch can't be path-distinguished from intended changes; a hard block would break real work; the exclude seed keeps scratch out of the PR deterministically while the advisory scan surfaces a leaking prompt to fix
+
+- worktree-hygiene · artifact filename list sourced from each node's `produces`, not hardcoded · the leak signal is an artifact appearing in the worktree (it belongs in $DAGRUN_ARTIFACTS); sourcing from produces keeps the denylist in sync as nodes change, so it can't silently drift

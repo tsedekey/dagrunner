@@ -50,8 +50,10 @@ authoring conversation. If it is missing or empty, stop and say so.
   only for integration acceptance. Fresh-model verification pass on any load-bearing piece.
 
 ## Test-driven build (deterministic layer)
+
 For changes to **deterministic / plumbing** logic (the `testing-protocol` Tier-1 layer — engine,
 state, validation, config, path/seed resolution, generated-artifact shape):
+
 - Write the **failing test first** (red), implement to green, then refactor. The test ships in the
   same commit as the code.
 - A bug fix starts with a **failing regression test** that reproduces the bug.
@@ -65,7 +67,6 @@ demonstrably fails without your change.
 node-prompt wording) can't be unit-tested first; it stays evidence-based — proven by `smoke:live` +
 human review. Never write a vacuous test to satisfy the rule. When a change touches node prompts
 (`payload/commands/*.md`), run `smoke:live` before considering it done.
-  
 
 ## Autonomy protocol (if run unattended)
 

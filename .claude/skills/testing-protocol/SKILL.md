@@ -43,6 +43,10 @@ Use Node's built-in `node:test` + `node:assert`. NO test framework dependency. C
 6. reconcile-on-resume: a node left `running` becomes `failed`; stale lock released.
    All green and offline. Capture the `node --test` output as evidence.
 
+- `findWorktreeScratch` (worktree-hygiene scan) is a Tier-1 pure fn — unit-tested in
+  `run-engine.test.ts` (leaked artifact flagged, clean → empty, `*.tmp` glob). Deterministic;
+  `smoke:mock` exercises the seed + scan path; no `smoke:live` needed.
+
 ## smoke:mock — the per-plan gate (fast, free, deterministic)
 
 `npm run smoke:mock` (`test/smoke/smoke-mock.ts`) drives the **full gated pipeline in-process** using

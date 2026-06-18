@@ -112,7 +112,19 @@ Reviewer selection (from diff-triage): correctness + test-adequacy always; api-s
 
 ---
 
-## 5. Runtime permission / sandbox / network model
+### 5. Worktree hygiene — structural scratch backstop
+Node `cwd` is the worktree, so a relative write lands in the worktree and risks reaching a PR.
+Two structural guards (prompt discipline is no longer the only line of defence):
+- **Prevention:** at `git worktree add`, seed the worktree's `.git/info/exclude` with the node
+  artifact filenames (sourced from each node's `produces`) + secondary scratch patterns
+  (`*.tmp`, `*-state.json`). Leaked artifacts/scratch can't be staged or PR'd.
+- **Visibility:** before `pr`, a deterministic scan (`findWorktreeScratch`) checks `git status
+  --porcelain` for those names and writes an **advisory** `scratch-warning.txt` — surfaces a
+  leaking prompt without blocking. Advisory + fail-soft: it never halts shipping.
+
+---
+
+## 6. Runtime permission / sandbox / network model
 
 Seeded into each worktree `.claude/settings.json`, loaded via `settingSources:["project"]`, node `cwd` = worktree. Distinct from the build-time `bypassPermissions` posture used by the agent that BUILDS dagrunner.
 
@@ -127,19 +139,19 @@ Goal: free inside the worktree, read anywhere, mutation/network outside hard-blo
 
 ---
 
-## 6. Preflight ("Prepare") — not a node
+## 7. Preflight ("Prepare") — not a node
 
 `dagrun preflight` runs before the graph: on expected base branch; git tree clean; DEVHARNESS_SRC resolves+is a repo; seeded settings present; Seatbelt available; network allowlist covers the task; ANTHROPIC_API_KEY unset; CLAUDE_CONFIG_DIR=~/.claude-work; enterprise policy doesn't block; artifact path in additionalDirectories. (Some checks may still be partial in code — confirm against implementation.)
 
 ---
 
-## 7. classify — REMOVED (returns Phase 5/6)
+## 8. classify — REMOVED (returns Phase 5/6)
 
 No classify node. Reviewer-selection moved into review's diff-triage step (reads the diff — better input than predicting from the plan). Former classify outputs relocated: needs*runtime -> human verify-election; recommend_pr_review -> human reads `dagrun status`; run_adversarial_verifier -> finding-count threshold; risk -> removed; touches*\* -> review diff-triage.
 
 **Principle (governs classify's return):** classify earns a node only when it ROUTES the graph, not when it annotates the change. Change-AREA is diff-derivable (downstream). Task-TYPE (feature/bug/tech-debt) is not derivable from a not-yet-existent diff and reshapes the graph upfront -> returns Phase 5/6 as an upfront task-type router.
 
-## 7b. reflect — self-improvement, two flavors
+## 8b. reflect — self-improvement, two flavors
 
 - **Flavor 1 (Camunda knowledge):** synthesized from expand/implement `notes.md` side-artifacts + diff + findings into `reflect/camunda-knowledge.md`. APPLIED (gated) into **DEVHARNESS_SRC** private gitignored files (nested `CLAUDE.local.md`) — written to the PERMANENT checkout, not the worktree, so it survives `cleanup` and seeds future runs (the reverse of the SessionStart sync).
 - **Flavor 2 (dagrunner improvement):** from `friction.jsonl` into `reflect/dagrunner-proposals.md`. LOGGED to `~/.local/share/dagrunner/store/` for cross-run accumulation, NEVER auto-applied (dagrunner's code needs tests/review; one run's friction is noise).
@@ -148,26 +160,26 @@ No classify node. Reviewer-selection moved into review's diff-triage step (reads
 
 ---
 
-## 8. Cost & model tiering
+## 9. Cost & model tiering
 
 Per-node tiering in the validated workflow-def (load-time model-string validation). expand unpinned; review diff-triage haiku; reviewers mixed (correctness/distributed-systems/performance unpinned; test-adequacy/api-stability/migration-safety sonnet); adversarial verifier strong tier; fix unpinned; verify haiku; pr haiku; reflect/apply-reflection sonnet. Two-tier budget: per-run `--max-budget-usd` + per-invocation caps. Cost capture: `--output-format json` total_cost_usd + per-model breakdown into state.json; `dagrun status` shows total vs cap.
 
 ---
 
-## 9. Phase 3 siblings — THREE interactive Claude Code commands
+## 10. Phase 3 siblings — THREE interactive Claude Code commands
 
 All three: Claude Code commands in the **Camunda monorepo's private `.claude/`** (alongside `/pr-review`, gitignored via `.git/info/exclude`), **copied into each worktree by dagrunner's seed/sync** and RUN inside the worktree (where the built code, PR branch, and cluster live). Edit the canonical copy in DEVHARNESS_SRC; the worktree copy is ephemeral. Interactive, human-driven, **NOT sandboxed** (they need Docker, host ports, `gh`, broad network — exactly why they're commands, not nodes). Run under CLAUDE_CONFIG_DIR=~/.claude-work. Built one at a time, in order.
 
 > DROPPED: the dedicated "/verify-demo environment creator" (DMS-based cluster + breakpoint placement). The **c8ctl dev plugin** spins up a configured local OC smoothly, making a separate cluster-creator command unnecessary. The **Debugger MCP Server (DMS)** is parked for a FUTURE bug-fix / issue-investigation workflow (where programmatic breakpoints aid an investigating agent) — it has no role in the feature-task workflow. verify emits only `seeding-spec.json` + `manual-test.md` (see §3); the code-trail the old `tour-spec.json` carried is now folded into the human-readable `manual-test.md`, and no automated breakpoint-placer consumes it.
 
-### 9.1 seed-data (Sibling 1)
+### 10.1 seed-data (Sibling 1)
 
 - Assumes the human has ALREADY spun up a local Orchestration Cluster via the **c8ctl dev plugin** (smooth, human-driven — this command does NOT create or tear down the cluster).
 - Consumes `seeding-spec.json` (from the verify node). Seeds the running cluster via **c8ctl**: resolve abstract deployments to concrete BPMN (the spec gives descriptions, not files), deploy `deployments[]`, start `instances[]` with their variables, capture instance keys, and confirm `expected_observations[]` are reachable (ES doc present; REST call recorded but not asserted — the human observes the value).
 - If no OC is reachable, fail loud telling the human to start one first.
 - Named generically (`/seed-data`, not demo-specific) so it is reusable for manual testing, reproduction, and investigation — not only feature demos.
 
-### 9.2 ci-babysit (Sibling 2)
+### 10.2 ci-babysit (Sibling 2)
 
 Local: monitors CI on the open PR, rebases on base, fixes failing checks (scoped to making CI green — never a backdoor for feature changes), and re-verifies before pushing. Needs the local cluster (human-started via the c8ctl dev plugin) for runtime re-verification + private context (why it's local, not gh-aw). Uses `gh` and `git push` (un-sandboxed — fine, it's a command); rebase pushes use `--force-with-lease`, never blind `--force`.
 
@@ -177,7 +189,7 @@ Local: monitors CI on the open PR, rebases on base, fixes failing checks (scoped
 
 Operates over the PR lifetime — the worktree must persist (don't `cleanup` until the PR is closed).
 
-### 9.3 pr-triage (Sibling 3)
+### 10.3 pr-triage (Sibling 3)
 
 Local: polls the open PR for new review comments across **three gh API endpoints** — inline review
 comments (`pulls/{pr}/comments`), PR-level issue comments (`issues/{pr}/comments`), and review
@@ -214,7 +226,7 @@ this becomes team-scale, multi-repo, no-single-human-gate infra.
 
 ---
 
-## 10. Phase roadmap
+## 11. Phase roadmap
 
 | Phase   | Scope                                                                                                                                                                                                                                                                                           | Status             | Gated by    |
 | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ----------- |
@@ -231,7 +243,7 @@ Open items: confirm Agent SDK credit pool covers volume; pin Claude Code CLI/SDK
 
 ---
 
-## 11. Operating reminders
+## 12. Operating reminders
 
 - Every real-work `dagrun` runs with CLAUDE_CONFIG_DIR=~/.claude-work (alias `dagrun-work`); spawned sessions inherit config from the dagrun process. ANTHROPIC_API_KEY unset (subscription auth).
 - Siblings: canonical in Camunda private `.claude/`, run in worktree, edit in DEVHARNESS_SRC, persist worktree until PR done (esp. ci-babysit/pr-triage).
