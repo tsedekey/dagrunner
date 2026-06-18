@@ -12,8 +12,8 @@ Write a brief implementation summary to $DAGRUN_ARTIFACTS/summary.md describing:
 Keep it under 100 words. Write to $DAGRUN_ARTIFACTS/summary.md.
 
 Optionally, if you discover non-obvious facts about the Camunda code area while implementing
-(hidden coupling, module quirks, surprising invariants), write them to $DAGRUN_ARTIFACTS/notes.md.
-Only write notes.md if there is something genuinely useful for future runs. Absence is fine.
+(hidden coupling, module quirks, surprising invariants), write them to $DAGRUN_ARTIFACTS/reflections.md.
+Only write reflections.md if there is something genuinely useful for future runs. Absence is fine.
 
 ## Final step — Commit implementation
 
@@ -35,18 +35,9 @@ git commit -m "feat: <concise title ≤70 chars from guide.md>"
 
 Do not push — the pr node handles the push.
 
-## Capture tips (best-effort, do this last)
+## Reflections (optional, do this last)
 
-After all artifacts are written and the commit is made, append any useful tips or
-gotchas about this code area or the implementation process. Fail-soft — call last,
-don't worry if it fails:
-
-```bash
-dagrun reflect-append \
-  --source implement \
-  --kind dagrunner-harness \
-  --body "<one or two sentences: hidden coupling, build quirk, or pattern worth flagging>" \
-  --run-id "$DAGRUN_RUN_ID" || true
-```
-
-Only call this if you discovered something non-obvious. Absence is fine.
+After all artifacts are written and the commit is made, write any high-signal tips
+to $DAGRUN_ARTIFACTS/reflections.md — hidden couplings, build quirks, patterns worth
+flagging for future runs. The SessionEnd hook captures this automatically.
+Absence is fine — only write if you discovered something non-obvious.

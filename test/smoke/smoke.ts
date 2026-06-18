@@ -323,28 +323,30 @@ let RUN_ID = "";
     "done",
     `run must be done after pr (pr is terminal), got status: ${stateRaw.status}`,
   );
-  // Best-effort: if reflection-log exists, check it has at least one valid entry.
+  // Hard-assert: reflection-log.jsonl must exist with ≥1 entry captured by the
+  // SessionEnd hook. A silently empty store can never pass smoke again.
   const reflectionLog = join(HOME, "store", "reflection-log.jsonl");
-  if (existsSync(reflectionLog)) {
-    const lines = readFileSync(reflectionLog, "utf8")
-      .split("\n")
-      .filter((l) => l.trim().length > 0);
-    assert.ok(
-      lines.length > 0,
-      "reflection-log.jsonl must have at least one entry",
-    );
-    const first = JSON.parse(lines[0] as string) as Record<string, unknown>;
-    assert.ok(typeof first["ts"] === "string", "entry must have ts field");
-    assert.ok(
-      typeof first["source"] === "string",
-      "entry must have source field",
-    );
-    assert.ok(typeof first["kind"] === "string", "entry must have kind field");
-    assert.ok(typeof first["body"] === "string", "entry must have body field");
-    console.log(
-      `  (reflection-log has ${lines.length} entries — best-effort check passed)`,
-    );
-  }
+  assert.ok(
+    existsSync(reflectionLog),
+    `reflection-log.jsonl must exist at ${reflectionLog} — hook-driven capture required`,
+  );
+  const lines = readFileSync(reflectionLog, "utf8")
+    .split("\n")
+    .filter((l) => l.trim().length > 0);
+  assert.ok(
+    lines.length > 0,
+    "reflection-log.jsonl must have at least one entry",
+  );
+  const first = JSON.parse(lines[0] as string) as Record<string, unknown>;
+  assert.ok(typeof first["ts"] === "string", "entry must have ts field");
+  assert.ok(
+    typeof first["source"] === "string",
+    "entry must have source field",
+  );
+  assert.ok(typeof first["body"] === "string", "entry must have body field");
+  console.log(
+    `  reflection-log has ${lines.length} entries — hook-driven capture verified`,
+  );
   console.log(
     "step 6 passed: Gate 2 approve --verify n -> verify skipped -> pr -> done",
   );

@@ -6,7 +6,7 @@
 > `testing-protocol` skill. This file is kept current under the same anti-drift discipline —
 > when state changes, update it.
 >
-> Last updated: 2026-06-18 (reflect re-architecture complete).
+> Last updated: 2026-06-18 (hook-driven reflection capture: SessionEnd hook reads reflections.md → store; reflect command renamed; smoke hard-assert).
 
 ## What dagrunner is
 
@@ -18,9 +18,8 @@ primitives, build only the cross-process/worktree gaps.
 ## Pipeline (current)
 
 `expand → implement → review → fix → verify → pr` (terminal)
-(`verify` is elected after Gate 2; `pr` is the final node.) Each node appends tips/gotchas
-to `~/.local/share/dagrunner/store/reflection-log.jsonl` via `dagrun reflect-append`
-(best-effort, fail-soft — never blocks shipping). Plus three human-driven sibling commands
+(`verify` is elected after Gate 2; `pr` is the final node.) Each node may write `reflections.md`; the SessionEnd hook appends it to `~/.local/share/dagrunner/store/reflection-log.jsonl`
+(fail-soft — never blocks shipping). Manual/sibling append: `dagrun reflect`. Plus three human-driven sibling commands
 outside the pipeline: `ci-babysit`, `pr-triage`, `/seed-data`
 (canonical home: Camunda private `.claude/`).
 
@@ -69,7 +68,9 @@ stub deleted · unit-test backfill 2a (Tier A) + 2b (Tier B + golden + schema) �
 cap (+ a latent `resume`/`start` exit-1 fix) · **smoke:mock/live split** (the keystone — gate is
 now fast + deterministic) · verify-election observability recommendation · TDD folded into
 `/dr-build` + charter · **reflect re-architecture**: pure capture via `dagrun reflect-append`,
-auto-apply subsystem removed, `pr` is terminal. **Core hardening + reflection are complete.**
+auto-apply subsystem removed, `pr` is terminal. **hook-driven reflection capture**: SessionEnd
+hook reads `reflections.md` → store log; `notes.md` → `reflections.md` sweep; CLI renamed to
+`dagrun reflect`; smoke hard-asserts ≥1 store entry. **Core hardening + reflection are complete.**
 
 ## Pending / next
 
@@ -80,7 +81,7 @@ auto-apply subsystem removed, `pr` is terminal. **Core hardening + reflection ar
 - Follow-up: `build-queue.sh` could auto-run `smoke:live` once after a clean queue / when prompt
   files changed.
 - **Sibling capture** (companion Camunda private `.claude/` change): wire `ci-babysit` and
-  `pr-triage` to call `dagrun reflect-append` — separate plan.
+  `pr-triage` to call `dagrun reflect` — separate plan (out of scope for this change).
 
 ## Reflection-harvest notes (banked for the reflect work)
 

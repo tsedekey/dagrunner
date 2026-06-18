@@ -23,8 +23,8 @@ cd "$DAGRUN_WORKTREE" && git diff origin/main...HEAD
 # Artifacts from earlier nodes (check existence before reading)
 cat "$DAGRUN_RUN_DIR/plan/plan.md" 2>/dev/null
 cat "$DAGRUN_RUN_DIR/expand/guide.md" 2>/dev/null
-cat "$DAGRUN_RUN_DIR/expand/notes.md" 2>/dev/null
-cat "$DAGRUN_RUN_DIR/implement/notes.md" 2>/dev/null
+cat "$DAGRUN_RUN_DIR/expand/reflections.md" 2>/dev/null
+cat "$DAGRUN_RUN_DIR/implement/reflections.md" 2>/dev/null
 cat "$DAGRUN_RUN_DIR/review/findings.json" 2>/dev/null
 cat "$DAGRUN_RUN_DIR/fix/summary.md" 2>/dev/null
 ```
@@ -141,17 +141,8 @@ Leave this section empty if there is nothing to add.>
 - `seeding-spec.json` must be valid JSON (no trailing commas, no comments).
 - Every verification step in `manual-test.md` must be concrete and actionable — no vague instructions like "check the database".
 
-## Capture tips (best-effort, do this last)
+## Reflections (optional, do this last)
 
-After both artifacts are written, append any tips about the feature surface or
-verification approach that would help future runs. Fail-soft — call last:
-
-```bash
-dagrun reflect-append \
-  --source verify \
-  --kind camunda-knowledge \
-  --body "<one or two sentences: non-obvious observation about the feature area or cluster behaviour>" \
-  --run-id "$DAGRUN_RUN_ID" || true
-```
-
-Only call this if you have something genuinely useful. Absence is fine.
+After both artifacts are written, write any tips about the feature surface or
+verification approach to $DAGRUN_ARTIFACTS/reflections.md. The SessionEnd hook
+captures this automatically. Absence is fine.

@@ -110,10 +110,10 @@ The file must be valid JSON matching that schema exactly. Do not write any other
 
 ---
 
-## Step 5 — Optional notes (write only if substantive)
+## Step 5 — Optional reflections (write only if substantive)
 
-Optionally write `$DAGRUN_ARTIFACTS/notes.md` if you observed anything that would help future
-implementations in this code area avoid the same class of issue. Good candidates:
+Optionally write `$DAGRUN_ARTIFACTS/reflections.md` if you observed anything that would help
+future implementations in this code area avoid the same class of issue. Good candidates:
 
 - A recurring anti-pattern across multiple findings (e.g. "every public method in this module
   omits null-check on the entity arg — callers must guard upstream").
@@ -121,9 +121,9 @@ implementations in this code area avoid the same class of issue. Good candidates
 - A finding dimension (e.g. migration-safety) that fired here but would not be obvious from
   reading the code — worth flagging to future expand and implement runs.
 
-**Absence is fine.** Only write notes.md if there is something genuinely non-obvious that
+**Absence is fine.** Only write reflections.md if there is something genuinely non-obvious that
 reduces friction for future runs in this code area. Do not summarise the findings themselves —
-those are already in findings.json.
+those are already in findings.json. The SessionEnd hook captures this file automatically.
 
 ---
 
@@ -137,18 +137,3 @@ those are already in findings.json.
 - `triage` must always be present with all five boolean fields (including `touches_ui`).
 
 ---
-
-## Capture tips (best-effort, do this last)
-
-After findings.json is written, append any non-obvious patterns or recurring
-issues observed during review. Fail-soft — call last, don't worry if it fails:
-
-```bash
-dagrun reflect-append \
-  --source review \
-  --kind dagrunner-harness \
-  --body "<one or two sentences: anti-pattern, module invariant violation, or reviewer dimension tip>" \
-  --run-id "$DAGRUN_RUN_ID" || true
-```
-
-Only call this if you have something genuinely useful. Absence is fine.

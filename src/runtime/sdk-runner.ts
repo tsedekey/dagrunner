@@ -62,6 +62,7 @@ export function makeSDKRunner(
   runId: string,
   runDir: string,
   worktreePath: string,
+  storeDir: string,
 ): NodeExecutor {
   return async function sdkRunner(
     nodeId: string,
@@ -70,7 +71,9 @@ export function makeSDKRunner(
   ): Promise<NodeExecResult> {
     // MUST set env BEFORE spawning query() so hooks and child processes inherit
     // the correct per-node values (env-propagation contract in CLAUDE.md).
-    applyNodeEnv(buildNodeEnv(config, runId, nodeId, runDir, worktreePath));
+    applyNodeEnv(
+      buildNodeEnv(config, runId, nodeId, runDir, worktreePath, storeDir),
+    );
     mkdirSync(ctx.artifactsDir, { recursive: true });
 
     // Determine prompt: on gate resume feed the latest feedback as the next

@@ -37,6 +37,7 @@ type ExecutorFactory = (
   runId: string,
   runDir: string,
   worktreePath: string,
+  storeDir: string,
 ) => NodeExecutor;
 
 /**
@@ -387,6 +388,7 @@ export async function startRun(opts: {
       runId,
       runDir,
       worktreePath,
+      join(homeDir, "store"),
     ),
     worktreePath,
     runDir,
@@ -699,6 +701,7 @@ export async function resumeRun(opts: {
       runId,
       runDir,
       state.worktreePath,
+      join(homeDir, "store"),
     ),
     state.worktreePath,
     runDir,
@@ -952,6 +955,7 @@ export async function rerunNode(opts: {
     runId,
     runDir,
     worktreePath,
+    join(homeDir, "store"),
   );
   const execCtx: ExecutionCtx = { runDir, artifactsDir, worktreePath };
   const result = await executor(nodeId, node, execCtx);

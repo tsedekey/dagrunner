@@ -1,7 +1,7 @@
 # dagrunner — Master Architecture (Source of Truth)
 
 Status: Canonical, reconciled with the built code through Phase 3 (all three siblings built). Each sibling build also gets its own implementation plan. Cross-references cleaned up after the /verify-demo split into /seed-data.
-Last updated: 2026-06-18 (reflect re-architecture: pure capture via dagrun reflect-append; auto-apply subsystem removed; pr is terminal)
+Last updated: 2026-06-18 (hook-driven reflection capture: SessionEnd hook reads reflections.md → store log; reflect-append command renamed to reflect; notes.md renamed to reflections.md)
 Owner: Eddie Tsedeke
 
 ---
@@ -56,7 +56,7 @@ Phase 3 is three LOCAL siblings (/seed-data + ci-babysit + pr-triage) — one su
         |  ★ GATE 3: human runs the manual test (or invokes /seed-data)
   pr (haiku)               -> opens the PR (git push / gh run OUTSIDE the sandbox — see §5)
                               [TERMINAL — run ends here]
-                              Each node appends tips/gotchas via dagrun reflect-append (best-effort, fail-soft)
+                              Each node may write reflections.md; the SessionEnd hook captures it to store
 ```
 
 **review/fix split:** review is read-only (its whole contract is one `findings.json`); fix is the mutating, gated node (so the human gates the actual code changes, with session memory for conversation-led reject).
@@ -161,13 +161,16 @@ No classify node. Reviewer-selection moved into review's diff-triage step (reads
 
 **Why classify is gone:** dormant code is drift risk — it reads as live, ages silently, and constrains future design. A future task-type router (feature/bug/tech-debt) earns a node only when it ROUTES the graph, not when it annotates. Change-AREA is diff-derivable; task-TYPE reshapes the graph upfront. That router will be designed fresh from current understanding when actually needed (Phase 5/6 or later) — not revived from stale scaffolding.
 
-## 8b. reflect — pure distributed capture
+## 8b. reflect — hook-driven distributed capture
 
-Each node appends raw tips/gotchas to a durable JSONL log via `dagrun reflect-append`. The log outlives the run (stored in `~/.local/share/dagrunner/store/reflection-log.jsonl`, not in `runs/<id>/`). Capture is best-effort and fail-soft — a failed append never blocks a node.
+Each node optionally writes tips/gotchas to `$DAGRUN_ARTIFACTS/reflections.md`. The **SessionEnd hook** (`.claude/hooks/session-end.sh`) reads this file when the node finishes and appends one stamped JSONL entry to the durable store. The log outlives the run (stored in `~/.local/share/dagrunner/store/reflection-log.jsonl`, not in `runs/<id>/`). Capture is fail-soft — a hook failure never blocks a node.
 
-- **Entry shape:** `{ ts, source, kind, body, run_id? }` — `kind` routes harvest: `camunda-knowledge` (tips for DEVHARNESS_SRC) or `dagrunner-harness` (tips for dagrunner improvement plans).
-- **Harvest:** periodic human + architect process. Reads the log, routes by kind: Camunda-knowledge tips → DEVHARNESS_SRC private files; dagrunner-harness tips → a dagrunner self-change plan.
-- **Why pure capture:** synthesizing proposals on the critical path bakes judgment into the runtime and creates complexity (the old reflect node + Gate 4 + apply-reflection 4 guardrails + dagrun revert-reflection). Distributed capture is simpler, durable, and puts synthesis where judgment belongs — the human+architect harvest. See DECISIONS.md § reflect-rearchitecture.
+- **Node contract:** nodes write `reflections.md` if they have useful tips; absence is fine. `fix` is the exception: it always writes `reflections.md` (fallback: "No non-obvious discoveries.") to guarantee ≥1 store entry per run.
+- **Hook-written entry shape:** `{ ts, source, run_id?, body }` — `kind` is absent (deferred to human harvest; no judgment in the runtime path).
+- **Manual/sibling append:** `dagrun reflect --source <node> --kind camunda-knowledge|dagrunner-harness --body "<text>" [--run-id <id>]` — used by ci-babysit/pr-triage and the human. This is the only path that sets `kind`.
+- **Durability invariant:** `DAGRUN_STORE_DIR` is injected explicitly by the launcher (never derived via `../../` from the run dir). The store is outside the run dir and survives `dagrun cleanup`.
+- **Harvest:** periodic human + architect process. Reads the log, routes by kind (when present): Camunda-knowledge tips → DEVHARNESS_SRC private files; dagrunner-harness tips → a dagrunner self-change plan.
+- **Why hook-driven:** prompt-driven + fail-soft + bare-`dagrun` = three layers of "maybe" over an unowned PATH (the prior mechanism failed silently — see DECISIONS.md §hook-driven-reflection-capture). The SessionEnd hook is code we own, on a signal that already fires.
 
 The old `reflect` + `apply-reflection` nodes are removed. `pr` is terminal.
 

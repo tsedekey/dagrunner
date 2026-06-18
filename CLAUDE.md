@@ -46,9 +46,9 @@ stop. The answer is almost always a native Claude Code mechanism.
 ## The env-propagation gotcha (do not get this wrong)
 
 Hooks and child processes only inherit env set **before** the SDK `query()` is spawned. The launcher
-must export `DEVHARNESS_SRC`, `DAGRUN_ARTIFACTS` (per-node), `DAGRUN_RUN_ID`, `DAGRUN_WORKTREE` BEFORE
-spawning. A var set after spawn, or only inside a prompt, is invisible to the SessionStart sync and
-artifact writes. Also: the SDK does NOT load `.claude/settings.json` (hooks/deny rules) unless
+must export `DEVHARNESS_SRC`, `DAGRUN_ARTIFACTS` (per-node), `DAGRUN_RUN_ID`, `DAGRUN_WORKTREE`,
+`DAGRUN_STORE_DIR` BEFORE spawning. A var set after spawn, or only inside a prompt, is invisible to
+the SessionStart sync, artifact writes, and the SessionEnd reflection-capture hook. Also: the SDK does NOT load `.claude/settings.json` (hooks/deny rules) unless
 `settingSources: ["project"]` is set in `query()` options.
 
 ## Where design decisions live

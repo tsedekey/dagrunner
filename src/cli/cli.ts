@@ -458,7 +458,7 @@ function cmdClear(argv: string[]): void {
   process.stdout.write(`dagrun: cleared run ${runId}\n`);
 }
 
-function cmdReflectAppend(argv: string[]): void {
+function cmdReflect(argv: string[]): void {
   const source = flagValue(argv, "--source");
   const kind = flagValue(argv, "--kind");
   const body = flagValue(argv, "--body");
@@ -466,16 +466,16 @@ function cmdReflectAppend(argv: string[]): void {
 
   if (source === undefined || kind === undefined || body === undefined) {
     process.stderr.write(
-      `dagrun reflect-append: --source, --kind, and --body are required.\n` +
-        `Usage: dagrun reflect-append --source <node> --kind camunda-knowledge|dagrunner-harness --body "<text>" [--run-id <id>]\n`,
+      `dagrun reflect: --source, --kind, and --body are required.\n` +
+        `Usage: dagrun reflect --source <node> --kind camunda-knowledge|dagrunner-harness --body "<text>" [--run-id <id>]\n`,
     );
-    // Exit 0 — capture is best-effort; caller (node prompt) must not fail because of this.
+    // Exit 0 — capture is best-effort; caller must not fail because of this.
     return;
   }
 
   if (kind !== "camunda-knowledge" && kind !== "dagrunner-harness") {
     process.stderr.write(
-      `dagrun reflect-append: --kind must be camunda-knowledge or dagrunner-harness, got "${kind}"\n`,
+      `dagrun reflect: --kind must be camunda-knowledge or dagrunner-harness, got "${kind}"\n`,
     );
     return;
   }
@@ -659,7 +659,7 @@ function printHelp(): void {
       "  dagrun report <run-id>",
       "  dagrun logs <run-id> <node>",
       "  dagrun rerun <run-id> <node-id>",
-      '  dagrun reflect-append --source <node> --kind camunda-knowledge|dagrunner-harness --body "<text>" [--run-id <id>]',
+      '  dagrun reflect --source <node> --kind camunda-knowledge|dagrunner-harness --body "<text>" [--run-id <id>]',
       "",
     ].join("\n"),
   );
@@ -743,8 +743,8 @@ async function main(argv: string[]): Promise<number> {
       cmdLogs(rest);
       return 0;
 
-    case "reflect-append":
-      cmdReflectAppend(rest);
+    case "reflect":
+      cmdReflect(rest);
       return 0;
 
     default:

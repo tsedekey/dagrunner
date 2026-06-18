@@ -28,6 +28,8 @@ export type NodeLaunchEnv = {
   DAGRUN_NODE_ID: string;
   /** Absolute path to the run directory (runs/<run-id>/) — used by session-end.sh */
   DAGRUN_RUN_DIR: string;
+  /** Absolute path to the durable store dir (<homeDir>/store/) — used by session-end.sh to write reflection-log.jsonl */
+  DAGRUN_STORE_DIR: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -46,6 +48,7 @@ export function buildNodeEnv(
   nodeId: string,
   runDir: string,
   worktreePath: string,
+  storeDir: string,
 ): NodeLaunchEnv {
   return {
     DEVHARNESS_SRC: config.DEVHARNESS_SRC,
@@ -54,6 +57,7 @@ export function buildNodeEnv(
     DAGRUN_WORKTREE: worktreePath,
     DAGRUN_NODE_ID: nodeId,
     DAGRUN_RUN_DIR: runDir,
+    DAGRUN_STORE_DIR: storeDir,
   };
 }
 
@@ -73,6 +77,7 @@ export function applyNodeEnv(env: NodeLaunchEnv): void {
   process.env["DAGRUN_WORKTREE"] = env.DAGRUN_WORKTREE;
   process.env["DAGRUN_NODE_ID"] = env.DAGRUN_NODE_ID;
   process.env["DAGRUN_RUN_DIR"] = env.DAGRUN_RUN_DIR;
+  process.env["DAGRUN_STORE_DIR"] = env.DAGRUN_STORE_DIR;
 }
 
 // ---------------------------------------------------------------------------

@@ -271,3 +271,19 @@ Format: `<block> · <decision> · <why>`
 - expand-challenge · toy-repo fixture expand.md updated to match payload/commands/expand.md · the fixture is never executed (run-engine.ts line 344 cpSync overwrites it from payload/ at start time), but keeping it divergent creates misleading drift; kept in sync as documentation
 
 - expand-challenge · bad-plan.md fixture created at test/smoke/fixtures/bad-plan.md · over-specified plan (LRU cache, circuit-breaker, JWT auth, Micrometer for a trivial GET /hello) for manual smoke:live validation; not wired into smoke.ts (human-reviewed outcome)
+
+## hook-driven-reflection-capture (correct the reflect mechanism)
+
+- hook-driven-reflection-capture · moved durable capture from prompt-driven `dagrun reflect-append || true` to the SessionEnd hook reading `reflections.md` · prompt + fail-soft + bare-`dagrun` + unowned PATH = three layers of "maybe"; after a full smoke:live the store was empty (CLI resolves to real store, not smoke /tmp home; asdf shim absent in spawned session); the SessionEnd hook is code we own, already fires per node, and has the correct env context from the launcher
+
+- hook-driven-reflection-capture · DAGRUN_STORE_DIR threaded explicitly through ExecutorFactory → makeSDKRunner → buildNodeEnv → applyNodeEnv (not derived via ../../ from run dir) · the plan forbids implicit derivation for the store path; explicit injection makes the decoupling visible and testable
+
+- hook-driven-reflection-capture · hook-written entries have no `kind` field (deferred to human harvest) · kind requires judgment (camunda-knowledge vs dagrunner-harness); baking judgment into the runtime path is exactly what the rearchitecture removed; the manual `dagrun reflect` command retains `kind` as the human sets it deliberately
+
+- hook-driven-reflection-capture · fix.md keeps its mandatory reflections.md write (fallback: "No non-obvious discoveries.") · ensures ≥1 entry per smoke:live run so the hard-assert can't flake; fix is in every smoke run path and always writes reflections.md; all other nodes are optional
+
+- hook-driven-reflection-capture · smoke.ts hard-asserts ≥1 entry in reflection-log.jsonl (removed best-effort `if exists` guard) · "silently empty" can never pass again; the assert is the red test; the hook is what makes it green
+
+- hook-driven-reflection-capture · body encoded with `jq -Rs .` in session-end.sh (python3 fallback via sys.argv injection) · reflections.md is freeform multi-line markdown; the naive manual template produces invalid JSONL; jq -Rs . (slurp+encode) handles newlines/quotes correctly; python3 fallback uses sys.argv to avoid shell-quoting issues inside -c
+
+- hook-driven-reflection-capture · module files `reflect-append.ts` / `reflect-append.test.ts` retain their names · these are internal implementation modules for the manual `dagrun reflect` command; the user-facing rename is the CLI subcommand (`reflect-append` → `reflect`); renaming the module would be gratuitous churn with no user benefit

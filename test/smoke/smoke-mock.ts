@@ -62,6 +62,7 @@ const mockFactory = (
   _runId: string,
   _runDir: string,
   _worktreePath: string,
+  _storeDir: string,
 ) =>
   createMockExecutor({
     expand: "gate-pause", // writes guide.md + returns awaiting-gate

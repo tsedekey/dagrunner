@@ -88,9 +88,9 @@ Write `$DAGRUN_ARTIFACTS/summary.md`:
 
 ---
 
-## Step 5 — Write notes.md
+## Step 5 — Write reflections.md
 
-Write `$DAGRUN_ARTIFACTS/notes.md`. This file is **required** whenever fixes were applied.
+Write `$DAGRUN_ARTIFACTS/reflections.md`. This file is **required** whenever fixes were applied.
 
 If there is nothing non-obvious to report, write a single line: `No non-obvious discoveries.`
 
@@ -106,6 +106,7 @@ Otherwise document any of the following:
 - Any automatic reformatting (e.g. a formatter hook changed additional files beyond your edits).
 
 Do not recap the summary — that is already in summary.md.
+The SessionEnd hook captures reflections.md automatically — you do not need to call any CLI command.
 
 ---
 
@@ -114,21 +115,5 @@ Do not recap the summary — that is already in summary.md.
 - Fix ONLY findings with `confidence: "high"` AND `severity` of `"blocker"` or `"major"`. Defer everything else.
 - Do not make speculative improvements beyond what the findings require.
 - Do not modify `$DAGRUN_ARTIFACTS/../review/findings.json` — it is the read-only input.
-- Write all artifacts to `$DAGRUN_ARTIFACTS/` (summary.md, addressed-checklist.md, notes.md).
+- Write all artifacts to `$DAGRUN_ARTIFACTS/` (summary.md, addressed-checklist.md, reflections.md).
 - If a build or test step is unavailable (no build tool found), note it in the summary and continue.
-
-## Capture tips (best-effort, do this last)
-
-After summary.md and notes.md are written, append any high-signal discoveries
-(root-cause patterns, hidden coupling, deferred systemic issues). Fail-soft —
-call last, don't worry if it fails:
-
-```bash
-dagrun reflect-append \
-  --source fix \
-  --kind dagrunner-harness \
-  --body "<one or two sentences: root-cause pattern, systemic issue, or build quirk worth recording>" \
-  --run-id "$DAGRUN_RUN_ID" || true
-```
-
-Only call this if there is something non-obvious worth recording. Absence is fine.
