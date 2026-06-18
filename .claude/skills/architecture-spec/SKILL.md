@@ -171,8 +171,9 @@ touches_runtime, optional) 8 performance(unpinned, when perf_sensitive, optional
 convergence)→ 11 verify(haiku, when needs_runtime, **verify gate** rerun:verify)→ 12 pr
 (haiku, body+PR URL)→ 13 reflect(sonnet, **reflect gate**, revise-self)→ 14 apply-reflection(sonnet,
 edits worktree .claude/** only). Three gates, sequential, never concurrent. classify.json flags
-`{touches_public_api, touches_runtime, perf_sensitive, touches_schema_or_proto, needs_runtime: bool;
-risk: low|med|high}` drive all conditional reviewers + verify.
+`{touches_public_api, touches_runtime, perf_sensitive, touches_schema_or_proto, touches_ui, needs_runtime: bool;
+risk: low|med|high}` drive all conditional reviewers + verify. findings.json carries a `manual_test_recommendation`
+object (`{recommended, surface: ui|api|none, rationale}`) derived from triage; surfaced as advisory at verify-election.
 **v1 cut line = nodes 1→2→3 + the review gate.\*\* Nodes 4-14 are phase-2 config additions.
 apply-reflection targets worktree-private gitignored files only — never a Camunda PR.
 
