@@ -55,6 +55,10 @@ human-driven sibling commands outside the pipeline: `ci-babysit`, `pr-triage`, `
 - Batches run unattended via `scripts/build-queue.sh <plans…>` — walks the queue, gates each on
   `verify-baseline`, stop-on-fail, `caffeinate`, live output + heartbeat + 90m per-step timeout.
   Headless permission posture (bypass + deny-guard) verified.
+- **Build mode:** interactive `claude` (`/dr-build <plan>`) by day (watched; avoids the `-p`
+  truncation regression); `build-queue.sh` reserved for unattended **night** runs. Night queue takes
+  **`smoke:mock`-only** plans; prompt-touching plans (which need `smoke:live`) are built interactively
+  by day.
 
 ## Done this session
 

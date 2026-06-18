@@ -68,6 +68,15 @@ in place — never duplicated.
   with a failing regression test. Model-judgment behaviour stays evidence-based (`smoke:live` + human),
   never force-TDD'd. (Encoded in `/dr-build`; conventions in the `testing-protocol` skill.)
 
+## Build mode — interactive by day, queue by night
+
+- **Interactive by day:** run watched builds as an interactive `claude` session
+  (`/dr-build <plan>`). Sidesteps the `-p` headless truncation regression; gates/issues surface live.
+- **Queue by night:** reserve `build-queue.sh` for unattended overnight batches.
+- **Night queue = `smoke:mock`-only plans.** The queue gates on `verify-baseline` (`smoke:mock`) but
+  can't run the manual `smoke:live`, so plans that touch node prompts (`payload/commands/*.md`) are
+  built interactively by day, with `smoke:live` run right after.
+
 ## Namespace discipline (locked)
 
 `.claude/` = build-only (author/researcher agents, build skills, `/dr-build`, hooks, build
