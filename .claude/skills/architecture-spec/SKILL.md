@@ -176,20 +176,21 @@ convergence)→ 11 verify(haiku, when needs_runtime, **verify gate** rerun:verif
 risk: low|med|high}` drive all conditional reviewers + verify. findings.json carries a `manual_test_recommendation`
 object (`{recommended, surface: ui|api|none, rationale}`) derived from triage; surfaced as advisory at verify-election.
 **v1 cut line = nodes 1→2→3 + the review gate.** Nodes 4-12 are phase-2 config additions.
-Each node appends tips/gotchas to `store/reflection-log.jsonl` via `dagrun reflect-append` (best-effort, fail-soft).
+Each node may write `reflections.md` to its artifacts dir; the SessionEnd hook captures it to `store/reflection-log.jsonl` (best-effort, fail-soft — never blocks shipping).
 
 ## Theme 12 — Self-improving / reflection
 
-Reflection is **pure distributed capture**: each surviving pipeline node appends a raw tip or gotcha
-after writing its `produces` artifacts via `dagrun reflect-append --source <node> --kind <kind> --body "<text>" [--run-id <id>]`.
-Entries are durable JSONL written to `~/.local/share/dagrunner/store/reflection-log.jsonl` (in `store/`,
-NOT `runs/<id>/` — outlives run deletion). Entry shape: `{ ts, source, kind, body, run_id? }`.
-Kinds: `camunda-knowledge` (Camunda-repo facts) or `dagrunner-harness` (orchestrator improvements).
-Capture is best-effort and fail-soft — `|| true` in prompts, no throw on empty body; a failed append
-NEVER fails the node. The auto-apply subsystem (reflect node + Gate 4 + apply-reflection node +
-revert-reflection command) was removed in 2026-06-18 (see DECISIONS.md: reflect-rearchitecture).
-Harvest is periodic and manual: route `camunda-knowledge` entries to DEVHARNESS_SRC private files;
-route `dagrunner-harness` entries to a dagrunner self-change plan.
+Reflection is **hook-driven capture**: each surviving pipeline node may write a `reflections.md`
+file to `$DAGRUN_ARTIFACTS/`. The SessionEnd hook reads it and appends to
+`~/.local/share/dagrunner/store/reflection-log.jsonl` (in `store/`, NOT `runs/<id>/` — outlives
+run deletion). Entry shape: `{ ts, source, body, run_id? }` — no `kind` field (deferred to harvest).
+Capture is best-effort and fail-soft — hook silently skips if file absent or store write fails;
+a capture failure NEVER fails the node. The auto-apply subsystem (reflect node + Gate 4 +
+apply-reflection node + revert-reflection command) was removed in 2026-06-18 (see DECISIONS.md:
+reflect-rearchitecture). Manual/sibling append: `dagrun reflect --source <node> --kind <kind>
+--body "<text>" [--run-id <id>]` (retains --kind for human-categorized entries).
+Harvest is periodic and manual: route entries to DEVHARNESS_SRC private files or a dagrunner
+self-change plan based on content.
 
 ## Theme 13 — Config, secrets & launcher
 
