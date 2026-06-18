@@ -113,13 +113,15 @@ Reviewer selection (from diff-triage): correctness + test-adequacy always; api-s
 ---
 
 ### 5. Worktree hygiene — structural scratch backstop
+
 Node `cwd` is the worktree, so a relative write lands in the worktree and risks reaching a PR.
 Two structural guards (prompt discipline is no longer the only line of defence):
+
 - **Prevention:** at `git worktree add`, seed the worktree's `.git/info/exclude` with the node
   artifact filenames (sourced from each node's `produces`) + secondary scratch patterns
   (`*.tmp`, `*-state.json`). Leaked artifacts/scratch can't be staged or PR'd.
 - **Visibility:** before `pr`, a deterministic scan (`findWorktreeScratch`) checks `git status
-  --porcelain` for those names and writes an **advisory** `scratch-warning.txt` — surfaces a
+--porcelain` for those names and writes an **advisory** `scratch-warning.txt` — surfaces a
   leaking prompt without blocking. Advisory + fail-soft: it never halts shipping.
 
 ---
@@ -141,7 +143,9 @@ Goal: free inside the worktree, read anywhere, mutation/network outside hard-blo
 
 ## 7. Preflight ("Prepare") — not a node
 
-`dagrun preflight` runs before the graph: on expected base branch; git tree clean; DEVHARNESS_SRC resolves+is a repo; seeded settings present; Seatbelt available; network allowlist covers the task; ANTHROPIC_API_KEY unset; CLAUDE_CONFIG_DIR=~/.claude-work; enterprise policy doesn't block; artifact path in additionalDirectories. (Some checks may still be partial in code — confirm against implementation.)
+`dagrun preflight` runs before the graph: on expected base branch; git tree clean; DEVHARNESS_SRC resolves+is a repo; seeded settings present; Seatbelt available; network allowlist covers the task; ANTHROPIC_API_KEY unset; CLAUDE_CONFIG_DIR=~/.claude-work; enterprise policy doesn't block; artifact path in additionalDirectories.
+
+**Toolchain pin (implemented):** `claude` CLI must match `EXPECTED_CLAUDE_CLI_VERSION` (currently `2.1.181`, defined in `src/config/versions.ts`). After confirming `claude` is on PATH, preflight runs `claude --version`, parses the semver, and fails loud if it doesn't match — with a "pinned X, found Y; install the pinned version" message. Set `DAGRUN_SKIP_CLI_VERSION_CHECK=1` to bypass (for testing against a new version before updating the pin). The Agent SDK is pinned exact (no `^` caret) in `package.json` at `0.3.170`; `npm ci` enforces it via the lockfile. Both pins are the current reproducibility baseline — not a verified regression-free pair (the `-p` intermittent regression is upstream, out of scope). **Upgrade procedure:** bump `EXPECTED_CLAUDE_CLI_VERSION` + `package.json` SDK version together, run `npm install` to resync lockfile, run `smoke:live` once to confirm the new pair works, commit both in the same change.
 
 ---
 
@@ -239,7 +243,7 @@ this becomes team-scale, multi-repo, no-single-human-gate infra.
 
 Key insight: Phase 2 and Phase 3 are complete. Phases 4–6 remain future work.
 
-Open items: confirm Agent SDK credit pool covers volume; pin Claude Code CLI/SDK version (a `-p` regression once returned empty result while billing — `produces` check catches the empty half); some preflight checks + content-addressed cache may be partial in code.
+Open items: confirm Agent SDK credit pool covers volume; some preflight checks (network allowlist, additionalDirectories) + content-addressed cache may be partial in code. CLI/SDK versions now pinned (see §7 toolchain pin — CLI 2.1.181, SDK 0.3.170); the `-p` intermittent regression remains upstream/out-of-scope.
 
 ---
 

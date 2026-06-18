@@ -47,6 +47,11 @@ Use Node's built-in `node:test` + `node:assert`. NO test framework dependency. C
   `run-engine.test.ts` (leaked artifact flagged, clean → empty, `*.tmp` glob). Deterministic;
   `smoke:mock` exercises the seed + scan path; no `smoke:live` needed.
 
+- `parseClaudeVersion` + `checkClaudeCliVersion` (toolchain pin check) are Tier-1 pure fns —
+  unit-tested in `preflight.test.ts` (parse good/bare/newline/unparseable, match/mismatch/skip).
+  The `execSync("claude --version")` call in `runPreflight` is wired inline; integration is
+  covered by smoke:live (real preflight runs). No `smoke:live` needed for the pure logic.
+
 ## smoke:mock — the per-plan gate (fast, free, deterministic)
 
 `npm run smoke:mock` (`test/smoke/smoke-mock.ts`) drives the **full gated pipeline in-process** using

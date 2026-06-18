@@ -30,6 +30,8 @@ import {
   getAgentContext,
   formatAgentContext,
   runPreflight,
+  parseClaudeVersion,
+  checkClaudeCliVersion,
   type AgentContext,
 } from "./preflight.js";
 import type { DagrunnerConfig } from "../config/xdg.js";
@@ -247,6 +249,87 @@ test("runPreflight: nonexistent DEVHARNESS_SRC produces a failure", () => {
     );
   }
 });
+
+// ---------------------------------------------------------------------------
+// parseClaudeVersion — pure parser
+// ---------------------------------------------------------------------------
+
+test("parseClaudeVersion: extracts semver from standard claude --version output", () => {
+  assert.equal(parseClaudeVersion("2.1.181 (Claude Code)"), "2.1.181");
+});
+
+test("parseClaudeVersion: extracts semver from bare version string", () => {
+  assert.equal(parseClaudeVersion("1.2.3"), "1.2.3");
+});
+
+test("parseClaudeVersion: extracts semver from output with trailing newline", () => {
+  assert.equal(parseClaudeVersion("2.1.181 (Claude Code)\n"), "2.1.181");
+});
+
+test("parseClaudeVersion: throws on unparseable output (fail-loud)", () => {
+  assert.throws(
+    () => parseClaudeVersion("not a version string"),
+    /Cannot parse claude version/,
+  );
+});
+
+test("parseClaudeVersion: throws on empty string (fail-loud, not silent pass)", () => {
+  assert.throws(() => parseClaudeVersion(""), /Cannot parse claude version/);
+});
+
+// ---------------------------------------------------------------------------
+// checkClaudeCliVersion — pure matcher
+// ---------------------------------------------------------------------------
+
+test("checkClaudeCliVersion: no failures when version matches", () => {
+  const result = checkClaudeCliVersion(
+    "2.1.181 (Claude Code)",
+    "2.1.181",
+    false,
+  );
+  assert.deepStrictEqual(result, []);
+});
+
+test("checkClaudeCliVersion: failure when version mismatches (contains both versions)", () => {
+  const result = checkClaudeCliVersion(
+    "2.1.999 (Claude Code)",
+    "2.1.181",
+    false,
+  );
+  assert.equal(result.length, 1);
+  assert.ok(
+    result[0]?.includes("2.1.181"),
+    `Expected pinned version in message, got: ${result[0]}`,
+  );
+  assert.ok(
+    result[0]?.includes("2.1.999"),
+    `Expected found version in message, got: ${result[0]}`,
+  );
+});
+
+test("checkClaudeCliVersion: failure when output is unparseable (fail-loud, not silent pass)", () => {
+  const result = checkClaudeCliVersion("not a version", "2.1.181", false);
+  assert.equal(result.length, 1);
+  assert.ok(
+    result[0]?.toLowerCase().includes("parse") ||
+      result[0]?.toLowerCase().includes("version"),
+    `Expected parse-error message, got: ${result[0]}`,
+  );
+});
+
+test("checkClaudeCliVersion: skip=true bypasses check regardless of output", () => {
+  const result = checkClaudeCliVersion("anything at all", "2.1.181", true);
+  assert.deepStrictEqual(result, []);
+});
+
+test("checkClaudeCliVersion: skip=true bypasses even unparseable output", () => {
+  const result = checkClaudeCliVersion("", "2.1.181", true);
+  assert.deepStrictEqual(result, []);
+});
+
+// ---------------------------------------------------------------------------
+// runPreflight: DEVHARNESS_SRC exists but is not a git repo produces a failure
+// ---------------------------------------------------------------------------
 
 test("runPreflight: DEVHARNESS_SRC exists but is not a git repo produces a failure", () => {
   const homeDir = mkdtempSync(join(tmpdir(), "dr-pf-chk-"));

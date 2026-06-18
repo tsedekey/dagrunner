@@ -18,12 +18,60 @@ import {
   buildSeededSettings,
   readWorkProfileMcpServers,
 } from "../config/settings-seed.js";
+import { EXPECTED_CLAUDE_CLI_VERSION } from "../config/versions.js";
 
 // ---------------------------------------------------------------------------
 // PreflightResult
 // ---------------------------------------------------------------------------
 
 export type PreflightResult = { ok: true } | { ok: false; failures: string[] };
+
+// ---------------------------------------------------------------------------
+// parseClaudeVersion / checkClaudeCliVersion — pure, TDD-able seam
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the semver from `claude --version` output.
+ * Throws (fail-loud) if no semver is found — never silently passes.
+ */
+export function parseClaudeVersion(output: string): string {
+  const match = output.match(/(\d+\.\d+\.\d+)/);
+  if (!match) {
+    throw new Error(
+      `Cannot parse claude version from output: "${output.trim()}"`,
+    );
+  }
+  return match[1]!;
+}
+
+/**
+ * Pure: compare the raw `claude --version` output against the expected pin.
+ * Returns a list of failure messages (empty = ok).
+ * skip=true bypasses the check (DAGRUN_SKIP_CLI_VERSION_CHECK=1).
+ */
+export function checkClaudeCliVersion(
+  versionOutput: string,
+  expected: string,
+  skip: boolean,
+): string[] {
+  if (skip) return [];
+  let found: string;
+  try {
+    found = parseClaudeVersion(versionOutput);
+  } catch {
+    return [
+      `Cannot parse claude CLI version from output: "${versionOutput.trim()}". ` +
+        `Set DAGRUN_SKIP_CLI_VERSION_CHECK=1 to bypass.`,
+    ];
+  }
+  if (found !== expected) {
+    return [
+      `claude CLI version mismatch: pinned ${expected}, found ${found}. ` +
+        `Install the pinned version, or set DAGRUN_SKIP_CLI_VERSION_CHECK=1 to bypass.`,
+    ];
+  }
+  return [];
+}
 
 // ---------------------------------------------------------------------------
 // runPreflight
@@ -170,10 +218,28 @@ export function runPreflight(
   }
 
   // ------------------------------------------------------------------
-  // 7. claude CLI is on PATH (required to spawn SDK sessions)
+  // 7. claude CLI is on PATH + version matches pin
   // ------------------------------------------------------------------
   try {
     execSync("which claude", { stdio: "pipe" });
+    // Version check — fail loud on drift; bypass with DAGRUN_SKIP_CLI_VERSION_CHECK=1
+    try {
+      const versionOut = execSync("claude --version", {
+        encoding: "utf8",
+        timeout: 5000,
+        stdio: "pipe",
+      });
+      const skip = process.env["DAGRUN_SKIP_CLI_VERSION_CHECK"] === "1";
+      failures.push(
+        ...checkClaudeCliVersion(versionOut, EXPECTED_CLAUDE_CLI_VERSION, skip),
+      );
+    } catch {
+      if (process.env["DAGRUN_SKIP_CLI_VERSION_CHECK"] !== "1") {
+        failures.push(
+          `Cannot run "claude --version". Set DAGRUN_SKIP_CLI_VERSION_CHECK=1 to bypass.`,
+        );
+      }
+    }
   } catch {
     failures.push(
       `"claude" CLI not found on PATH. Install Claude Code: https://claude.ai/code`,

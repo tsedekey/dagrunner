@@ -233,3 +233,13 @@ Format: `<block> · <decision> · <why>`
 - worktree-hygiene · two-layer guard (gitignore-exclude seed = prevention; pre-pr advisory scan = visibility) instead of a hard block · nodes legitimately write source into the worktree, so scratch can't be path-distinguished from intended changes; a hard block would break real work; the exclude seed keeps scratch out of the PR deterministically while the advisory scan surfaces a leaking prompt to fix
 
 - worktree-hygiene · artifact filename list sourced from each node's `produces`, not hardcoded · the leak signal is an artifact appearing in the worktree (it belongs in $DAGRUN_ARTIFACTS); sourcing from produces keeps the denylist in sync as nodes change, so it can't silently drift
+
+## pin-claude-cli-sdk-versions
+
+- pin-versions · CLI+SDK pinned as current reproducibility baseline (2.1.181 + 0.3.170), NOT a proven-clean "known-good" pair · the `-p` empty-output/truncation regression is intermittent and upstream (out of scope per plan); running smoke:live to establish a verified clean pair would be expensive and a single passing run doesn't prove stability for an intermittent fault; pinning at the current working combo buys drift detection + reproducibility — if a future run fails, the toolchain is now observable; "known-good" language deliberately avoided in all docs
+
+- pin-versions · EXPECTED_CLAUDE_CLI_VERSION in src/config/versions.ts only — no EXPECTED_SDK_VERSION constant · SDK version is enforced by package.json (exact, no caret) + lockfile + npm ci; a duplicate constant would be a second source of truth that drifts; single source principle
+
+- pin-versions · checkClaudeCliVersion extracted as pure TDD-able seam separate from runPreflight · the execSync("claude --version") call in runPreflight is not unit-testable without process stubbing; extracting the pure parse+compare logic as checkClaudeCliVersion(out, expected, skip) enables full unit coverage (parse, match, mismatch, unparseable, skip-bypass) without mocking; pattern mirrors backfill-2b-preflight-partial precedent
+
+- pin-versions · DAGRUN_SKIP_CLI_VERSION_CHECK=1 override provided · build or test scenarios may deliberately run against a different CLI version (e.g. testing a new version before updating the pin); a hard no-override would block that workflow; the env var is explicit and documented, consistent with fail-loud posture (bypass is intentional, not accidental)
