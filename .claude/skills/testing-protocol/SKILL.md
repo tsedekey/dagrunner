@@ -1,6 +1,6 @@
 ---
 name: testing-protocol
-description: How to prove dagrunner v1 works — the mock node executor, the three test tiers, and the 6-step smoke test that defines v1-done. Load for Block 3 (mock executor + tier-1 tests) and Block 9 (smoke test). Tests plumbing determinism, never model output quality.
+description: How to prove dagrunner v1 works — the mock node executor, the three test tiers, smoke:mock (fast in-process gate, runs on every plan), and smoke:live (real-SDK 8-step integration, run occasionally). Tests plumbing determinism, never model output quality.
 ---
 
 # Testing protocol — dagrunner v1
@@ -43,23 +43,66 @@ Use Node's built-in `node:test` + `node:assert`. NO test framework dependency. C
 6. reconcile-on-resume: a node left `running` becomes `failed`; stale lock released.
    All green and offline. Capture the `node --test` output as evidence.
 
-## The 6-step smoke test (Block 9 — this IS the v1-done gate)
+## smoke:mock — the per-plan gate (fast, free, deterministic)
+
+`npm run smoke:mock` (`test/smoke/smoke-mock.ts`) drives the **full gated pipeline in-process** using
+the mock executor. Zero API calls. Runs in ~150 ms. Deterministic by construction.
+
+Two runs in one script:
+
+- **Run A (election=n):** init → expand gate-pause → reject+feedback → approve Gate 1 → implement →
+  review → fix gate-pause → approve Gate 2 + election=n → verify skipped → pr → reflect gate-pause
+  → approve Gate 4 → apply-reflection → done.
+- **Run B (election=y):** same but election=y: verify gate-pause → approve Gate 3 → pr → reflect
+  gate-pause → approve Gate 4 → done.
+
+What it asserts: gate pauses, produces-contract met at every gate node, artifact channel (each
+produces file exists after its node), state transitions (awaiting-gate, paused, done), routing
+(verify skipped when election=n, runs when election=y), verifyElection in state.json.
+
+What it does NOT assert: model output quality (mock writes canned text), exact session IDs, JSON
+validity of findings.json (mock writes plain text there).
+
+**`verify-baseline` uses `smoke:mock`.** Run it on every plan change. It is the standing per-plan gate.
+
+## smoke:live — the real-SDK integration test (occasional)
+
+`npm run smoke:live` (`test/smoke/smoke.ts`) drives the full 8-step pipeline with real Claude Code
+sessions. Requires `ANTHROPIC_API_KEY` or claude.ai subscription. ~35 min, real tokens,
+non-deterministic on model output.
+
+What it proves beyond smoke:mock: real API auth, real SDK session-resume, node prompts elicit valid
+structured output, format hook fires, worktree diff exists.
+
+**When to run smoke:live:**
+
+- When a plan touches `payload/commands/*.md` (node prompts changed) — run before merging.
+- Once at the end of a build queue to confirm end-to-end behaviour.
+- On any change to `src/runtime/sdk-runner.ts` or the seeded settings.
+
+**The tradeoff:** a bad node-prompt edit that passes the mock but breaks real-model behaviour would
+slip past the per-plan gate until the next `smoke:live`. The mitigation is the guideline above —
+prompt changes trigger a live run.
+
+## The 8-step smoke:live test (Block 9, now called smoke:live)
 
 A runnable script driving the real thin slice end to end with non-interactive flags, asserting each
-step, capturing a transcript. Provide a tiny `toy-plan.md` and a throwaway toy git repo.
+step, capturing a transcript.
 
 1. `dagrun init` → XDG home tree created (assert dirs exist).
-2. `dagrun start feature --plan toy-plan.md` → `classify` runs (haiku, **valid JSON** — assert schema),
-   `expand` runs (unpinned), checkpoints at the **review gate**, process exits.
-3. `dagrun status` shows `expand: awaiting-gate`, a cost figure, the worktree path.
-4. `dagrun resume --reject "add error handling section"` → node revises **in the same session**
-   (assert sessionId unchanged, feedback-1.md written), re-pauses.
-5. `dagrun resume --approve` → `implement` runs, a diff exists in the worktree, the format hook fired,
-   run reaches `done`.
-6. Kill the process mid-`implement`, then `dagrun resume` → reconcile marks the killed node
-   `running→failed`, re-runs it cleanly to `done`.
+2. `dagrun start feature --plan toy-plan.md` → `expand` runs (Gate 1), checkpoints, process exits.
+3. `dagrun status` shows `expand: awaiting-gate`, a cost figure.
+4. `dagrun resume --reject "..."` → expand revises in the same session, feedback-1.md written,
+   re-pauses.
+5. `dagrun resume --approve` → Gate 1 approved → implement → review (findings.json, valid JSON with
+   required keys) → fix hits Gate 2, re-pauses.
+6. `dagrun resume --approve --verify n` → Gate 2 approved, election=n, verify skipped, pr done,
+   reflect hits Gate 4, re-pauses.
+7. `dagrun resume --approve` → Gate 4 approved → apply-reflection → done.
+8. Synthetic reconcile test (no API call): inject a state with `interruptRetries: 99`, resume →
+   retry cap hit → run stays failed, exit 1.
 
-Passing all six = v1 ships.
+Passing all eight = v1 real-SDK integration confirmed.
 
 ## What is explicitly NOT tested in v1
 

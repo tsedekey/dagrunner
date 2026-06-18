@@ -30,7 +30,14 @@ import type { Workflow } from "../core/types.js";
 import type { DagrunnerConfig } from "../config/xdg.js";
 import { readState, writeState } from "../core/state.js";
 import type { RunState, NodeState, NodeStatus } from "../core/state.js";
-import type { ExecutionCtx } from "./mock-executor.js";
+import type { ExecutionCtx, NodeExecutor } from "./mock-executor.js";
+
+type ExecutorFactory = (
+  config: DagrunnerConfig,
+  runId: string,
+  runDir: string,
+  worktreePath: string,
+) => NodeExecutor;
 import {
   reconcileRunningNodes,
   resetInterruptedNodes,
@@ -111,6 +118,7 @@ export async function startRun(opts: {
   config: DagrunnerConfig;
   maxBudgetUsd?: number;
   force?: boolean;
+  executorFactory?: ExecutorFactory;
 }): Promise<void> {
   const { workflow, planPath, homeDir, config, force } = opts;
 
@@ -210,7 +218,12 @@ export async function startRun(opts: {
   writeState(stateFile, state);
   process.stdout.write(`dagrun: starting run ${runId}\n`);
 
-  const executor = makeSDKRunner(config, runId, runDir, worktreePath);
+  const executor = (opts.executorFactory ?? makeSDKRunner)(
+    config,
+    runId,
+    runDir,
+    worktreePath,
+  );
   const ctx = makeCtx(runDir);
   const result = await runDag(workflow, executor, state, { ctx, stateFile });
 
@@ -245,6 +258,7 @@ export async function resumeRun(opts: {
   rejectComment?: string;
   /** Non-interactive election answer: 'y' = run verify, 'n' = skip. */
   verify?: "y" | "n";
+  executorFactory?: ExecutorFactory;
 }): Promise<void> {
   const { runId, homeDir, config } = opts;
   const runDir = join(homeDir, "runs", runId);
@@ -494,7 +508,12 @@ export async function resumeRun(opts: {
   }
 
   // Re-run the DAG engine with the (possibly updated) state.
-  const executor = makeSDKRunner(config, runId, runDir, state.worktreePath);
+  const executor = (opts.executorFactory ?? makeSDKRunner)(
+    config,
+    runId,
+    runDir,
+    state.worktreePath,
+  );
   const ctx = makeCtx(runDir);
   const result = await runDag(workflow, executor, state, { ctx, stateFile });
 
@@ -671,6 +690,7 @@ export async function rerunNode(opts: {
   nodeId: string;
   homeDir: string;
   config: DagrunnerConfig;
+  executorFactory?: ExecutorFactory;
 }): Promise<void> {
   const { runId, nodeId, homeDir, config } = opts;
   const runDir = join(homeDir, "runs", runId);
@@ -738,7 +758,12 @@ export async function rerunNode(opts: {
       `  Artifacts: ${artifactsDir}\n`,
   );
 
-  const executor = makeSDKRunner(config, runId, runDir, worktreePath);
+  const executor = (opts.executorFactory ?? makeSDKRunner)(
+    config,
+    runId,
+    runDir,
+    worktreePath,
+  );
   const execCtx: ExecutionCtx = { runDir, artifactsDir, worktreePath };
   const result = await executor(nodeId, node, execCtx);
 

@@ -18,9 +18,10 @@
     "watch": "tsc -p tsconfig.json --watch",
     "test": "node --test --import tsx ./src/**/*.test.ts",
     "test:unit": "node --test --import tsx ./src/**/*.test.ts",
-    "smoke": "node --import tsx ./test/smoke/smoke.ts",
+    "smoke:live": "node --import tsx ./test/smoke/smoke.ts",
+    "smoke:mock": "node --import tsx ./test/smoke/smoke-mock.ts",
     "dagrun": "node --import tsx ./src/cli/cli.ts",
-    "verify-baseline": "npm ci && npm run typecheck && npm test && npm run smoke",
+    "verify-baseline": "npm ci && npm run typecheck && npm test && npm run smoke:mock",
     "bundle": "bash scripts/make-bundle.sh"
   },
   "dependencies": {
