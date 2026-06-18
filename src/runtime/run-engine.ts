@@ -38,6 +38,17 @@ type ExecutorFactory = (
   runDir: string,
   worktreePath: string,
 ) => NodeExecutor;
+
+/**
+ * Build a deterministic run ID from a plan path and a timestamp.
+ * Exported for unit testing.
+ */
+export function makeRunId(planPath: string, now: number): string {
+  const slug = basename(planPath, ".md")
+    .replace(/[^a-z0-9-]/gi, "-")
+    .toLowerCase();
+  return `${slug}-${now}`;
+}
 import {
   reconcileRunningNodes,
   resetInterruptedNodes,
@@ -125,10 +136,7 @@ export async function startRun(opts: {
   // Validate workflow at load time (hard rule: fail at load, not at runtime).
   loadWorkflow(workflow);
 
-  const slug = basename(planPath, ".md")
-    .replace(/[^a-z0-9-]/gi, "-")
-    .toLowerCase();
-  const runId = `${slug}-${Date.now()}`;
+  const runId = makeRunId(planPath, Date.now());
   const runDir = join(homeDir, "runs", runId);
   const stateFile = join(runDir, "state.json");
   const worktreePath = join(homeDir, "worktrees", runId);

@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>dagrun report — test-plan-1234567890</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+      font-size: 14px;
+      line-height: 1.5;
+      color: #212121;
+      background: #fafafa;
+      margin: 0;
+      padding: 24px;
+    }
+    h1 { font-size: 1.4em; margin-bottom: 0.25em; }
+    h2 { font-size: 1.1em; margin-top: 1.5em; margin-bottom: 0.5em; border-bottom: 1px solid #e0e0e0; padding-bottom: 4px; }
+    h3 { font-size: 1em; margin-top: 1em; margin-bottom: 0.4em; }
+    section { margin-bottom: 2em; }
+    table { border-collapse: collapse; width: 100%; margin-top: 0.5em; }
+    th, td { padding: 6px 10px; text-align: left; border: 1px solid #e0e0e0; }
+    th { background: #f5f5f5; font-weight: 600; white-space: nowrap; }
+    tr:nth-child(even) td { background: #fafafa; }
+    code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; font-family: monospace; font-size: 0.95em; }
+    pre {
+      background: #263238;
+      color: #cfd8dc;
+      padding: 12px 16px;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-size: 0.88em;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .header-bar {
+      background: #1565c0;
+      color: #fff;
+      padding: 12px 24px;
+      margin: -24px -24px 24px -24px;
+    }
+    .header-bar h1 { color: #fff; margin: 0; }
+    .header-bar .subtitle { font-size: 0.85em; opacity: 0.85; }
+  </style>
+</head>
+<body>
+  <div class="header-bar">
+    <h1>dagrun report</h1>
+    <div class="subtitle">Run ID: test-plan-1234567890 &nbsp;|&nbsp; feature &nbsp;|&nbsp; <span style="background:#2e7d32;color:#fff;padding:2px 8px;border-radius:3px;font-size:0.85em;font-weight:600;">done</span></div>
+  </div>
+
+  
+    <section>
+      <h2>Run Summary</h2>
+      <table>
+        <tr><th>Run ID</th><td><code>test-plan-1234567890</code></td></tr>
+        <tr><th>Workflow</th><td>feature</td></tr>
+        <tr><th>Status</th><td><span style="background:#2e7d32;color:#fff;padding:2px 8px;border-radius:3px;font-size:0.85em;font-weight:600;">done</span></td></tr>
+        <tr><th>Created</th><td>2026-06-17T10:00:00.000Z</td></tr>
+        <tr><th>Updated</th><td>2026-06-17T11:00:00.000Z</td></tr>
+        <tr><th>Worktree</th><td><code>/home/testuser/.local/share/dagrunner/worktrees/test-plan-1234567890</code></td></tr>
+        <tr><th>Branch</th><td><code>feature/test-plan-1234567890</code></td></tr>
+      </table>
+    </section>
+  
+    <section>
+      <h2>Node Status</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Node</th>
+            <th>Status</th>
+            <th>Model</th>
+            <th>Iterations</th>
+            <th>Cost (USD)</th>
+            <th>Artifact</th>
+            <th>Last Error</th>
+          </tr>
+        </thead>
+        <tbody>
+          
+        <tr>
+          <td><code>expand</code></td>
+          <td><span style="background:#2e7d32;color:#fff;padding:2px 8px;border-radius:3px;font-size:0.85em;font-weight:600;">done</span></td>
+          <td style="font-size:0.85em;">sonnet</td>
+          <td style="text-align:center;">1</td>
+          <td style="text-align:right;">$0.1234</td>
+          <td><a href="file:///home/testuser/.local/share/dagrunner/runs/test-plan-1234567890/expand/guide.md" style="font-family:monospace;font-size:0.85em;">guide.md</a></td>
+          <td style="font-size:0.85em;color:#c62828;">&mdash;</td>
+        </tr>
+        <tr>
+          <td><code>implement</code></td>
+          <td><span style="background:#c62828;color:#fff;padding:2px 8px;border-radius:3px;font-size:0.85em;font-weight:600;">failed</span></td>
+          <td style="font-size:0.85em;">&mdash;</td>
+          <td style="text-align:center;">0</td>
+          <td style="text-align:right;">$0.0000</td>
+          <td>&mdash;</td>
+          <td style="font-size:0.85em;color:#c62828;">Node failed: artifact not produced &lt;&amp;&gt;</td>
+        </tr>
+        <tr>
+          <td><code>review</code></td>
+          <td><span style="background:#757575;color:#fff;padding:2px 8px;border-radius:3px;font-size:0.85em;font-weight:600;">skipped</span></td>
+          <td style="font-size:0.85em;">&mdash;</td>
+          <td style="text-align:center;">0</td>
+          <td style="text-align:right;">$0.0000</td>
+          <td>&mdash;</td>
+          <td style="font-size:0.85em;color:#c62828;">&mdash;</td>
+        </tr>
+        </tbody>
+      </table>
+    </section>
+  
+    <section>
+      <h2>Cost Totals</h2>
+      <table>
+        <tr><th>Total Cost</th><td><strong>$0.1234</strong></td></tr>
+      </table>
+    </section>
+  
+    <section>
+      <h2>Gate History</h2>
+      
+      <h3>Node: <code>expand</code></h3>
+      <table>
+        <thead>
+          <tr><th>Decision</th><th>Comment</th><th>Timestamp</th></tr>
+        </thead>
+        <tbody>
+          
+          <tr>
+            <td style="color:#2e7d32;font-weight:600;">approve</td>
+            <td>LGTM &lt;&amp;&gt;</td>
+            <td>2026-06-17T10:30:00.000Z</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  
+    <section>
+      <h2>Friction Log (last 2 lines)</h2>
+      <pre>first friction line
+second friction line &lt;&amp;&gt;</pre>
+    </section>
+</body>
+</html>

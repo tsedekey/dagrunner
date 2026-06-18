@@ -1,0 +1,124 @@
+{
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "additionalDirectories": [
+      "/test/runs/my-plan-111",
+      "/test/home/.m2",
+      "/test/home/.docker",
+      "/tmp",
+      "/tmp",
+      "/test/devharness/src",
+      "/test/home/.local/share/dagrunner"
+    ],
+    "allow": [
+      "Read",
+      "Bash(git *)",
+      "Bash(npm *)",
+      "Bash(npx tsc *)",
+      "Bash(npx prettier *)",
+      "Bash(./mvnw *)",
+      "Bash(cd java && ./mvnw *)",
+      "Bash(mvn *)",
+      "Bash(curl *)",
+      "Bash(jq *)",
+      "mcp__camunda-knowledge__docs_lookup",
+      "mcp__camunda-knowledge__semgrep_scan",
+      "mcp__camunda-knowledge__bpmn_lint",
+      "mcp__camunda-knowledge__zeebe_invariants",
+      "mcp__camunda-knowledge__graph_query"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(sudo *)",
+      "Bash(git push --force *)",
+      "Bash(git push * --force)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/secrets/**)",
+      "Write(**/.env*)",
+      "mcp__camunda-knowledge__history_search",
+      "mcp__camunda-knowledge__incident_search",
+      "mcp__camunda-knowledge__sg_search",
+      "mcp__camunda-knowledge__sg_definition",
+      "mcp__camunda-knowledge__sg_references"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,
+    "network": {
+      "allowedDomains": [
+        "api.anthropic.com",
+        "registry.npmjs.org",
+        "*.npmjs.org",
+        "github.com",
+        "api.github.com",
+        "*.githubusercontent.com",
+        "repo.maven.apache.org",
+        "central.maven.org",
+        "*.maven.org",
+        "plugins.gradle.org"
+      ]
+    }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/stop-verifier.sh"
+          },
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/stop-schema.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/post-tool-use-format.sh"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-end.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "env": {
+    "REPO_ENV": "repo-value"
+  },
+  "mcpServers": {
+    "repo-mcp": {
+      "command": "repo-cmd",
+      "type": "stdio"
+    },
+    "work-mcp": {
+      "command": "work-cmd",
+      "type": "stdio"
+    }
+  }
+}

@@ -10,9 +10,16 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 
 import {
   buildSeededSettings,
@@ -428,4 +435,55 @@ test("readWorkProfileMcpServers: server without command field is excluded", () =
     "server without command must be excluded",
   );
   assert.ok("valid-server" in result, "valid server must be included");
+});
+
+// ---------------------------------------------------------------------------
+// buildSeededSettings — golden snapshot (fixed inputs, no env or real FS paths)
+// ---------------------------------------------------------------------------
+
+const GOLDEN_PATH = fileURLToPath(
+  new URL("./settings-seed.golden.json", import.meta.url),
+);
+
+test("buildSeededSettings: golden snapshot (fixed inputs)", () => {
+  const actual = buildSeededSettings({
+    runDir: "/test/runs/my-plan-111",
+    homeDir: "/test/home",
+    tmpDir: "/tmp",
+    passthrough: {
+      env: { REPO_ENV: "repo-value" },
+      mcpServers: {
+        "repo-mcp": { command: "repo-cmd", type: "stdio" },
+      },
+    },
+    workProfileMcpServers: {
+      "work-mcp": { command: "work-cmd", type: "stdio" },
+    },
+    devharnessSrc: "/test/devharness/src",
+    dagrunnerHome: "/test/home/.local/share/dagrunner",
+    // claudeConfigDir omitted — reads real FS; breaks hermeticity
+  });
+
+  const serialised = JSON.stringify(actual, null, 2) + "\n";
+
+  if (process.env["UPDATE_SNAPSHOTS"] === "1") {
+    writeFileSync(GOLDEN_PATH, serialised, "utf8");
+    return;
+  }
+
+  if (!existsSync(GOLDEN_PATH)) {
+    throw new Error(
+      `Golden snapshot missing at ${GOLDEN_PATH}. ` +
+        `Run with UPDATE_SNAPSHOTS=1 to generate it.`,
+    );
+  }
+
+  const expected = readFileSync(GOLDEN_PATH, "utf8");
+  assert.equal(
+    serialised,
+    expected,
+    `buildSeededSettings output differs from snapshot.\n` +
+      `Snapshot: ${GOLDEN_PATH}\n` +
+      `To update: UPDATE_SNAPSHOTS=1 node --test --import tsx src/config/settings-seed.test.ts`,
+  );
 });

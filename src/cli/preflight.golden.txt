@@ -1,0 +1,22 @@
+
+⚙️  Configuration
+────────────────────────────────────────────────────────────
+  Home              /test/dagrunner/home
+  Config            /test/dagrunner/home/config.json
+  DEVHARNESS_SRC    /test/devharness/src
+  Claude config     /test/.claude-work
+  Max budget        $10
+  Max parallel      3
+
+🤖 Agent context  (dagrunner + DEVHARNESS_SRC)
+────────────────────────────────────────────────────────────
+  Permission mode   acceptEdits
+  Sandbox           enabled for all nodes
+  Hooks             SessionStart · Stop · PostToolUse · SessionEnd
+  Env               REPO_ENV=repo-value  ← DEVHARNESS_SRC
+  MCP servers       camunda-knowledge
+  Commands (2)        dagrunner: 1  DEVHARNESS_SRC: 1
+  Agents (1)          dagrunner: 1  DEVHARNESS_SRC: 0
+  Skills (1)          all from DEVHARNESS_SRC
+
+  Full detail: /test/cache/preflight-context.md
