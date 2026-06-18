@@ -31,4 +31,5 @@ BUILD-REPORT.md
 test/smoke/fixtures/toy-repo/
 /~/.claude-work
 
-*/archive/*
+docs/archive/*
+docs/changes/*
