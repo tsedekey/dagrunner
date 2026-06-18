@@ -272,9 +272,26 @@ let RUN_ID = "";
 // ---------------------------------------------------------------------------
 // Step 6 — dagrun resume --approve --verify n (Gate 2)
 //          election=n -> verify skipped -> pr -> done (pr is terminal)
+//
+// Reflection wiring check (option b — deterministic):
+//   Seed a known reflections.md into the pr artifact dir BEFORE resume so the
+//   SessionEnd hook has a file to capture regardless of what the model writes.
+//   This proves hook wiring + env propagation in a real session end-to-end,
+//   without gating on spontaneous model output (which is nondeterministic).
 // ---------------------------------------------------------------------------
 
 {
+  // Seed pr/reflections.md BEFORE the resume call so the SessionEnd hook
+  // captures it deterministically. The sdk-runner uses mkdir -p (not rm+mkdir)
+  // so the file survives into the session.
+  const prArtifactsDir = join(HOME, "runs", RUN_ID, "pr");
+  mkdirSync(prArtifactsDir, { recursive: true });
+  writeFileSync(
+    join(prArtifactsDir, "reflections.md"),
+    "smoke:live seeded reflection — deterministic hook wiring check",
+    "utf8",
+  );
+
   const result = runCli(
     ["resume", RUN_ID, "--approve", "--verify", "n"],
     // DAGRUN_NO_PR prevents real gh pr create; pr still writes body.md
@@ -323,29 +340,39 @@ let RUN_ID = "";
     "done",
     `run must be done after pr (pr is terminal), got status: ${stateRaw.status}`,
   );
-  // Hard-assert: reflection-log.jsonl must exist with ≥1 entry captured by the
-  // SessionEnd hook. A silently empty store can never pass smoke again.
+  // Assert the seeded reflections.md was captured by the SessionEnd hook.
+  // Deterministic: this entry was pre-written by smoke, not by the model.
+  // Proves hook fires + env (DAGRUN_STORE_DIR, DAGRUN_ARTIFACTS) propagates correctly.
   const reflectionLog = join(HOME, "store", "reflection-log.jsonl");
   assert.ok(
     existsSync(reflectionLog),
-    `reflection-log.jsonl must exist at ${reflectionLog} — hook-driven capture required`,
+    `reflection-log.jsonl must exist at ${reflectionLog} — SessionEnd hook wiring required`,
   );
   const lines = readFileSync(reflectionLog, "utf8")
     .split("\n")
     .filter((l) => l.trim().length > 0);
+  // Find the seeded entry (may be among other entries if model also reflected).
+  const seededEntry = lines
+    .map((l) => JSON.parse(l) as Record<string, unknown>)
+    .find(
+      (e) =>
+        typeof e["body"] === "string" &&
+        (e["body"] as string).includes("smoke:live seeded reflection"),
+    );
   assert.ok(
-    lines.length > 0,
-    "reflection-log.jsonl must have at least one entry",
+    seededEntry !== undefined,
+    "seeded reflection must appear in reflection-log.jsonl — SessionEnd hook did not capture it",
   );
-  const first = JSON.parse(lines[0] as string) as Record<string, unknown>;
-  assert.ok(typeof first["ts"] === "string", "entry must have ts field");
   assert.ok(
-    typeof first["source"] === "string",
-    "entry must have source field",
+    typeof seededEntry["ts"] === "string",
+    "seeded entry must have ts field",
   );
-  assert.ok(typeof first["body"] === "string", "entry must have body field");
+  assert.ok(
+    typeof seededEntry["source"] === "string",
+    "seeded entry must have source field",
+  );
   console.log(
-    `  reflection-log has ${lines.length} entries — hook-driven capture verified`,
+    `  reflection-log has ${lines.length} entries — hook-driven capture verified (seeded entry found)`,
   );
   console.log(
     "step 6 passed: Gate 2 approve --verify n -> verify skipped -> pr -> done",

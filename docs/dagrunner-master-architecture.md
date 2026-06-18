@@ -1,7 +1,7 @@
 # dagrunner — Master Architecture (Source of Truth)
 
 Status: Canonical, reconciled with the built code through Phase 3 (all three siblings built). Each sibling build also gets its own implementation plan. Cross-references cleaned up after the /verify-demo split into /seed-data.
-Last updated: 2026-06-18 (hook-driven reflection capture: SessionEnd hook reads reflections.md → store log; reflect-append command renamed to reflect; notes.md renamed to reflections.md)
+Last updated: 2026-06-18 (hook-driven reflection capture: SessionEnd hook reads reflections.md → store log; reflect-append command renamed to reflect; notes.md renamed to reflections.md; de-flake: reflection mechanism tested deterministically via hook unit test + seeded smoke:live — no longer gated on spontaneous model output)
 Owner: Eddie Tsedeke
 
 ---
@@ -86,14 +86,14 @@ Reviewer selection (from diff-triage): correctness + test-adequacy always; api-s
 
 **smoke:mock** (`test/smoke/smoke-mock.ts`) drives the full gated featureWorkflow in-process using the mock executor — zero API calls, ~150 ms, deterministic. Asserts: gate pauses, produces-contract at every gate node, state transitions (awaiting-gate → paused → done), routing (verify skipped when election=n, runs when election=y), verifyElection stored in state.json. Does NOT assert model output quality or exact session IDs.
 
-**smoke:live** (`test/smoke/smoke.ts`) runs the real 8-step pipeline with the SDK — requires `ANTHROPIC_API_KEY`, ~35 min. Proves API auth, real session-resume, structured output from live model, worktree diff. Run when node prompts change (`payload/commands/*.md`), when `sdk-runner.ts` changes, or once at build-queue end. A bad prompt that passes mock but breaks model behaviour won't surface until the next smoke:live — that is the accepted tradeoff.
+**smoke:live** (`test/smoke/smoke.ts`) runs the real 8-step pipeline with the SDK — requires `ANTHROPIC_API_KEY`, ~35 min. Proves API auth, real session-resume, structured output from live model, worktree diff. Run when node prompts change (`payload/commands/*.md`), when `sdk-runner.ts` changes, or once at build-queue end. A bad prompt that passes mock but breaks model behaviour won't surface until the next smoke:live — that is the accepted tradeoff. **Reflection wiring (step 6):** smoke seeds a known `reflections.md` into `pr/` before the resume call so the SessionEnd hook has a deterministic file to capture — this proves hook wiring + env propagation in a real session without gating on spontaneous model output. The hook logic is separately proven by the unit test (`src/hooks/session-end.test.ts`).
 
 **Executor-factory injection seam:** `startRun`, `resumeRun`, `rerunNode` all accept an optional `executorFactory` parameter (defaults to `makeSDKRunner`). This is the seam that lets smoke:mock swap in `createMockExecutor` without touching engine logic. See DECISIONS.md § split-smoke-mock-gate-live-occasional.
 
 **Unit test coverage (co-located `*.test.ts`):**
 
 - _Tier A (core)_: `dag.test.ts`, `state.test.ts`, `lock.test.ts`, `workflow.test.ts`, `settings-seed.test.ts` — DAG topology, state I/O, lock discipline, loadWorkflow, settings-seed merge rules.
-- _Tier B (exported helpers)_: `xdg.test.ts` (`computeHomePath`, `resolveHome`, `resolveConfig`, `initHome`), `preflight.test.ts` (`getAgentContext`, `formatAgentContext`, fixture-able `runPreflight` predicates).
+- _Tier B (exported helpers)_: `xdg.test.ts` (`computeHomePath`, `resolveHome`, `resolveConfig`, `initHome`), `preflight.test.ts` (`getAgentContext`, `formatAgentContext`, fixture-able `runPreflight` predicates), `hooks/session-end.test.ts` (invokes `.claude/hooks/session-end.sh` directly in a temp env — proves reflection capture, best-effort no-op on absent/empty file, run_id field, friction.jsonl write).
 - _Golden_: `report.test.ts` (HTML output of `generateReport` → `report.golden.snap`); `settings-seed.test.ts` extension (`buildSeededSettings` JSON → `settings-seed.golden.json`); `preflight.test.ts` (`formatAgentContext` text → `preflight.golden.txt`). Stored in `.snap`/`.txt`/`.json` to avoid Prettier hook reformatting (`.html` is in scope, those are not). `UPDATE_SNAPSHOTS=1` regenerates — a deliberate act.
 - _Schema-contract_: `feature-workflow.test.ts` — well-formedness of `CLASSIFY_SCHEMA`/`FINDINGS_SCHEMA`, conforming+nonconforming fixtures (hand-rolled validator, no ajv), `featureWorkflow` passes `loadWorkflow`.
 - _Tier C (orchestration)_ owned by smoke (never unit-tested).
@@ -165,7 +165,7 @@ No classify node. Reviewer-selection moved into review's diff-triage step (reads
 
 Each node optionally writes tips/gotchas to `$DAGRUN_ARTIFACTS/reflections.md`. The **SessionEnd hook** (`.claude/hooks/session-end.sh`) reads this file when the node finishes and appends one stamped JSONL entry to the durable store. The log outlives the run (stored in `~/.local/share/dagrunner/store/reflection-log.jsonl`, not in `runs/<id>/`). Capture is fail-soft — a hook failure never blocks a node.
 
-- **Node contract:** nodes write `reflections.md` if they have useful tips; absence is fine. `fix` is the exception: it always writes `reflections.md` (fallback: "No non-obvious discoveries.") to guarantee ≥1 store entry per run.
+- **Node contract:** nodes write `reflections.md` if they have useful tips; absence is fine. `fix` writes `reflections.md` whenever fixes were applied (fallback: "No non-obvious discoveries."). No node is required to write it for test coverage — the hook mechanism is proven deterministically (see Testing §14 and DECISIONS §deflake-reflection-capture-test).
 - **Hook-written entry shape:** `{ ts, source, run_id?, body }` — `kind` is absent (deferred to human harvest; no judgment in the runtime path).
 - **Manual/sibling append:** `dagrun reflect --source <node> --kind camunda-knowledge|dagrunner-harness --body "<text>" [--run-id <id>]` — used by ci-babysit/pr-triage and the human. This is the only path that sets `kind`.
 - **Durability invariant:** `DAGRUN_STORE_DIR` is injected explicitly by the launcher (never derived via `../../` from the run dir). The store is outside the run dir and survives `dagrun cleanup`.

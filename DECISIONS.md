@@ -287,3 +287,13 @@ Format: `<block> · <decision> · <why>`
 - hook-driven-reflection-capture · body encoded with `jq -Rs .` in session-end.sh (python3 fallback via sys.argv injection) · reflections.md is freeform multi-line markdown; the naive manual template produces invalid JSONL; jq -Rs . (slurp+encode) handles newlines/quotes correctly; python3 fallback uses sys.argv to avoid shell-quoting issues inside -c
 
 - hook-driven-reflection-capture · module files `reflect-append.ts` / `reflect-append.test.ts` retain their names · these are internal implementation modules for the manual `dagrun reflect` command; the user-facing rename is the CLI subcommand (`reflect-append` → `reflect`); renaming the module would be gratuitous churn with no user benefit
+
+## deflake-reflection-capture-test
+
+- deflake-reflection-capture-test · hook mechanism tested deterministically via `src/hooks/session-end.test.ts` (new) — invokes `.claude/hooks/session-end.sh` directly in temp dirs, no SDK, no model · the previous hard-assert in smoke:live gated on spontaneous model output (nondeterministic by design); this test proves script logic regardless of what any model writes; teeth-check: comment out the reflection branch in session-end.sh → two tests go red (seeded entry absent + run_id test)
+
+- deflake-reflection-capture-test · smoke:live step 6 now seeds a known `reflections.md` into `pr/` BEFORE the resume call (option b, not option a) · option a (drop the assert entirely) would silently remove hook-wiring + env-propagation coverage from smoke:live; option b preserves that coverage deterministically; sdk-runner uses `mkdir -p` (not rm+mkdir) at node start so a pre-seeded file survives into the session; the seeded entry is found by body substring match to distinguish it from any entries the model may also have written
+
+- deflake-reflection-capture-test · fix.md mandatory reflections.md write is preserved, but no longer load-bearing for test coverage · the "always write" fallback is still good practice but the test guarantee now comes from the hook unit test + seeded smoke, not from relying on a model to write a specific file
+
+- deflake-reflection-capture-test · smoke:live ≥1 spontaneous-output hard-assert REMOVED (replaced by seeded-entry assert) · the original assert was intentional as a "silent empty can never pass" gate but contradicted "absence is fine" — two semantics that can't coexist; the seeded assert preserves the "hook must fire" invariant deterministically without the contradiction
