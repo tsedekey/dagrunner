@@ -229,6 +229,7 @@ export async function startRun(opts: {
   } else {
     releaseLock(homeDir);
     process.stdout.write(`dagrun: run ${runId} ${result.status}\n`);
+    if (result.status === "failed") process.exit(1);
   }
 }
 
@@ -511,6 +512,7 @@ export async function resumeRun(opts: {
   } else {
     releaseLock(homeDir);
     process.stdout.write(`dagrun: run ${runId} ${result.status}\n`);
+    if (result.status === "failed") process.exit(1);
   }
 }
 

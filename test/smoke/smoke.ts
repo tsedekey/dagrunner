@@ -431,6 +431,9 @@ let RUN_ID = "";
       implement: {
         ...implementNode,
         status: "running",
+        // Set interruptRetries well above the cap so resetInterruptedNodes
+        // leaves it failed immediately — no SDK call fires, test is deterministic.
+        interruptRetries: 99,
         // Drop sessionId so there is no resume attempt
         sessionId: undefined,
       },
@@ -460,37 +463,34 @@ let RUN_ID = "";
     "utf8",
   );
 
-  // Resume with --approve. reconcileRunningNodes marks implement 'failed'
-  // (running→failed). resetInterruptedNodes then checks the interrupt-retry
-  // cap: implement has no interruptRetries set (=0) so it resets to pending
-  // and runDag re-runs it. The run may complete done, failed, or timeout.
-  //
-  // We assert only the stable properties: resume exits 0 and implement is no
-  // longer 'running' (i.e., reconcile happened). The exact re-run outcome is
-  // deterministic in the tier-1 mock-executor test (dag.test.ts interrupt-retry
-  // tests) — this smoke step covers only the end-to-end reconcile plumbing.
-  const result = runCli(["resume", killedRunId, "--approve"], HOME_ENV, 60_000);
+  // Resume with --approve. Flow:
+  //   reconcileRunningNodes: implement running → failed (interrupt error, interruptRetries:99)
+  //   resetInterruptedNodes: 99 >= cap (2) → leaves failed, no SDK call fires
+  //   runDag: all nodes terminal → returns failed immediately
+  // No real API call; deterministic exit code 1.
+  const result = runCli(["resume", killedRunId, "--approve"], HOME_ENV, 10_000);
 
-  // Resume must not crash.
-  assert.ok(
-    result.status === 0 || result.status === 1,
-    `resume must exit with a defined status code, got: ${String(result.status)}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
+  // Run must exit 1 (failed terminal state — no retry fired because cap was hit).
+  assert.strictEqual(
+    result.status,
+    1,
+    `resume must exit 1 (cap-exceeded run ends failed), got: ${String(result.status)}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
   );
 
   const reconciledRaw = JSON.parse(
     readFileSync(join(killedRunDir, "state.json"), "utf8"),
   ) as { nodes: Record<string, { status: string }> };
 
-  // Reconcile must have fired — implement must no longer be 'running'.
+  // Interrupt-retry cap was hit — implement must be 'failed' (not reset to pending).
   const implementStatus = reconciledRaw.nodes["implement"]?.status;
-  assert.notStrictEqual(
+  assert.strictEqual(
     implementStatus,
-    "running",
-    `reconcile must have cleared the running state; implement is still running\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
+    "failed",
+    `interrupt-retry cap must leave implement failed; got: ${String(implementStatus)}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
   );
 
   console.log(
-    `step 8 passed: reconcile cleared running state (implement post-reconcile: ${String(implementStatus)})`,
+    `step 8 passed: interrupt-retry cap hit — implement stayed failed, no SDK call fired`,
   );
 }
 
