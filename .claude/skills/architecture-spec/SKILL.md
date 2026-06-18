@@ -163,7 +163,9 @@ Crash recovery: on start/resume, reconcile state.json vs `git worktree list` + l
 ## Theme 11 — The feature pipeline (full topology)
 
 Nodes (each reviewer is a real node): 1 classify(haiku)→ 2 expand(unpinned, **review gate**,
-revise-self, produces guide.md)→ 3 implement(unpinned, worktree diff + summary.md)→ reviewers
+revise-self, produces guide.md; also critically evaluates plan implementation — surfaces "Concerns /
+plan challenges" in guide.md when over-specified/diverging/incomplete, advisory via Gate 1)→
+3 implement(unpinned, worktree diff + summary.md)→ reviewers
 4 correctness(unpinned, always, optional:false) 5 test-adequacy(sonnet, always, optional:false)
 6 api-stability(sonnet, when touches_public_api, optional) 7 distributed-systems(unpinned, when
 touches_runtime, optional) 8 performance(unpinned, when perf_sensitive, optional) 9 migration-safety

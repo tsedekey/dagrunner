@@ -37,7 +37,7 @@ well-scoped:
 
 - Does it **over-specify** detail that belongs to the implementer?
 - Does it **diverge** from the source issue's prescribed approach (if any)?
-- Is it **incomplete** in ways that would block a good implementation?
+- Is the **requirement or acceptance** incomplete or unclear in ways that would block a good implementation? (Sparse implementation detail is expected and good — that is expand's job, not the plan's.)
 
 If you find genuine concerns, append a **"Concerns / plan challenges"** section to
 guide.md. State each concern concretely: what you observed, what the requirement or
