@@ -73,6 +73,18 @@ Reviewer selection (from diff-triage): correctness + test-adequacy always; api-s
 
 ---
 
+## 3b. Validation — smoke:mock (per-plan gate) and smoke:live (occasional)
+
+`npm run verify-baseline` = `npm ci && typecheck && unit tests && smoke:mock`. The standing gate: run on every plan change.
+
+**smoke:mock** (`test/smoke/smoke-mock.ts`) drives the full gated featureWorkflow in-process using the mock executor — zero API calls, ~150 ms, deterministic. Asserts: gate pauses, produces-contract at every gate node, state transitions (awaiting-gate → paused → done), routing (verify skipped when election=n, runs when election=y), verifyElection stored in state.json. Does NOT assert model output quality or exact session IDs.
+
+**smoke:live** (`test/smoke/smoke.ts`) runs the real 8-step pipeline with the SDK — requires `ANTHROPIC_API_KEY`, ~35 min. Proves API auth, real session-resume, structured output from live model, worktree diff. Run when node prompts change (`payload/commands/*.md`), when `sdk-runner.ts` changes, or once at build-queue end. A bad prompt that passes mock but breaks model behaviour won't surface until the next smoke:live — that is the accepted tradeoff.
+
+**Executor-factory injection seam:** `startRun`, `resumeRun`, `rerunNode` all accept an optional `executorFactory` parameter (defaults to `makeSDKRunner`). This is the seam that lets smoke:mock swap in `createMockExecutor` without touching engine logic. See DECISIONS.md § split-smoke-mock-gate-live-occasional.
+
+---
+
 ## 4. The spine
 
 - **run-id = `<slug>-<timestamp>`** (the built format; no issue-number injection). Branch `feature/<slug>`.
