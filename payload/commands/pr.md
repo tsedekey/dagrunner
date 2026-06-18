@@ -96,6 +96,21 @@ git commit -m "feat: <title from guide.md> (dagrun: $DAGRUN_RUN_ID)"
 
 Under normal flow `implement.md` commits first — this is a no-op if that happened.
 
+## Step 5 — Capture tips (best-effort, do this last)
+
+After all artifacts are confirmed, append any tips about the PR process or
+code area. Fail-soft — call last, don't worry if it fails:
+
+```bash
+dagrun reflect-append \
+  --source pr \
+  --kind dagrunner-harness \
+  --body "<one or two sentences: anything non-obvious about the PR or the code area that would help future runs>" \
+  --run-id "$DAGRUN_RUN_ID" || true
+```
+
+Only call this if you have something genuinely useful. Absence is fine.
+
 ## Done
 
 Your work ends here. dagrunner runs `git push origin HEAD` and

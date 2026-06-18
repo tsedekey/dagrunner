@@ -228,6 +228,20 @@ Format: `<block> · <decision> · <why>`
 
 - verify-obs · advisory printed BEFORE the opts.verify branch, covering both interactive prompt and --verify flag paths · single print placement means no code duplication; both headless/queue runs (--verify) and interactive runs see the advisory recorded in stdout; the election itself and its default are unchanged
 
+## reflect-rearchitecture (pure capture — 2026-06-18)
+
+- reflect-rearchitecture · auto-apply subsystem removed; capture is now pure, distributed, and durable · the old reflect+apply-reflection pipeline synthesized proposals on the critical path (one reflect node, Gate 4, apply-reflection with 4 guardrails, dagrun revert-reflection). Judgment on the critical path adds complexity and risk; synthesis belongs in the periodic human+architect harvest. See plan: docs/changes/reflect-rearchitecture-pure-capture.md.
+
+- reflect-append-fail-soft · appendReflection() is fail-soft (empty body → no-op, not throw); the CLI exits 0 even when args are missing · this is the single deliberate exception to dagrunner's fail-loud invariant. Rationale: capture must never block shipping. The module validates at call time (guards against calling with a blank body) but the CLI and all prompts are safe to call unconditionally. Node prompts also add `|| true` as belt-and-suspenders. Logged here so "fail-soft here" doesn't read as a violation.
+
+- reflect-rearchitecture-inline · coordinator self-edited (no author subagent delegated) · the change touches 10+ files but each edit is mechanical (remove nodes, add a closing step, update docs). Spawning subagents would add hand-off overhead with no quality benefit. Logged per autonomy protocol.
+
+- reflect-rearchitecture-settings-seed-dirs-kept · devharnessSrc and dagrunnerHome stay in additionalDirectories; comments updated to remove apply-reflection references · dagrun reflect-append writes to the store via subprocess (fs calls), not Claude's Write tool, so the dagrunnerHome entry is not required for the store write. Both entries are retained for future read access (nodes may read from DEVHARNESS_SRC and the store via Read/Bash tools). Keeping them avoids golden-file churn with no downside. See advisor guidance.
+
+- reflect-rearchitecture-store-proposals-cleanup · store/proposals/proposals.jsonl runtime file left for deletion by the human post-merge · the file held two fully-resolved Flavor-2 entries (verified during plan grounding). Once apply-reflection's write path is removed, the file is dead. No code references it after this change; the human can delete it as cleanup.
+
+- reflect-rearchitecture-smoke-steps-reduced · smoke-mock Run A is now 4 steps (A1-A4), Run B is 4 steps (B1-B4); Steps A5/B5 (Gate 4 approve + apply-reflection) removed · both runs now end in "done" after the pr node completes; no Gate 4 exists; the test structure mirrors the new terminal-at-pr pipeline exactly.
+
 - verify-obs · fail-soft is the justified exception to fail-loud · the recommendation is advisory, not load-bearing; findings.json may be absent (verify-election runs even when review was skipped or malformed); a try/catch around file-read + JSON.parse + field-presence guards all three degrade paths; the bare prompt is always the fallback
 
 - worktree-hygiene · two-layer guard (gitignore-exclude seed = prevention; pre-pr advisory scan = visibility) instead of a hard block · nodes legitimately write source into the worktree, so scratch can't be path-distinguished from intended changes; a hard block would break real work; the exclude seed keeps scratch out of the PR deterministically while the advisory scan surfaces a leaking prompt to fix

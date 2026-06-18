@@ -140,7 +140,7 @@ entry: `{ ts, node, sessionId, event, detail }`.
 Tiers: `haiku` (mechanical), `sonnet` (default reasoning), omit (unpinned → opusplan reaches Opus).
 Assignments: classify=haiku; expand=unpinned; reviewers test-adequacy/api-stability/migration-
 safety=sonnet, correctness/distributed-systems/performance=unpinned; synthesize-and-fix=unpinned;
-verify=haiku; pr=haiku; reflect=sonnet; apply-reflection=sonnet. Validate model strings at load.
+verify=haiku; pr=haiku. Validate model strings at load.
 Budget: per-run `--max-budget-usd` (hard ceiling, works on subscription auth) PLUS optional per-node
 `maxBudget` for unpinned/Opus-eligible nodes. On run-cap hit → checkpoint-and-exit, resume at higher
 cap. SessionEnd writes per-node cost into state.json; status shows total vs cap; reflect flags
@@ -171,27 +171,25 @@ plan challenges" in guide.md when over-specified/diverging/incomplete, advisory 
 touches_runtime, optional) 8 performance(unpinned, when perf_sensitive, optional) 9 migration-safety
 (sonnet, when touches_schema_or_proto, optional)→ 10 synthesize-and-fix(unpinned, Stop-hook
 convergence)→ 11 verify(haiku, when needs_runtime, **verify gate** rerun:verify)→ 12 pr
-(haiku, body+PR URL)→ 13 reflect(sonnet, **reflect gate**, revise-self)→ 14 apply-reflection(sonnet,
-edits worktree .claude/** only). Three gates, sequential, never concurrent. classify.json flags
+(haiku, body+PR URL) [TERMINAL]. Two gates, sequential, never concurrent. classify.json flags
 `{touches_public_api, touches_runtime, perf_sensitive, touches_schema_or_proto, touches_ui, needs_runtime: bool;
 risk: low|med|high}` drive all conditional reviewers + verify. findings.json carries a `manual_test_recommendation`
 object (`{recommended, surface: ui|api|none, rationale}`) derived from triage; surfaced as advisory at verify-election.
-**v1 cut line = nodes 1→2→3 + the review gate.\*\* Nodes 4-14 are phase-2 config additions.
-apply-reflection targets worktree-private gitignored files only — never a Camunda PR.
+**v1 cut line = nodes 1→2→3 + the review gate.** Nodes 4-12 are phase-2 config additions.
+Each node appends tips/gotchas to `store/reflection-log.jsonl` via `dagrun reflect-append` (best-effort, fail-soft).
 
-## Theme 12 — Self-improving loop
+## Theme 12 — Self-improving / reflection
 
-`reflect` consumes friction.jsonl FIRST (gate rejects, loop-iteration counts, tool errors, per-node
-cost), cross-refs artifacts to ground each observation — never reconstructed memory. Proposals are
-TYPED: `{ target (exact .claude/** file), change-type (prompt-edit|add-skill|tune-when|model-retier),
-rationale (which friction signal), diff (concrete before/after) }` — no proposal without target+diff.
-Reflect gate shows proposals as a reviewable changeset, approve/reject PER PROPOSAL. apply-reflection
-guardrails: (1) allowlist `.claude/commands|skills|agents/**` + nested CLAUDE.local.md only — anything
-else refused; (2) worktree-private only, synced via DEVHARNESS_SRC, never a PR; (3) apply ONLY the
-exact approved diffs (mechanical applier, no re-reasoning); (4) snapshot `.claude/**` to
-`runs/<run-id>/reflect/backup/` before edit → `dagrun revert-reflection <run-id>`. Reflect runs AFTER
-pr (never blocks shipping), is skippable (run still completes done). v1 = per-run reflection only;
-cross-run `store/` learning deferred to phase 2 with `--since`.
+Reflection is **pure distributed capture**: each surviving pipeline node appends a raw tip or gotcha
+after writing its `produces` artifacts via `dagrun reflect-append --source <node> --kind <kind> --body "<text>" [--run-id <id>]`.
+Entries are durable JSONL written to `~/.local/share/dagrunner/store/reflection-log.jsonl` (in `store/`,
+NOT `runs/<id>/` — outlives run deletion). Entry shape: `{ ts, source, kind, body, run_id? }`.
+Kinds: `camunda-knowledge` (Camunda-repo facts) or `dagrunner-harness` (orchestrator improvements).
+Capture is best-effort and fail-soft — `|| true` in prompts, no throw on empty body; a failed append
+NEVER fails the node. The auto-apply subsystem (reflect node + Gate 4 + apply-reflection node +
+revert-reflection command) was removed in 2026-06-18 (see DECISIONS.md: reflect-rearchitecture).
+Harvest is periodic and manual: route `camunda-knowledge` entries to DEVHARNESS_SRC private files;
+route `dagrunner-harness` entries to a dagrunner self-change plan.
 
 ## Theme 13 — Config, secrets & launcher
 

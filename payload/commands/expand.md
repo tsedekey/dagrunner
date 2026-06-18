@@ -53,3 +53,19 @@ over-prescription, or gaps that would mislead an implementer.
 If you notice non-obvious facts about the Camunda code area (module invariants,
 gotchas, relevant internal APIs), write them to $DAGRUN_ARTIFACTS/notes.md. Absence
 is fine — only write notes.md if there is something genuinely useful.
+
+## Step 6 — Capture tips (best-effort, do this last)
+
+After guide.md is written and all other steps are complete, append any useful
+tips or gotchas you discovered about this code area or about the expand process
+itself. This is fail-soft — do it last, and if it fails don't worry:
+
+```bash
+dagrun reflect-append \
+  --source expand \
+  --kind dagrunner-harness \
+  --body "<one or two sentences: what was non-obvious, what would help future runs>" \
+  --run-id "$DAGRUN_RUN_ID" || true
+```
+
+Only call this if you have something genuinely useful to record. Absence is fine.

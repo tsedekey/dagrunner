@@ -4,7 +4,7 @@
  * Phase 2a pipeline:
  *   expand (Gate 1) -> implement -> review -> fix (Gate 2)
  *
- * Phase 2b adds: verify-election -> verify (Gate 3) -> pr -> reflect
+ * Phase 2b adds: verify-election -> verify (Gate 3) -> pr (terminal)
  *
  * This is the ONLY workflow in v1. Additional workflows are config additions
  * on the proven engine.
@@ -157,22 +157,6 @@ export const featureWorkflow: Workflow = {
       command: "/pr",
       model: "haiku",
       produces: ["body.md"],
-    },
-    {
-      id: "reflect",
-      dependsOn: ["pr"],
-      command: "/reflect",
-      model: "sonnet",
-      produces: ["camunda-knowledge.md", "dagrunner-proposals.md"],
-      gate: { maxIterations: 3, onReject: "revise-self", skippable: true }, // Gate 4: post-PR, never blocks shipping
-    },
-    {
-      id: "apply-reflection",
-      dependsOn: ["reflect"],
-      command: "/apply-reflection",
-      model: "sonnet",
-      produces: ["apply-summary.md"],
-      joinRule: "none-failed-min-one-success", // only runs if reflect completed; auto-skips if reflect was skipped
     },
   ],
 };

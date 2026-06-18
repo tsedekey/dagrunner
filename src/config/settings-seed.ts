@@ -109,17 +109,16 @@ export function buildSeededSettings(opts: {
   workProfileMcpServers?: Record<string, unknown>;
   /**
    * DEVHARNESS_SRC (e.g. ~/dev/camunda/camunda-main). When provided, added to
-   * additionalDirectories so apply-reflection can write CLAUDE.local.md files
-   * directly into the real source tree. All nodes get this access — scope is
-   * intentional (logged in DECISIONS.md): prompt-discipline is the guard, not
-   * the sandbox boundary, for cross-tree writes.
+   * additionalDirectories so nodes can read from the main source tree (e.g.
+   * cross-tree file reads). All nodes get this access — scope is intentional:
+   * prompt-discipline is the guard, not the sandbox boundary.
    */
   devharnessSrc?: string;
   /**
    * Dagrunner home (DAGRUNNER_HOME, e.g. ~/.local/share/dagrunner). When
-   * provided, added to additionalDirectories so apply-reflection can write to
-   * store/proposals/ — a sibling of runDir that the runDir entry alone does not
-   * cover.
+   * provided, added to additionalDirectories so nodes can read the durable
+   * store (e.g. reflection-log.jsonl) — a sibling of runDir that the runDir
+   * entry alone does not cover.
    */
   dagrunnerHome?: string;
 }): Record<string, unknown> {

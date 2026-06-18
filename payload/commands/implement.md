@@ -34,3 +34,19 @@ git commit -m "feat: <concise title ≤70 chars from guide.md>"
 ```
 
 Do not push — the pr node handles the push.
+
+## Capture tips (best-effort, do this last)
+
+After all artifacts are written and the commit is made, append any useful tips or
+gotchas about this code area or the implementation process. Fail-soft — call last,
+don't worry if it fails:
+
+```bash
+dagrun reflect-append \
+  --source implement \
+  --kind dagrunner-harness \
+  --body "<one or two sentences: hidden coupling, build quirk, or pattern worth flagging>" \
+  --run-id "$DAGRUN_RUN_ID" || true
+```
+
+Only call this if you discovered something non-obvious. Absence is fine.

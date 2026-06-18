@@ -16,15 +16,14 @@ import {
 } from "../config/xdg.js";
 import { releaseLock, readLock } from "../core/lock.js";
 import {
-  cpSync,
   existsSync,
-  mkdirSync,
   readFileSync,
   readdirSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
+import { appendReflection } from "./reflect-append.js";
 import { generateReport } from "./report.js";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -459,54 +458,35 @@ function cmdClear(argv: string[]): void {
   process.stdout.write(`dagrun: cleared run ${runId}\n`);
 }
 
-function cmdRevertReflection(argv: string[]): void {
-  const runId = argv[0];
-  if (runId === undefined) {
+function cmdReflectAppend(argv: string[]): void {
+  const source = flagValue(argv, "--source");
+  const kind = flagValue(argv, "--kind");
+  const body = flagValue(argv, "--body");
+  const runId = flagValue(argv, "--run-id");
+
+  if (source === undefined || kind === undefined || body === undefined) {
     process.stderr.write(
-      `dagrun revert-reflection: missing <run-id> argument.\n`,
+      `dagrun reflect-append: --source, --kind, and --body are required.\n` +
+        `Usage: dagrun reflect-append --source <node> --kind camunda-knowledge|dagrunner-harness --body "<text>" [--run-id <id>]\n`,
     );
-    process.exit(1);
+    // Exit 0 — capture is best-effort; caller (node prompt) must not fail because of this.
+    return;
+  }
+
+  if (kind !== "camunda-knowledge" && kind !== "dagrunner-harness") {
+    process.stderr.write(
+      `dagrun reflect-append: --kind must be camunda-knowledge or dagrunner-harness, got "${kind}"\n`,
+    );
+    return;
   }
 
   const homeDir = resolveHome();
-  const backupDir = join(homeDir, "runs", runId, "reflect", "backup");
-
-  if (!existsSync(backupDir)) {
-    process.stderr.write(
-      `dagrun revert-reflection: no backup found at ${backupDir}\n`,
-    );
-    process.exit(1);
-  }
-
-  const manifestPath = join(backupDir, "manifest.json");
-  if (!existsSync(manifestPath)) {
-    process.stderr.write(
-      `dagrun revert-reflection: no manifest.json in ${backupDir}\n`,
-    );
-    process.exit(1);
-  }
-
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
-    files: Array<{ original: string; backup: string }>;
-  };
-
-  let restored = 0;
-  for (const entry of manifest.files) {
-    if (existsSync(entry.backup)) {
-      mkdirSync(join(entry.original, ".."), { recursive: true });
-      cpSync(entry.backup, entry.original);
-      process.stdout.write(`dagrun: restored ${entry.original}\n`);
-      restored++;
-    } else {
-      process.stderr.write(
-        `dagrun revert-reflection: backup missing for ${entry.original}\n`,
-      );
-    }
-  }
-
-  process.stdout.write(
-    `dagrun: revert-reflection complete — ${restored} file(s) restored for ${runId}\n`,
-  );
+  appendReflection(homeDir, {
+    source,
+    kind,
+    body,
+    ...(runId !== undefined ? { run_id: runId } : {}),
+  });
 }
 
 function cmdReport(argv: string[]): void {
@@ -679,7 +659,7 @@ function printHelp(): void {
       "  dagrun report <run-id>",
       "  dagrun logs <run-id> <node>",
       "  dagrun rerun <run-id> <node-id>",
-      "  dagrun revert-reflection <run-id>",
+      '  dagrun reflect-append --source <node> --kind camunda-knowledge|dagrunner-harness --body "<text>" [--run-id <id>]',
       "",
     ].join("\n"),
   );
@@ -763,8 +743,8 @@ async function main(argv: string[]): Promise<number> {
       cmdLogs(rest);
       return 0;
 
-    case "revert-reflection":
-      cmdRevertReflection(rest);
+    case "reflect-append":
+      cmdReflectAppend(rest);
       return 0;
 
     default:

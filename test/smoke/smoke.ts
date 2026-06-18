@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * Block 9 — 8-step smoke test for dagrunner v1 (Phase 2a + 2b).
+ * Block 9 — 7-step smoke test for dagrunner v1 (Phase 2a + 2b).
  *
  * Drives the real thin slice end-to-end using non-interactive flags.
- * Makes REAL SDK calls for steps 2-5 and step 6 (pr + reflect) and step 7.
- * Step 8 uses a synthetic state (no API call) to test reconcile plumbing only.
+ * Makes REAL SDK calls for steps 2-5 and step 6 (pr — terminal node).
+ * Step 7 uses a synthetic state (no API call) to test reconcile plumbing only.
  * Phase 2b: step 6 uses --verify n (election skip) + DAGRUN_NO_PR=1 (no real PR).
  *
  * Run: node --import tsx ./test/smoke/smoke.ts
@@ -271,7 +271,7 @@ let RUN_ID = "";
 
 // ---------------------------------------------------------------------------
 // Step 6 — dagrun resume --approve --verify n (Gate 2)
-//          election=n -> verify skipped -> pr -> reflect (Gate 4 pause)
+//          election=n -> verify skipped -> pr -> done (pr is terminal)
 // ---------------------------------------------------------------------------
 
 {
@@ -279,7 +279,7 @@ let RUN_ID = "";
     ["resume", RUN_ID, "--approve", "--verify", "n"],
     // DAGRUN_NO_PR prevents real gh pr create; pr still writes body.md
     { ...HOME_ENV, DAGRUN_NO_PR: "1" },
-    600_000, // 10 minutes: election + pr (haiku) + reflect (sonnet)
+    600_000, // 10 minutes: election + pr (haiku)
   );
   assert.strictEqual(
     result.status,
@@ -308,7 +308,7 @@ let RUN_ID = "";
     "skipped",
     `verify must be skipped, got: ${String(stateRaw.nodes["verify"]?.status)}`,
   );
-  // pr must have run.
+  // pr must have run and the run must be done (pr is terminal).
   assert.strictEqual(
     stateRaw.nodes["pr"]?.status,
     "done",
@@ -318,71 +318,40 @@ let RUN_ID = "";
     existsSync(join(runDir, "pr", "body.md")),
     "pr/body.md must exist after pr node",
   );
-  // reflect must have paused at Gate 4.
-  assert.ok(
-    stateRaw.status === "paused" ||
-      stateRaw.nodes["reflect"]?.status === "awaiting-gate",
-    `run must be paused at reflect gate, got status: ${stateRaw.status}`,
-  );
-  console.log(
-    "step 6 passed: Gate 2 approve --verify n -> verify skipped -> pr -> reflect gate (Gate 4 pause)",
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Step 7 — dagrun resume --approve (Gate 4 / reflect) -> apply-reflection -> done
-// ---------------------------------------------------------------------------
-
-{
-  const result = runCli(
-    ["resume", RUN_ID, "--approve"],
-    HOME_ENV,
-    600_000, // 10 minutes: apply-reflection (sonnet)
-  );
-  assert.strictEqual(
-    result.status,
-    0,
-    `approve Gate 4 (reflect) failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
-  );
-
-  const runDir = join(HOME, "runs", RUN_ID);
-  const stateRaw = JSON.parse(
-    readFileSync(join(runDir, "state.json"), "utf8"),
-  ) as { status: string; nodes: Record<string, { status: string }> };
-
   assert.strictEqual(
     stateRaw.status,
     "done",
-    `run must reach done status after reflect approval, got: ${stateRaw.status}`,
+    `run must be done after pr (pr is terminal), got status: ${stateRaw.status}`,
   );
-  // reflect must have produced both output files.
-  assert.ok(
-    existsSync(join(runDir, "reflect", "camunda-knowledge.md")),
-    "reflect/camunda-knowledge.md must exist",
-  );
-  assert.ok(
-    existsSync(join(runDir, "reflect", "dagrunner-proposals.md")),
-    "reflect/dagrunner-proposals.md must exist",
-  );
-  // apply-reflection must have run (done) or been skipped (if reflect had no proposals).
-  const applyStatus = stateRaw.nodes["apply-reflection"]?.status;
-  assert.ok(
-    applyStatus === "done" || applyStatus === "skipped",
-    `apply-reflection must be done or skipped, got: ${String(applyStatus)}`,
-  );
-  if (applyStatus === "done") {
+  // Best-effort: if reflection-log exists, check it has at least one valid entry.
+  const reflectionLog = join(HOME, "store", "reflection-log.jsonl");
+  if (existsSync(reflectionLog)) {
+    const lines = readFileSync(reflectionLog, "utf8")
+      .split("\n")
+      .filter((l) => l.trim().length > 0);
     assert.ok(
-      existsSync(join(runDir, "apply-reflection", "apply-summary.md")),
-      "apply-reflection/apply-summary.md must exist when node completed",
+      lines.length > 0,
+      "reflection-log.jsonl must have at least one entry",
+    );
+    const first = JSON.parse(lines[0] as string) as Record<string, unknown>;
+    assert.ok(typeof first["ts"] === "string", "entry must have ts field");
+    assert.ok(
+      typeof first["source"] === "string",
+      "entry must have source field",
+    );
+    assert.ok(typeof first["kind"] === "string", "entry must have kind field");
+    assert.ok(typeof first["body"] === "string", "entry must have body field");
+    console.log(
+      `  (reflection-log has ${lines.length} entries — best-effort check passed)`,
     );
   }
   console.log(
-    `step 7 passed: approve reflect gate -> apply-reflection (${String(applyStatus)}) -> done`,
+    "step 6 passed: Gate 2 approve --verify n -> verify skipped -> pr -> done",
   );
 }
 
 // ---------------------------------------------------------------------------
-// Step 8 — reconcile: running node -> failed (synthetic, no API call)
+// Step 7 — reconcile: running node -> failed (synthetic, no API call)
 // ---------------------------------------------------------------------------
 
 {
@@ -489,7 +458,7 @@ let RUN_ID = "";
   );
 
   console.log(
-    `step 8 passed: interrupt-retry cap hit — implement stayed failed, no SDK call fired`,
+    `step 7 passed: interrupt-retry cap hit — implement stayed failed, no SDK call fired`,
   );
 }
 
@@ -497,4 +466,4 @@ let RUN_ID = "";
 // Done
 // ---------------------------------------------------------------------------
 
-console.log("\nall 8 smoke test steps passed");
+console.log("\nall 7 smoke test steps passed");

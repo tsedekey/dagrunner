@@ -6,7 +6,7 @@
 > `testing-protocol` skill. This file is kept current under the same anti-drift discipline —
 > when state changes, update it.
 >
-> Last updated: 2026-06-18.
+> Last updated: 2026-06-18 (reflect re-architecture complete).
 
 ## What dagrunner is
 
@@ -17,9 +17,11 @@ primitives, build only the cross-process/worktree gaps.
 
 ## Pipeline (current)
 
-`expand → implement → review → fix → verify → pr → reflect → apply-reflection`
-(`verify` is elected after Gate 2; `apply-reflection` follows the reflect gate.) Plus three
-human-driven sibling commands outside the pipeline: `ci-babysit`, `pr-triage`, `/seed-data`
+`expand → implement → review → fix → verify → pr` (terminal)
+(`verify` is elected after Gate 2; `pr` is the final node.) Each node appends tips/gotchas
+to `~/.local/share/dagrunner/store/reflection-log.jsonl` via `dagrun reflect-append`
+(best-effort, fail-soft — never blocks shipping). Plus three human-driven sibling commands
+outside the pipeline: `ci-babysit`, `pr-triage`, `/seed-data`
 (canonical home: Camunda private `.claude/`).
 
 ## Repo structure (post-restructure)
@@ -66,22 +68,19 @@ build-vs-payload split · expand/verify rename (clean break) · src restructure 
 stub deleted · unit-test backfill 2a (Tier A) + 2b (Tier B + golden + schema) · interrupt-retry
 cap (+ a latent `resume`/`start` exit-1 fix) · **smoke:mock/live split** (the keystone — gate is
 now fast + deterministic) · verify-election observability recommendation · TDD folded into
-`/dr-build` + charter. **Core hardening is complete.**
+`/dr-build` + charter · **reflect re-architecture**: pure capture via `dagrun reflect-append`,
+auto-apply subsystem removed, `pr` is terminal. **Core hardening + reflection are complete.**
 
 ## Pending / next
 
-- **Reflect re-architecture** (the big one): make dagrunner's reflection **pure capture** (every
-  node + both siblings + the human append to a durable run-lifecycle log); **delete the
-  auto-apply subsystem** (`apply-reflection`, reflect-gate, the 4 guardrails); synthesis becomes
-  a periodic human + architect harvest, routed by kind (Camunda-knowledge → DEVHARNESS_SRC;
-  dagrunner/harness improvement → a plan). Shape agreed; capture-sink design needs a grounding
-  pass.
 - **Pin the Claude Code CLI/SDK version** (the `-p` empty-result regression — open from the
   original STATUS).
 - Confirm the **Agent SDK credit pool** covers volume; set a per-build budget cap on the queue.
 - Doc: mention `build-queue.sh` in the README `scripts/` note + charter.
 - Follow-up: `build-queue.sh` could auto-run `smoke:live` once after a clean queue / when prompt
   files changed.
+- **Sibling capture** (companion Camunda private `.claude/` change): wire `ci-babysit` and
+  `pr-triage` to call `dagrun reflect-append` — separate plan.
 
 ## Reflection-harvest notes (banked for the reflect work)
 

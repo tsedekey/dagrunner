@@ -1,14 +1,14 @@
 # dagrunner — Master Architecture (Source of Truth)
 
 Status: Canonical, reconciled with the built code through Phase 3 (all three siblings built). Each sibling build also gets its own implementation plan. Cross-references cleaned up after the /verify-demo split into /seed-data.
-Last updated: 2026-06-17 (src/ restructured into 5 cohesion folders: core/ workflow/ runtime/ config/ cli/; verify-seed stub removed)
+Last updated: 2026-06-18 (reflect re-architecture: pure capture via dagrun reflect-append; auto-apply subsystem removed; pr is terminal)
 Owner: Eddie Tsedeke
 
 ---
 
 ## 1. What dagrunner is
 
-A thin, static TypeScript orchestrator that walks a feature change through a fixed, gated pipeline — guide -> implement -> review -> fix -> verify -> PR -> reflect — pausing at defined human gates and checkpointing to disk so it survives process exit. Each node is a Claude Code session spawned via the Agent SDK in an isolated git worktree. dagrunner owns only what Claude Code cannot do across separate sessions: the dependency graph, checkpoint-and-resume, worktree isolation, artifact hand-off, gates, and cost discipline.
+A thin, static TypeScript orchestrator that walks a feature change through a fixed, gated pipeline — expand -> implement -> review -> fix -> verify -> pr — pausing at defined human gates and checkpointing to disk so it survives process exit. Each node is a Claude Code session spawned via the Agent SDK in an isolated git worktree. dagrunner owns only what Claude Code cannot do across separate sessions: the dependency graph, checkpoint-and-resume, worktree isolation, artifact hand-off, gates, and cost discipline.
 
 Core principle: **code coordinates, model judges.** TS orchestration is free; node sessions cost. Reuse Claude Code primitives; build only cross-process/worktree gaps.
 
@@ -55,8 +55,8 @@ Phase 3 is three LOCAL siblings (/seed-data + ci-babysit + pr-triage) — one su
   verify (haiku, INFO-ONLY: writes seeding-spec.json + manual-test.md)
         |  ★ GATE 3: human runs the manual test (or invokes /seed-data)
   pr (haiku)               -> opens the PR (git push / gh run OUTSIDE the sandbox — see §5)
-  reflect                  ★ GATE 4: per-proposal accept/reject (post-PR, skippable)
-  apply-reflection (writes worktree-private + DEVHARNESS_SRC private .claude/** only; 4 guardrails)
+                              [TERMINAL — run ends here]
+                              Each node appends tips/gotchas via dagrun reflect-append (best-effort, fail-soft)
 ```
 
 **review/fix split:** review is read-only (its whole contract is one `findings.json`); fix is the mutating, gated node (so the human gates the actual code changes, with session memory for conversation-led reject).
@@ -161,18 +161,21 @@ No classify node. Reviewer-selection moved into review's diff-triage step (reads
 
 **Why classify is gone:** dormant code is drift risk — it reads as live, ages silently, and constrains future design. A future task-type router (feature/bug/tech-debt) earns a node only when it ROUTES the graph, not when it annotates. Change-AREA is diff-derivable; task-TYPE reshapes the graph upfront. That router will be designed fresh from current understanding when actually needed (Phase 5/6 or later) — not revived from stale scaffolding.
 
-## 8b. reflect — self-improvement, two flavors
+## 8b. reflect — pure distributed capture
 
-- **Flavor 1 (Camunda knowledge):** synthesized from expand/implement `notes.md` side-artifacts + diff + findings into `reflect/camunda-knowledge.md`. APPLIED (gated) into **DEVHARNESS_SRC** private gitignored files (nested `CLAUDE.local.md`) — written to the PERMANENT checkout, not the worktree, so it survives `cleanup` and seeds future runs (the reverse of the SessionStart sync).
-- **Flavor 2 (dagrunner improvement):** from `friction.jsonl` into `reflect/dagrunner-proposals.md`. LOGGED to `~/.local/share/dagrunner/store/` for cross-run accumulation, NEVER auto-applied (dagrunner's code needs tests/review; one run's friction is noise).
-- **reflect gate:** per-proposal, post-PR, skippable (never blocks the PR).
-- **apply-reflection guardrails (HARD):** (1) path allowlist — only `*.local.md` / private `.claude/` variants; refuse source, committed CLAUDE.md, state.json, dagrunner repo, .git; (2) private-only, never `git add`, paths in `.git/info/exclude`; (3) exact-approved-diffs only (mechanical applier, no re-reasoning); (4) snapshot-before-apply to `runs/<run-id>/reflect/backup/`, expose `dagrun revert-reflection`.
+Each node appends raw tips/gotchas to a durable JSONL log via `dagrun reflect-append`. The log outlives the run (stored in `~/.local/share/dagrunner/store/reflection-log.jsonl`, not in `runs/<id>/`). Capture is best-effort and fail-soft — a failed append never blocks a node.
+
+- **Entry shape:** `{ ts, source, kind, body, run_id? }` — `kind` routes harvest: `camunda-knowledge` (tips for DEVHARNESS_SRC) or `dagrunner-harness` (tips for dagrunner improvement plans).
+- **Harvest:** periodic human + architect process. Reads the log, routes by kind: Camunda-knowledge tips → DEVHARNESS_SRC private files; dagrunner-harness tips → a dagrunner self-change plan.
+- **Why pure capture:** synthesizing proposals on the critical path bakes judgment into the runtime and creates complexity (the old reflect node + Gate 4 + apply-reflection 4 guardrails + dagrun revert-reflection). Distributed capture is simpler, durable, and puts synthesis where judgment belongs — the human+architect harvest. See DECISIONS.md § reflect-rearchitecture.
+
+The old `reflect` + `apply-reflection` nodes are removed. `pr` is terminal.
 
 ---
 
 ## 9. Cost & model tiering
 
-Per-node tiering in the validated workflow-def (load-time model-string validation). expand unpinned; review diff-triage haiku; reviewers mixed (correctness/distributed-systems/performance unpinned; test-adequacy/api-stability/migration-safety sonnet); adversarial verifier strong tier; fix unpinned; verify haiku; pr haiku; reflect/apply-reflection sonnet. Two-tier budget: per-run `--max-budget-usd` + per-invocation caps. Cost capture: `--output-format json` total_cost_usd + per-model breakdown into state.json; `dagrun status` shows total vs cap.
+Per-node tiering in the validated workflow-def (load-time model-string validation). expand unpinned; review diff-triage haiku; reviewers mixed (correctness/distributed-systems/performance unpinned; test-adequacy/api-stability/migration-safety sonnet); adversarial verifier strong tier; fix unpinned; verify haiku; pr haiku. Two-tier budget: per-run `--max-budget-usd` + per-invocation caps. Cost capture: `--output-format json` total_cost_usd + per-model breakdown into state.json; `dagrun status` shows total vs cap.
 
 ---
 
@@ -242,7 +245,7 @@ this becomes team-scale, multi-repo, no-single-human-gate infra.
 | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ----------- |
 | **1**   | Engine + spine + thin slice + Gate 1; state/resume/worktrees/artifacts/hooks/launcher; `dagrun report` static HTML. (Built classify/expand/implement — classify-as-a-node since RETIRED; its logic moved into review's diff-triage.)                                                            | ✅ DONE & hardened | —           |
 | **2a**  | (1) Preflight + runtime permission/sandbox/network model [FIRST]; (2) review node (diff-triage self-select + fan-out + finding-count-gated verifier -> findings schema); (3) fix node (gated, self-verifying). Built, fixture-passed, post-fixture restructure (classify removal etc.) applied. | ✅ DONE            | —           |
-| **2b**  | verify-election + verify (doc-only; cluster automation REMOVED, see §9) + Gate 3; pr node; reflect -> reflect-gate -> apply-reflection (4 guardrails); rerun + revert-reflection commands; PR post-process outside sandbox.                                                                     | ✅ DONE            | 2a complete |
+| **2b**  | verify-election + verify (doc-only; cluster automation REMOVED, see §9) + Gate 3; pr node (terminal); pure-capture reflection via dagrun reflect-append; rerun command; PR post-process outside sandbox.                                                                                        | ✅ DONE            | 2a complete |
 | **3**   | Three interactive siblings, in order: (1) /seed-data [c8ctl, assumes human-started OC], (2) ci-babysit, (3) pr-triage. All local, human-driven.                                                                                                                                                 | ✅ DONE            | —           |
 | **4**   | Live `dagrun ui` (Node-http + SSE + vanilla HTML, localhost-only, scrubbed)                                                                                                                                                                                                                     | someday            | —           |
 | **5/6** | Multi-task-type support (bug/tech-debt/refactor); task-type router designed fresh when needed                                                                                                                                                                                                   | future             | —           |

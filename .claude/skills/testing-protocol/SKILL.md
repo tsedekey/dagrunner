@@ -1,6 +1,6 @@
 ---
 name: testing-protocol
-description: How to prove dagrunner v1 works — the mock node executor, the three test tiers, smoke:mock (fast in-process gate, runs on every plan), and smoke:live (real-SDK 8-step integration, run occasionally). Tests plumbing determinism, never model output quality.
+description: How to prove dagrunner v1 works — the mock node executor, the three test tiers, smoke:mock (fast in-process gate, runs on every plan), and smoke:live (real-SDK 7-step integration, run occasionally). Tests plumbing determinism, never model output quality.
 ---
 
 # Testing protocol — dagrunner v1
@@ -60,10 +60,8 @@ the mock executor. Zero API calls. Runs in ~150 ms. Deterministic by constructio
 Two runs in one script:
 
 - **Run A (election=n):** init → expand gate-pause → reject+feedback → approve Gate 1 → implement →
-  review → fix gate-pause → approve Gate 2 + election=n → verify skipped → pr → reflect gate-pause
-  → approve Gate 4 → apply-reflection → done.
-- **Run B (election=y):** same but election=y: verify gate-pause → approve Gate 3 → pr → reflect
-  gate-pause → approve Gate 4 → done.
+  review → fix gate-pause → approve Gate 2 + election=n → verify skipped → pr → done.
+- **Run B (election=y):** same but election=y: verify gate-pause → approve Gate 3 → pr → done.
 
 What it asserts: gate pauses, produces-contract met at every gate node, artifact channel (each
 produces file exists after its node), state transitions (awaiting-gate, paused, done), routing
@@ -76,7 +74,7 @@ validity of findings.json (mock writes plain text there).
 
 ## smoke:live — the real-SDK integration test (occasional)
 
-`npm run smoke:live` (`test/smoke/smoke.ts`) drives the full 8-step pipeline with real Claude Code
+`npm run smoke:live` (`test/smoke/smoke.ts`) drives the full 7-step pipeline with real Claude Code
 sessions. Requires `ANTHROPIC_API_KEY` or claude.ai subscription. ~35 min, real tokens,
 non-deterministic on model output.
 
@@ -93,7 +91,7 @@ structured output, format hook fires, worktree diff exists.
 slip past the per-plan gate until the next `smoke:live`. The mitigation is the guideline above —
 prompt changes trigger a live run.
 
-## The 8-step smoke:live test (Block 9, now called smoke:live)
+## The 7-step smoke:live test (Block 9, now called smoke:live)
 
 A runnable script driving the real thin slice end to end with non-interactive flags, asserting each
 step, capturing a transcript.
@@ -106,12 +104,11 @@ step, capturing a transcript.
 5. `dagrun resume --approve` → Gate 1 approved → implement → review (findings.json, valid JSON with
    required keys) → fix hits Gate 2, re-pauses.
 6. `dagrun resume --approve --verify n` → Gate 2 approved, election=n, verify skipped, pr done,
-   reflect hits Gate 4, re-pauses.
-7. `dagrun resume --approve` → Gate 4 approved → apply-reflection → done.
-8. Synthetic reconcile test (no API call): inject a state with `interruptRetries: 99`, resume →
+   run is done (pr is terminal). Best-effort: check `store/reflection-log.jsonl` has entries.
+7. Synthetic reconcile test (no API call): inject a state with `interruptRetries: 99`, resume →
    retry cap hit → run stays failed, exit 1.
 
-Passing all eight = v1 real-SDK integration confirmed.
+Passing all seven = v1 real-SDK integration confirmed.
 
 ## What is explicitly NOT tested in v1
 

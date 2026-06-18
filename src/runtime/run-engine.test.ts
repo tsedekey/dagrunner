@@ -225,9 +225,6 @@ test("worktreeArtifactPatterns: includes all featureWorkflow produces filenames"
     "seeding-spec.json",
     "manual-test.md",
     "body.md",
-    "camunda-knowledge.md",
-    "dagrunner-proposals.md",
-    "apply-summary.md",
   ];
   for (const name of expected) {
     assert.ok(

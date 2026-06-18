@@ -140,3 +140,18 @@ Leave this section empty if there is nothing to add.>
 - No Maven, Docker, `java`, `curl`, or any cluster command.
 - `seeding-spec.json` must be valid JSON (no trailing commas, no comments).
 - Every verification step in `manual-test.md` must be concrete and actionable — no vague instructions like "check the database".
+
+## Capture tips (best-effort, do this last)
+
+After both artifacts are written, append any tips about the feature surface or
+verification approach that would help future runs. Fail-soft — call last:
+
+```bash
+dagrun reflect-append \
+  --source verify \
+  --kind camunda-knowledge \
+  --body "<one or two sentences: non-obvious observation about the feature area or cluster behaviour>" \
+  --run-id "$DAGRUN_RUN_ID" || true
+```
+
+Only call this if you have something genuinely useful. Absence is fine.

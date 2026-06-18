@@ -116,3 +116,19 @@ Do not recap the summary — that is already in summary.md.
 - Do not modify `$DAGRUN_ARTIFACTS/../review/findings.json` — it is the read-only input.
 - Write all artifacts to `$DAGRUN_ARTIFACTS/` (summary.md, addressed-checklist.md, notes.md).
 - If a build or test step is unavailable (no build tool found), note it in the summary and continue.
+
+## Capture tips (best-effort, do this last)
+
+After summary.md and notes.md are written, append any high-signal discoveries
+(root-cause patterns, hidden coupling, deferred systemic issues). Fail-soft —
+call last, don't worry if it fails:
+
+```bash
+dagrun reflect-append \
+  --source fix \
+  --kind dagrunner-harness \
+  --body "<one or two sentences: root-cause pattern, systemic issue, or build quirk worth recording>" \
+  --run-id "$DAGRUN_RUN_ID" || true
+```
+
+Only call this if there is something non-obvious worth recording. Absence is fine.

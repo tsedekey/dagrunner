@@ -8,8 +8,8 @@
  * Run: node --import tsx ./test/smoke/smoke-mock.ts
  *
  * Two complete runs are exercised:
- *   Run A — election=n: reject Gate 1, re-approve, run through, skip verify, done.
- *   Run B — election=y: straight approve, run verify (gate-pause), approve Gate 3, done.
+ *   Run A — election=n (4 steps): reject Gate 1, re-approve, run through, skip verify, pr → done.
+ *   Run B — election=y (4 steps): straight approve, run verify (gate-pause), approve Gate 3, pr → done.
  *
  * Note: mock gate-pause returns iteration:1, so a reject after the first pause writes
  * feedback-2.md (not feedback-1.md). This differs from the real SDK runner which
@@ -70,8 +70,6 @@ const mockFactory = (
     fix: "gate-pause", // writes summary.md + returns awaiting-gate
     verify: "gate-pause", // writes seeding-spec.json + manual-test.md + awaiting-gate
     pr: "success", // writes body.md
-    reflect: "gate-pause", // writes camunda-knowledge.md + dagrunner-proposals.md + awaiting-gate
-    "apply-reflection": "success", // writes apply-summary.md
   });
 
 // ---------------------------------------------------------------------------
@@ -240,7 +238,7 @@ console.log(
 );
 
 // ---------------------------------------------------------------------------
-// Step A4 — resumeRun(approve Gate 2 + verify=n) -> verify skipped -> pr -> reflect gate-pause
+// Step A4 — resumeRun(approve Gate 2 + verify=n) -> verify skipped -> pr -> done
 // ---------------------------------------------------------------------------
 
 await resumeRun({
@@ -279,64 +277,13 @@ await resumeRun({
     "A4: pr/body.md must exist",
   );
   assert.strictEqual(
-    state.nodes["reflect"]?.status,
-    "awaiting-gate",
-    `A4: reflect must be awaiting-gate, got ${String(state.nodes["reflect"]?.status)}`,
-  );
-  assert.strictEqual(
     state.status,
-    "paused",
-    `A4: run must be paused, got ${state.status}`,
+    "done",
+    `A4: run must be done (pr is terminal), got ${state.status}`,
   );
 }
 console.log(
-  "step A4 passed: approve Gate 2 + election=n -> verify skipped -> pr done -> reflect gate-pause",
-);
-
-// ---------------------------------------------------------------------------
-// Step A5 — resumeRun(approve Gate 4) -> apply-reflection -> done
-// ---------------------------------------------------------------------------
-
-await resumeRun({
-  runId: RUN_ID_A,
-  homeDir: HOME_A,
-  config,
-  approve: true,
-  executorFactory: mockFactory,
-});
-
-{
-  const state = readState(runDirA);
-  assert.strictEqual(
-    state.status,
-    "done",
-    `A5: run must be done, got ${state.status}`,
-  );
-  assert.strictEqual(
-    state.nodes["reflect"]?.status,
-    "done",
-    `A5: reflect must be done, got ${String(state.nodes["reflect"]?.status)}`,
-  );
-  assert.ok(
-    existsSync(join(runDirA, "reflect", "camunda-knowledge.md")),
-    "A5: reflect/camunda-knowledge.md must exist",
-  );
-  assert.ok(
-    existsSync(join(runDirA, "reflect", "dagrunner-proposals.md")),
-    "A5: reflect/dagrunner-proposals.md must exist",
-  );
-  assert.strictEqual(
-    state.nodes["apply-reflection"]?.status,
-    "done",
-    `A5: apply-reflection must be done, got ${String(state.nodes["apply-reflection"]?.status)}`,
-  );
-  assert.ok(
-    existsSync(join(runDirA, "apply-reflection", "apply-summary.md")),
-    "A5: apply-reflection/apply-summary.md must exist",
-  );
-}
-console.log(
-  "step A5 passed: approve Gate 4 -> apply-reflection -> done. Run A complete (election=n)",
+  "step A4 passed: approve Gate 2 + election=n -> verify skipped -> pr done -> run done. Run A complete (election=n)",
 );
 
 // ---------------------------------------------------------------------------
@@ -477,7 +424,7 @@ await resumeRun({
 console.log("step B3 passed: approve Gate 2 + election=y -> verify gate-pause");
 
 // ---------------------------------------------------------------------------
-// Step B4 — resumeRun(approve Gate 3) -> pr -> reflect gate-pause
+// Step B4 — resumeRun(approve Gate 3) -> pr -> done
 // ---------------------------------------------------------------------------
 
 await resumeRun({
@@ -505,64 +452,13 @@ await resumeRun({
     "B4: pr/body.md must exist",
   );
   assert.strictEqual(
-    state.nodes["reflect"]?.status,
-    "awaiting-gate",
-    `B4: reflect must be awaiting-gate, got ${String(state.nodes["reflect"]?.status)}`,
-  );
-  assert.strictEqual(
     state.status,
-    "paused",
-    `B4: run must be paused, got ${state.status}`,
+    "done",
+    `B4: run must be done (pr is terminal), got ${state.status}`,
   );
 }
 console.log(
-  "step B4 passed: approve Gate 3 -> verify done -> pr done -> reflect gate-pause",
-);
-
-// ---------------------------------------------------------------------------
-// Step B5 — resumeRun(approve Gate 4) -> apply-reflection -> done
-// ---------------------------------------------------------------------------
-
-await resumeRun({
-  runId: RUN_ID_B,
-  homeDir: HOME_B,
-  config,
-  approve: true,
-  executorFactory: mockFactory,
-});
-
-{
-  const state = readState(runDirB);
-  assert.strictEqual(
-    state.status,
-    "done",
-    `B5: run must be done, got ${state.status}`,
-  );
-  assert.strictEqual(
-    state.nodes["reflect"]?.status,
-    "done",
-    `B5: reflect must be done, got ${String(state.nodes["reflect"]?.status)}`,
-  );
-  assert.ok(
-    existsSync(join(runDirB, "reflect", "camunda-knowledge.md")),
-    "B5: reflect/camunda-knowledge.md must exist",
-  );
-  assert.ok(
-    existsSync(join(runDirB, "reflect", "dagrunner-proposals.md")),
-    "B5: reflect/dagrunner-proposals.md must exist",
-  );
-  assert.strictEqual(
-    state.nodes["apply-reflection"]?.status,
-    "done",
-    `B5: apply-reflection must be done, got ${String(state.nodes["apply-reflection"]?.status)}`,
-  );
-  assert.ok(
-    existsSync(join(runDirB, "apply-reflection", "apply-summary.md")),
-    "B5: apply-reflection/apply-summary.md must exist",
-  );
-}
-console.log(
-  "step B5 passed: approve Gate 4 -> apply-reflection -> done. Run B complete (election=y)",
+  "step B4 passed: approve Gate 3 -> verify done -> pr done -> run done. Run B complete (election=y)",
 );
 
 // ---------------------------------------------------------------------------

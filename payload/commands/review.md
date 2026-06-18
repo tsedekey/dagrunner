@@ -135,3 +135,20 @@ those are already in findings.json.
 - Every finding must have all seven fields including `grounded`.
 - An empty findings array `"findings": []` is valid and correct when no issues are found.
 - `triage` must always be present with all five boolean fields (including `touches_ui`).
+
+---
+
+## Capture tips (best-effort, do this last)
+
+After findings.json is written, append any non-obvious patterns or recurring
+issues observed during review. Fail-soft — call last, don't worry if it fails:
+
+```bash
+dagrun reflect-append \
+  --source review \
+  --kind dagrunner-harness \
+  --body "<one or two sentences: anti-pattern, module invariant violation, or reviewer dimension tip>" \
+  --run-id "$DAGRUN_RUN_ID" || true
+```
+
+Only call this if you have something genuinely useful. Absence is fine.

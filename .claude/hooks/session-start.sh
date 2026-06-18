@@ -11,8 +11,8 @@
 #   DAGRUN_WORKTREE   — absolute path to the worktree for this node's run
 #
 # Sync behaviour:
-#   Copies .devharness/, CLAUDE.local.md, and nested apply-reflection CLAUDE.local.md
-#   files from DEVHARNESS_SRC into the worktree. Existing worktree files win
+#   Copies .claude/commands/, .claude/scripts/, .devharness/, and CLAUDE.local.md
+#   from DEVHARNESS_SRC into the worktree. Existing worktree files win
 #   (--ignore-existing) so committed worktree content is never silently overwritten.
 #
 # Failure policy: FAIL the node if DEVHARNESS_SRC is unreadable. A broken sync

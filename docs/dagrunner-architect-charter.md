@@ -90,8 +90,9 @@ Hooks are shared infra and stay in `.claude/hooks/`.
   against the **Camunda repo** — agent accessibility and ergonomics are in scope. dagrunner's
   reflection isn't only self-reflection; it also covers how the Camunda repo is set up to make
   agent work more efficient.
-- **Reflection-harvest:** nodes emit per-node improvement tips/gotchas each run. Periodically
-  (cadence TBD as we go) collect them and propose dagrunner improvements.
+- **Reflection-harvest:** nodes append raw tips/gotchas to `store/reflection-log.jsonl` each run
+  via `dagrun reflect-append` (best-effort, fail-soft). Periodically collect and route by kind:
+  `camunda-knowledge` → DEVHARNESS_SRC private files; `dagrunner-harness` → a dagrunner self-change plan.
 - New ideas/features from Eddie: discuss and tease out a solution together, then hand to the
   builder (or dagrunner itself).
 
