@@ -53,7 +53,7 @@ demonstrate this feature end-to-end. The schema is:
   ],
   "expected_observations": [
     {
-      "where": "elasticsearch|operate|tasklist|rest-api|logs",
+      "where": "elasticsearch|rest-api",
       "what": "<field or observable>",
       "expected_value": "<what to look for>",
       "how": "<concrete steps to find it — e.g. 'open Operate, navigate to instance X, check field Y'>"
@@ -69,6 +69,8 @@ Rules:
   (e.g. the exact Elasticsearch field, the REST API response field, the log message).
 - Each `how` must be a concrete, actionable step the human can follow without guessing.
 - Keep it minimal: the minimum seeding that proves the feature works, not a full test suite.
+- `expected_observations` must only use `where: "rest-api"` or `where: "elasticsearch"` — verification uses Postman (REST) and ElasticVue (Elasticsearch), not the Operate/Tasklist UI. Convert any UI checks to their equivalent REST or ES query.
+- If a BPMN resource needs to be created for seeding, write it to `$DAGRUN_ARTIFACTS/<process-id>.bpmn` and reference that path in `bpmn_resource` (never write to `/tmp/`).
 - Write valid JSON to `$DAGRUN_ARTIFACTS/seeding-spec.json`.
 
 ---

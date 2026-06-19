@@ -3,8 +3,10 @@
 # across the full loop. Do not split it.
 set -euo pipefail
 
-SPEC_PATH=$(jq -r .spec_path /tmp/seed-data-state.json)
-PROFILE=$(jq -r .profile /tmp/seed-data-state.json)
+STATE_FILE="${TMPDIR%/}/seed-data-state.json"
+SPEC_PATH=$(jq -r .spec_path "$STATE_FILE")
+PROFILE=$(jq -r .profile "$STATE_FILE")
+SEED_SCRATCH=$(jq -r .seed_scratch "$STATE_FILE")
 SPEC=$(cat "$SPEC_PATH")
 WORKTREE="${DAGRUN_WORKTREE:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 
@@ -13,9 +15,9 @@ INSTANCE_COUNT=$(echo "$SPEC" | jq '.instances | length')
 echo "Deployments to process: $DEPLOY_COUNT"
 echo "Instances to start:     $INSTANCE_COUNT"
 
-DEPLOY_RECORDS_FILE="/tmp/seed-data-deploy-records.json"
-INSTANCE_RECORDS_FILE="/tmp/seed-data-instance-records.json"
-OBS_RECORDS_FILE="/tmp/seed-data-obs-records.json"
+DEPLOY_RECORDS_FILE="${TMPDIR%/}/seed-data-deploy-records.json"
+INSTANCE_RECORDS_FILE="${TMPDIR%/}/seed-data-instance-records.json"
+OBS_RECORDS_FILE="${TMPDIR%/}/seed-data-obs-records.json"
 echo "[]" > "$DEPLOY_RECORDS_FILE"
 echo "[]" > "$INSTANCE_RECORDS_FILE"
 echo "[]" > "$OBS_RECORDS_FILE"
@@ -41,9 +43,15 @@ while [ "$i" -lt "$DEPLOY_COUNT" ]; do
 
   BPMN_PATH=""
 
-  if [ -n "$BPMN_RESOURCE" ] && [ -f "$BPMN_RESOURCE" ]; then
-    BPMN_PATH="$BPMN_RESOURCE"
-    echo "Using bpmn_resource: $BPMN_PATH"
+  if [ -n "$BPMN_RESOURCE" ]; then
+    # Expand tilde if present
+    BPMN_RESOURCE="${BPMN_RESOURCE/#\~/$HOME}"
+    if [ -f "$BPMN_RESOURCE" ]; then
+      BPMN_PATH="$BPMN_RESOURCE"
+      echo "Using bpmn_resource: $BPMN_PATH"
+    else
+      echo "NOTE: bpmn_resource '$BPMN_RESOURCE' not found — falling back to worktree search."
+    fi
   fi
 
   if [ -z "$BPMN_PATH" ]; then
@@ -51,7 +59,7 @@ while [ "$i" -lt "$DEPLOY_COUNT" ]; do
                  | grep -v "/target/" | grep -v "/node_modules/" \
                  | while read -r f; do
                      grep -qE "serviceTask|ServiceTask|userTask|UserTask" "$f" || echo "$f"
-                   done | head -1)
+                   done | head -1 || true)
     if [ -n "$TASK_FREE" ]; then
       BPMN_PATH="$TASK_FREE"
       echo "Found task-free fixture (start→end, completes immediately): $BPMN_PATH"
@@ -60,13 +68,13 @@ while [ "$i" -lt "$DEPLOY_COUNT" ]; do
                 | grep -v "/target/" | grep -v "/node_modules/" \
                 | while read -r f; do
                     grep -q "serviceTask\|ServiceTask" "$f" || echo "$f"
-                  done | head -1)
+                  done | head -1 || true)
       if [ -n "$NO_SVC" ]; then
         BPMN_PATH="$NO_SVC"
         echo "Found no-service-task fixture (may have user task — instance stays ACTIVE): $BPMN_PATH"
       else
         ANY=$(grep -rl "id=\"${PROCESS_ID}\"" "$WORKTREE" --include="*.bpmn" \
-               | grep -v "/target/" | grep -v "/node_modules/" | head -1)
+               | grep -v "/target/" | grep -v "/node_modules/" | head -1 || true)
         if [ -n "$ANY" ]; then
           BPMN_PATH="$ANY"
           echo "Found fixture (has service/user task — instance may not complete): $BPMN_PATH"
@@ -76,47 +84,58 @@ while [ "$i" -lt "$DEPLOY_COUNT" ]; do
   fi
 
   if [ -z "$BPMN_PATH" ]; then
-    GEN_PATH="verify-demo/generated/${PROCESS_ID}.bpmn"
-    echo "No fixture found — generating minimal BPMN: $GEN_PATH"
+    GEN_PATH="$SEED_SCRATCH/generated/${PROCESS_ID}.bpmn"
+    echo "No fixture found — generating BPMN with service task (instance stays ACTIVATABLE): $GEN_PATH"
     cat > "$GEN_PATH" << BPMN_END
 <?xml version="1.0" encoding="UTF-8"?>
 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
                   xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
                   xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
                   xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
                   id="Definitions_seed_${PROCESS_ID}"
                   targetNamespace="http://bpmn.io/schema/bpmn">
   <bpmn:process id="${PROCESS_ID}" isExecutable="true">
     <bpmn:startEvent id="StartEvent_1" name="Start">
       <bpmn:outgoing>Flow_1</bpmn:outgoing>
     </bpmn:startEvent>
-    <bpmn:endEvent id="EndEvent_1" name="End">
+    <bpmn:serviceTask id="Task_1" name="Work">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="${PROCESS_ID}" />
+      </bpmn:extensionElements>
       <bpmn:incoming>Flow_1</bpmn:incoming>
+      <bpmn:outgoing>Flow_2</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="EndEvent_1" name="End">
+      <bpmn:incoming>Flow_2</bpmn:incoming>
     </bpmn:endEvent>
-    <bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="EndEvent_1" />
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="Task_1" />
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Task_1" targetRef="EndEvent_1" />
   </bpmn:process>
   <bpmndi:BPMNDiagram id="BPMNDiagram_1">
     <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="${PROCESS_ID}">
       <bpmndi:BPMNShape id="StartEvent_1_di" bpmnElement="StartEvent_1">
         <dc:Bounds x="152" y="82" width="36" height="36" />
       </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_1_di" bpmnElement="Task_1">
+        <dc:Bounds x="240" y="60" width="100" height="80" />
+      </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="EndEvent_1_di" bpmnElement="EndEvent_1">
-        <dc:Bounds x="252" y="82" width="36" height="36" />
+        <dc:Bounds x="392" y="82" width="36" height="36" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNEdge id="Flow_1_di" bpmnElement="Flow_1">
         <di:waypoint x="188" y="100" />
-        <di:waypoint x="252" y="100" />
+        <di:waypoint x="240" y="100" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_2_di" bpmnElement="Flow_2">
+        <di:waypoint x="340" y="100" />
+        <di:waypoint x="392" y="100" />
       </bpmndi:BPMNEdge>
     </bpmndi:BPMNPlane>
   </bpmndi:BPMNDiagram>
 </bpmn:definitions>
 BPMN_END
     BPMN_PATH="$GEN_PATH"
-  fi
-
-  if echo "$BPMN_PATH" | grep -q "verify-demo/generated"; then
-    echo "Linting generated BPMN..."
-    c8ctl bpmn lint "$BPMN_PATH" 2>&1 || echo "NOTE: bpmn lint warnings above (proceeding)"
   fi
 
   echo "Deploying $BPMN_PATH..."
@@ -142,8 +161,9 @@ BPMN_END
     --arg defk "$DEF_KEY" \
     --arg bpmn "$BPMN_PATH" \
     '{"process_id":$pid,"deployment_key":$dk,"process_definition_key":$defk,"bpmn_path":$bpmn}')
-  jq --argjson r "$RECORD" '. + [$r]' "$DEPLOY_RECORDS_FILE" > /tmp/seed-data-deploy-records-tmp.json
-  mv /tmp/seed-data-deploy-records-tmp.json "$DEPLOY_RECORDS_FILE"
+  DEPLOY_TMP="${TMPDIR%/}/seed-data-deploy-records-tmp.json"
+  jq --argjson r "$RECORD" '. + [$r]' "$DEPLOY_RECORDS_FILE" > "$DEPLOY_TMP"
+  mv "$DEPLOY_TMP" "$DEPLOY_RECORDS_FILE"
 
   i=$((i + 1))
 done
@@ -162,7 +182,7 @@ while [ "$j" -lt "$INSTANCE_COUNT" ]; do
   echo "Why:       $WHY"
 
   PI_RESULT=$(c8ctl create pi \
-    --processDefinitionId "$PROCESS_ID" \
+    --id "$PROCESS_ID" \
     --variables "$VARIABLES" \
     --profile "$PROFILE" \
     --json 2>&1)
@@ -186,8 +206,9 @@ while [ "$j" -lt "$INSTANCE_COUNT" ]; do
     --arg pid "$PROCESS_ID" \
     --arg k "$PI_KEY" \
     '{"process_id":$pid,"instance_key":$k}')
-  jq --argjson r "$RECORD" '. + [$r]' "$INSTANCE_RECORDS_FILE" > /tmp/seed-data-instance-records-tmp.json
-  mv /tmp/seed-data-instance-records-tmp.json "$INSTANCE_RECORDS_FILE"
+  INSTANCE_TMP="${TMPDIR%/}/seed-data-instance-records-tmp.json"
+  jq --argjson r "$RECORD" '. + [$r]' "$INSTANCE_RECORDS_FILE" > "$INSTANCE_TMP"
+  mv "$INSTANCE_TMP" "$INSTANCE_RECORDS_FILE"
 
   j=$((j + 1))
 done
@@ -292,10 +313,16 @@ while [ "$k" -lt "$OBS_COUNT" ]; do
       --arg w "$WHERE" --arg wh "$WHAT" --arg ev "$EXPECTED" \
       --arg base "${BASE_URL:-http://localhost:8080}" \
       '{"where":$w,"status":"RECORDED","what":$wh,"expected_value":$ev,
-        "ready_to_run":{"base_url":$base,"note":"Call the REST endpoint and observe the value yourself — this is Gate 3 verification.","hint":$wh}}')
-    echo "REST observation recorded (not asserted — human observes at tour)."
+        "ready_to_run":{"base_url":$base,"note":"Use Postman — see postman-collection.json","what":$wh}}')
+    echo "REST observation recorded (see postman-collection.json)."
     echo "Base URL: ${BASE_URL:-http://localhost:8080}"
-    echo "What to call: $WHAT"
+
+  elif [ "$WHERE" = "operate" ]; then
+    OBS_REC=$(jq -n \
+      --arg w "$WHERE" --arg wh "$WHAT" \
+      '{"where":$w,"status":"SKIPPED","reason":"UI observation — use rest-api or elasticsearch instead","what":$wh}')
+    echo "NOTE: 'operate' observation skipped — testing uses REST API (Postman) and Elasticsearch (ElasticVue), not Operate UI."
+    echo "Convert to a rest-api or elasticsearch observation in the seeding-spec.json for future runs."
 
   else
     OBS_REC=$(jq -n \
@@ -304,26 +331,28 @@ while [ "$k" -lt "$OBS_COUNT" ]; do
     echo "NOTE: '$WHERE' observations are not checked by seed-data. Review manually."
   fi
 
-  jq --argjson r "$OBS_REC" '. + [$r]' "$OBS_RECORDS_FILE" > /tmp/seed-data-obs-records-tmp.json
-  mv /tmp/seed-data-obs-records-tmp.json "$OBS_RECORDS_FILE"
+  OBS_TMP="${TMPDIR%/}/seed-data-obs-records-tmp.json"
+  jq --argjson r "$OBS_REC" '. + [$r]' "$OBS_RECORDS_FILE" > "$OBS_TMP"
+  mv "$OBS_TMP" "$OBS_RECORDS_FILE"
 
   k=$((k + 1))
 done
 
-# --- Write seeded.json ---
+# --- Write seeded.json to run artifacts dir ---
 
 SEEDED_JSON=$(jq -n \
   --arg spec "$SPEC_PATH" \
   --arg profile "$PROFILE" \
+  --arg seed_scratch "$SEED_SCRATCH" \
   --argjson deployments "$(cat "$DEPLOY_RECORDS_FILE")" \
   --argjson instances "$(cat "$INSTANCE_RECORDS_FILE")" \
   --argjson observations "$(cat "$OBS_RECORDS_FILE")" \
-  '{seeding_spec:$spec, profile:$profile, deployments:$deployments, instances:$instances, observations:$observations}')
+  '{seeding_spec:$spec, profile:$profile, seed_scratch:$seed_scratch, deployments:$deployments, instances:$instances, observations:$observations}')
 
-echo "$SEEDED_JSON" > verify-demo/seeded.json
+echo "$SEEDED_JSON" > "$SEED_SCRATCH/seeded.json"
 echo ""
-echo "Wrote verify-demo/seeded.json"
+echo "Wrote $SEED_SCRATCH/seeded.json"
 echo "$SEEDED_JSON" | jq .
 
 rm -f "$DEPLOY_RECORDS_FILE" "$INSTANCE_RECORDS_FILE" "$OBS_RECORDS_FILE"
-rm -f /tmp/seed-data-state.json
+# Note: state file is deleted by phase-3

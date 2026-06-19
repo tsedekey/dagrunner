@@ -1,5 +1,5 @@
 ---
-description: Seed a live local Orchestration Cluster from a dagrunner verify-guide seeding-spec.json via c8ctl
+description: Seed a live local Orchestration Cluster from a dagrunner verify-guide seeding-spec.json via c8ctl. All output written to run artifacts dir.
 argument-hint: [path/to/seeding-spec.json] [--profile <c8ctl-profile-name>]
 ---
 
@@ -37,7 +37,7 @@ scripts for logic changes.
 
 ## Phase 0 — Resolve arguments and locate seeding-spec.json
 
-Parse `$ARGUMENTS`. Write resolved state to `/tmp/seed-data-state.json` for later phases.
+Parse `$ARGUMENTS`. Write resolved state to `$TMPDIR/seed-data-state.json` for later phases.
 
 ```bash
 SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/seed-data"
@@ -46,8 +46,8 @@ zsh "$SCRIPT_DIR/phase-0-bootstrap.sh" "$ARGUMENTS"
 
 **PHASE_0_CHECKPOINT:**
 
-- [ ] `/tmp/seed-data-state.json` written with `spec_path` and `profile`
-- [ ] `verify-demo/` directory created
+- [ ] `$TMPDIR/seed-data-state.json` written with `spec_path`, `profile`, `run_dir`, `seed_scratch`
+- [ ] `$SEED_SCRATCH/generated/` directory created (`<run-dir>/seed-data/generated/`)
 
 ---
 
@@ -79,12 +79,94 @@ zsh "$SCRIPT_DIR/phase-2-deploy-and-seed.sh"
 - [ ] All deployments resolved and deployed (process_definition_key captured or `unknown`)
 - [ ] All instances started (instance_key captured or `unknown` with warning)
 - [ ] ES observations confirmed or loudly warned
-- [ ] REST observations recorded as `ready_to_run` entries
-- [ ] `verify-demo/seeded.json` written and valid JSON
+- [ ] REST observations recorded (see postman-collection.json)
+- [ ] `operate` observations skipped with explicit message
+- [ ] `$SEED_SCRATCH/seeded.json` written and valid JSON
+
+---
+
+## Phase 2b — Generate Postman collection and Elasticsearch queries
+
+Read the seeded.json and the original seeding-spec.json and produce two artifact files.
+No scripts for this phase — the agent does this directly.
+
+```bash
+STATE_FILE="${TMPDIR%/}/seed-data-state.json"
+SEED_SCRATCH=$(jq -r .seed_scratch "$STATE_FILE")
+SPEC_PATH=$(jq -r .spec_path "$STATE_FILE")
+cat "$SEED_SCRATCH/seeded.json"
+cat "$SPEC_PATH"
+```
+
+Using the above as inputs:
+
+**1. Write `$SEED_SCRATCH/postman-collection.json`**
+
+A Postman Collection v2.1 JSON. For each `rest-api` observation in seeding-spec.json, create one
+request item. Use the `how` field as the request description, the Camunda v2 REST API path (e.g.
+`/v2/jobs/{{jobKey}}/update-priority`), and substitute actual instance/job keys from seeded.json
+as Postman variables. Set `baseUrl` variable to the profile URL from seeded.json. Example
+structure:
+
+```json
+{
+  "info": {
+    "name": "seed-data — <feature name>",
+    "_postman_id": "seed-data-<run-id>",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "<profile URL without /v2>" },
+    { "key": "instanceKey1", "value": "<first instance key>" }
+  ],
+  "item": [
+    {
+      "name": "<observation.what>",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": {
+          "raw": "{{baseUrl}}/v2/...",
+          "host": ["{{baseUrl}}"],
+          "path": ["v2", "..."]
+        },
+        "body": { "mode": "raw", "raw": "{ ... }" },
+        "description": "<observation.how>"
+      }
+    }
+  ]
+}
+```
+
+**2. Write `$SEED_SCRATCH/elasticsearch-queries.json`**
+
+An array — one entry per `elasticsearch` observation in seeding-spec.json. Use actual instance
+keys from seeded.json:
+
+```json
+[
+  {
+    "name": "<observation.what>",
+    "index": "operate-list-view*",
+    "description": "<observation.how>",
+    "query": { "term": { "key": "<first_instance_key>" } }
+  }
+]
+```
+
+For job-level observations, use a job-specific index pattern (e.g. `camunda-job-*`) and match by
+the instance key. Derive the best index and query field from the `how` field in the observation.
+
+**PHASE_2B_CHECKPOINT:**
+
+- [ ] `$SEED_SCRATCH/postman-collection.json` written and valid JSON
+- [ ] `$SEED_SCRATCH/elasticsearch-queries.json` written and valid JSON
 
 ---
 
 ## Phase 3 — Summary
+
+Prints a summary, artifact paths, and a numbered testing checklist derived from the observations.
 
 ```bash
 SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/seed-data"
@@ -100,7 +182,7 @@ Re-running `/seed-data` on the same spec is **safe and additive**:
 - **Deploy**: creates a new process-definition version each run (version 1, 2, ...). All versions
   remain in the cluster. This is fine for demonstration purposes.
 - **Create instance**: starts a new instance each run. Multiple instances appear in Operate.
-- **seeded.json**: overwritten on each run with the latest keys.
+- **seeded.json**: overwritten on each run. Written to `<run-dir>/seed-data/seeded.json` — never inside the repo working tree.
 
 To reset: cancel instances and delete process definitions in Operate UI, or recreate the cluster.
 

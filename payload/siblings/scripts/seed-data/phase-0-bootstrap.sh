@@ -18,30 +18,43 @@ if echo "$ARGS" | grep -q -- "--profile"; then
 fi
 
 SPEC_PATH=$(echo "$ARGS" | xargs 2>/dev/null || true)
+SPEC_PATH="${SPEC_PATH/#\~/$HOME}"
 
 if [ -z "$SPEC_PATH" ]; then
-  if [ -n "${DAGRUN_RUN_DIR:-}" ] && [ -f "$DAGRUN_RUN_DIR/verify-guide/seeding-spec.json" ]; then
-    SPEC_PATH="$DAGRUN_RUN_DIR/verify-guide/seeding-spec.json"
-  elif [ -f "verify-demo/seeding-spec.json" ]; then
-    SPEC_PATH="$(pwd)/verify-demo/seeding-spec.json"
-  elif [ -n "${DAGRUN_ARTIFACTS:-}" ] && [ -f "$DAGRUN_ARTIFACTS/seeding-spec.json" ]; then
-    SPEC_PATH="$DAGRUN_ARTIFACTS/seeding-spec.json"
+  # Scan for most recent run with a verify-guide/seeding-spec.json
+  RUNS_DIR="${DAGRUNNER_HOME:-$HOME/.local/share/dagrunner}/runs"
+  if [ -d "$RUNS_DIR" ]; then
+    SPEC_PATH=$(find "$RUNS_DIR" -maxdepth 3 -name "seeding-spec.json" -path "*/verify-guide/*" \
+      | xargs ls -t 2>/dev/null | head -1 || true)
   fi
 fi
 
 if [ -z "$SPEC_PATH" ] || [ ! -f "$SPEC_PATH" ]; then
   echo "ERROR: seeding-spec.json not found."
-  echo "Tried: DAGRUN_RUN_DIR/verify-guide/, verify-demo/, DAGRUN_ARTIFACTS/"
-  echo "Pass the path explicitly: /seed-data path/to/seeding-spec.json"
+  echo "Pass the path explicitly: /seed-data ~/.local/share/dagrunner/runs/<run-id>/verify-guide/seeding-spec.json"
+  echo "Or omit it — /seed-data will scan for the most recent run automatically."
   exit 1
 fi
 
 cat "$SPEC_PATH" | jq . > /dev/null || { echo "ERROR: $SPEC_PATH is not valid JSON"; exit 1; }
 
-mkdir -p verify-demo/generated
+# Derive run dir: spec lives at <run-dir>/verify-guide/seeding-spec.json
+RUN_DIR=$(dirname "$(dirname "$SPEC_PATH")")
+SEED_SCRATCH="$RUN_DIR/seed-data"
+mkdir -p "$SEED_SCRATCH/generated"
 
-jq -n --arg spec "$SPEC_PATH" --arg profile "$PROFILE" \
-  '{"spec_path":$spec,"profile":$profile}' > /tmp/seed-data-state.json
+STATE_FILE="${TMPDIR%/}/seed-data-state.json"
 
-echo "Spec:    $SPEC_PATH"
-echo "Profile: $PROFILE"
+jq -n \
+  --arg spec "$SPEC_PATH" \
+  --arg profile "$PROFILE" \
+  --arg run_dir "$RUN_DIR" \
+  --arg seed_scratch "$SEED_SCRATCH" \
+  '{"spec_path":$spec,"profile":$profile,"run_dir":$run_dir,"seed_scratch":$seed_scratch}' \
+  > "$STATE_FILE"
+
+echo "Spec:         $SPEC_PATH"
+echo "Profile:      $PROFILE"
+echo "Run dir:      $RUN_DIR"
+echo "Seed scratch: $SEED_SCRATCH"
+echo "State file:   $STATE_FILE"

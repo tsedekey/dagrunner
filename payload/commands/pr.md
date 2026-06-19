@@ -86,6 +86,10 @@ as required by the Camunda monorepo:
 }
 ```
 
+Note: `prNumber` is NOT written here — dagrunner fills it after `gh pr create` returns. Leave
+the field absent or `null` in this initial write; the `sibling-commands.md` script in Step 4b
+handles the fallback.
+
 Confirm both files exist:
 
 ```bash
@@ -109,6 +113,50 @@ git commit -m "<type>: <short description> (dagrun: $DAGRUN_RUN_ID)"
 ```
 
 Under normal flow `implement.md` commits first — this is a no-op if that happened.
+
+## Step 4b — Write sibling launch commands
+
+Read the PR number from `pr-meta.json` if available, otherwise leave as a placeholder.
+
+Write `$DAGRUN_ARTIFACTS/sibling-commands.md`:
+
+```bash
+PR_NUMBER=$(jq -r '.prNumber // "<PR_NUMBER>"' "$DAGRUN_ARTIFACTS/pr-meta.json" 2>/dev/null || echo "<PR_NUMBER>")
+SPEC_PATH="$DAGRUN_RUN_DIR/verify-guide/seeding-spec.json"
+
+cat > "$DAGRUN_ARTIFACTS/sibling-commands.md" << SIBLINGS
+# Sibling Commands
+
+Open a Claude Code session in the worktree and run these commands:
+
+## 1. Seed the cluster for live demo
+
+\`\`\`
+/seed-data $SPEC_PATH
+\`\`\`
+
+Requires: local Orchestration Cluster running (\`c8ctl start c8-cluster\`).
+Artifacts will be written to: $DAGRUN_RUN_DIR/seed-data/
+
+## 2. Babysit CI (after PR is created)
+
+\`\`\`
+/ci-babysit --pr $PR_NUMBER
+\`\`\`
+
+## 3. Triage PR review comments (after reviewers comment)
+
+\`\`\`
+/pr-triage --pr $PR_NUMBER
+\`\`\`
+SIBLINGS
+```
+
+Confirm the file was written:
+
+```bash
+cat "$DAGRUN_ARTIFACTS/sibling-commands.md"
+```
 
 ## Step 5 — Reflections (optional, do this last)
 
