@@ -26,7 +26,7 @@ If any of these come back wrong, run with `--verbose` and adjust:**
   timeout fires without confirming, check the UNCONFIRMED warning output for actual index names.
 - **ES query field**: `term.key` (using the processInstanceKey as ES doc `key` field)
 - **c8ctl profile fields**: `.Name`, `.URL` (from `c8ctl list profiles --json`)
-- **c8ctl create pi**: use `--processDefinitionId <bpmn-process-id-string>`, NOT the numeric key;
+- **c8ctl create pi**: use `--id <bpmn-process-id-string>`, NOT `--processDefinitionId` (wrong flag) and NOT the numeric key;
   do NOT use `--awaitCompletion` unless the process has no service tasks (it will hang)
 - **c8ctl topology error shape**: `{"status":"error","message":"..."}`
 
@@ -85,82 +85,95 @@ zsh "$SCRIPT_DIR/phase-2-deploy-and-seed.sh"
 
 ---
 
-## Phase 2b — Generate Postman collection and Elasticsearch queries
+## Phase 2b — Generate Postman collection
 
-Read the seeded.json and the original seeding-spec.json and produce two artifact files.
-No scripts for this phase — the agent does this directly.
+Read the seeded.json, the original seeding-spec.json, and the OpenAPI spec from the worktree
+to produce an accurate, import-ready Postman collection. No scripts for this phase — the agent
+does this directly.
 
 ```bash
 STATE_FILE="${TMPDIR%/}/seed-data-state.json"
 SEED_SCRATCH=$(jq -r .seed_scratch "$STATE_FILE")
 SPEC_PATH=$(jq -r .spec_path "$STATE_FILE")
+WORKTREE="$(git rev-parse --show-toplevel)"
+
 cat "$SEED_SCRATCH/seeded.json"
 cat "$SPEC_PATH"
+
+# Locate the Camunda REST API OpenAPI spec
+find "$WORKTREE" \( -name "openapi.yaml" -o -name "openapi.json" \) \
+  ! -path "*/target/*" ! -path "*/node_modules/*" ! -path "*/.git/*"
 ```
 
-Using the above as inputs:
+Read the relevant OpenAPI spec file(s) found above. For each `rest-api` observation in
+seeding-spec.json:
 
-**1. Write `$SEED_SCRATCH/postman-collection.json`**
+1. **Identify the endpoint** — extract the HTTP method and path from the `how` field
+   (e.g. `POST /v2/jobs/{jobKey}/update`).
+2. **Look it up in the OpenAPI spec** — find the exact path + method entry.
+3. **Extract from the spec:**
+   - Path parameters (names, types)
+   - Query parameters (names, types, required/optional)
+   - Request body schema (required fields and their types/formats)
+4. **Build the Postman request** using the spec — not guesswork. Every field name,
+   parameter name, and body shape must match the spec exactly.
 
-A Postman Collection v2.1 JSON. For each `rest-api` observation in seeding-spec.json, create one
-request item. Use the `how` field as the request description, the Camunda v2 REST API path (e.g.
-`/v2/jobs/{{jobKey}}/update-priority`), and substitute actual instance/job keys from seeded.json
-as Postman variables. Set `baseUrl` variable to the profile URL from seeded.json. Example
-structure:
+Substitute actual keys from seeded.json (instance keys). Job keys are not known at
+seeding time since jobs are created by the service task once a worker activates — use a
+Postman variable (`{{jobKey_N}}`) and add a note in the request description explaining
+where to find it (e.g. "Activate a job first via POST /v2/jobs/activate, then copy the
+returned key here").
+
+**Write `$SEED_SCRATCH/postman-collection.json`** as Postman Collection v2.1:
 
 ```json
 {
   "info": {
-    "name": "seed-data — <feature name>",
+    "name": "seed-data — <feature from seeding-spec>",
     "_postman_id": "seed-data-<run-id>",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "baseUrl", "value": "<profile URL without /v2>" },
-    { "key": "instanceKey1", "value": "<first instance key>" }
+    { "key": "baseUrl", "value": "<profile URL without trailing /v2>" },
+    {
+      "key": "instanceKey_0",
+      "value": "<seeded.json instances[0].instance_key>"
+    },
+    {
+      "key": "instanceKey_1",
+      "value": "<seeded.json instances[1].instance_key, if present>"
+    },
+    {
+      "key": "jobKey_0",
+      "value": "FILL_IN — activate job from instance 0 to get this"
+    }
   ],
   "item": [
     {
       "name": "<observation.what>",
       "request": {
-        "method": "POST",
+        "method": "<method from OpenAPI spec>",
         "header": [{ "key": "Content-Type", "value": "application/json" }],
         "url": {
-          "raw": "{{baseUrl}}/v2/...",
+          "raw": "{{baseUrl}}/v2/<path from spec with {{variables}} for path params>",
           "host": ["{{baseUrl}}"],
-          "path": ["v2", "..."]
+          "path": ["v2", "<path segments>"]
         },
-        "body": { "mode": "raw", "raw": "{ ... }" },
-        "description": "<observation.how>"
+        "body": {
+          "mode": "raw",
+          "raw": "<JSON body matching the spec requestBody schema exactly>"
+        },
+        "description": "<observation.how — full text>"
       }
     }
   ]
 }
 ```
 
-**2. Write `$SEED_SCRATCH/elasticsearch-queries.json`**
-
-An array — one entry per `elasticsearch` observation in seeding-spec.json. Use actual instance
-keys from seeded.json:
-
-```json
-[
-  {
-    "name": "<observation.what>",
-    "index": "operate-list-view*",
-    "description": "<observation.how>",
-    "query": { "term": { "key": "<first_instance_key>" } }
-  }
-]
-```
-
-For job-level observations, use a job-specific index pattern (e.g. `camunda-job-*`) and match by
-the instance key. Derive the best index and query field from the `how` field in the observation.
-
 **PHASE_2B_CHECKPOINT:**
 
 - [ ] `$SEED_SCRATCH/postman-collection.json` written and valid JSON
-- [ ] `$SEED_SCRATCH/elasticsearch-queries.json` written and valid JSON
+- [ ] Every request body matches the OpenAPI spec schema — no invented field names
 
 ---
 

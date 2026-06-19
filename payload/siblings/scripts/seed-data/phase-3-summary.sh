@@ -22,9 +22,6 @@ echo "  seeded.json                — instance keys and observation records"
 [ -f "$SEED_SCRATCH/postman-collection.json" ] && \
   echo "  postman-collection.json    — import into Postman to run REST observations" || \
   echo "  postman-collection.json    — (not yet generated — see Phase 2b)"
-[ -f "$SEED_SCRATCH/elasticsearch-queries.json" ] && \
-  echo "  elasticsearch-queries.json — paste queries into ElasticVue" || \
-  echo "  elasticsearch-queries.json — (not yet generated — see Phase 2b)"
 ls "$SEED_SCRATCH/generated/"*.bpmn 2>/dev/null && \
   echo "  generated/*.bpmn           — generated BPMN resources" || true
 
@@ -43,7 +40,7 @@ while [ "$m" -lt "$OBS_LEN" ]; do
     echo "[ ] REST: $WHAT — use Postman (see postman-collection.json, request $REST_N)"
   elif [ "$WHERE" = "elasticsearch" ]; then
     ES_N=$((ES_N + 1))
-    echo "[ ] ES ($STATUS): $WHAT — use ElasticVue (see elasticsearch-queries.json, query $ES_N)"
+    echo "[ ] ES ($STATUS): $WHAT"
   fi
   m=$((m + 1))
 done
