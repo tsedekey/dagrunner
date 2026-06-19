@@ -106,6 +106,12 @@ export type Node = {
   maxRetries?: number;
   /** Per-node spend ceiling in USD (for unpinned/Opus-eligible nodes). */
   maxBudget?: number;
+  /**
+   * Shell command to run inside the worktree before each `git commit` the agent
+   * makes. Typical use: `"./mvnw spotless:apply --no-transfer-progress"` for
+   * Camunda Java nodes. A non-zero exit blocks the commit (fail loud).
+   */
+  formatCommand?: string;
   /** Per-node hook scripts. */
   hooks?: { stop?: string };
   /**

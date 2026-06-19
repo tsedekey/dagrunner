@@ -227,6 +227,18 @@ export function buildSeededSettings(opts: {
           ],
         },
       ],
+      PreToolUse: [
+        {
+          matcher: "Bash",
+          hooks: [
+            {
+              type: "command",
+              command:
+                "$CLAUDE_PROJECT_DIR/.claude/hooks/pre-tool-use-commit.sh",
+            },
+          ],
+        },
+      ],
       PostToolUse: [
         {
           matcher: "Write|Edit|MultiEdit",

@@ -123,6 +123,7 @@ export const featureWorkflow: Workflow = {
       dependsOn: ["expand"],
       command: "/implement",
       produces: ["summary.md"],
+      formatCommand: "./mvnw spotless:apply --no-transfer-progress",
     },
     {
       id: "review",
@@ -139,6 +140,7 @@ export const featureWorkflow: Workflow = {
       revisionInstruction:
         "Review the feedback below and revise the code changes in the worktree accordingly. " +
         "Then update {artifactsDir}/summary.md to reflect all changes made (which findings were addressed, what files changed, what was deferred).",
+      formatCommand: "./mvnw spotless:apply --no-transfer-progress",
     },
     // Phase 2b nodes — added after Gate 2 (fix).
     // verify-election (micro-gate in run-engine, not a node) routes here.

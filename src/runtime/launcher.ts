@@ -30,6 +30,8 @@ export type NodeLaunchEnv = {
   DAGRUN_RUN_DIR: string;
   /** Absolute path to the durable store dir (<homeDir>/store/) — used by session-end.sh to write reflection-log.jsonl */
   DAGRUN_STORE_DIR: string;
+  /** Format command to run before git commit; absent means no-op. */
+  DAGRUN_FORMAT_CMD?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -49,6 +51,7 @@ export function buildNodeEnv(
   runDir: string,
   worktreePath: string,
   storeDir: string,
+  formatCommand?: string,
 ): NodeLaunchEnv {
   return {
     DEVHARNESS_SRC: config.DEVHARNESS_SRC,
@@ -58,6 +61,9 @@ export function buildNodeEnv(
     DAGRUN_NODE_ID: nodeId,
     DAGRUN_RUN_DIR: runDir,
     DAGRUN_STORE_DIR: storeDir,
+    ...(formatCommand !== undefined
+      ? { DAGRUN_FORMAT_CMD: formatCommand }
+      : {}),
   };
 }
 
@@ -78,6 +84,9 @@ export function applyNodeEnv(env: NodeLaunchEnv): void {
   process.env["DAGRUN_NODE_ID"] = env.DAGRUN_NODE_ID;
   process.env["DAGRUN_RUN_DIR"] = env.DAGRUN_RUN_DIR;
   process.env["DAGRUN_STORE_DIR"] = env.DAGRUN_STORE_DIR;
+  if (env.DAGRUN_FORMAT_CMD !== undefined) {
+    process.env["DAGRUN_FORMAT_CMD"] = env.DAGRUN_FORMAT_CMD;
+  }
 }
 
 // ---------------------------------------------------------------------------

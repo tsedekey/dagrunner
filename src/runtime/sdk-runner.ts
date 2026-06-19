@@ -97,7 +97,15 @@ export function makeSDKRunner(
     // MUST set env BEFORE spawning query() so hooks and child processes inherit
     // the correct per-node values (env-propagation contract in CLAUDE.md).
     applyNodeEnv(
-      buildNodeEnv(config, runId, nodeId, runDir, worktreePath, storeDir),
+      buildNodeEnv(
+        config,
+        runId,
+        nodeId,
+        runDir,
+        worktreePath,
+        storeDir,
+        node.formatCommand,
+      ),
     );
     mkdirSync(ctx.artifactsDir, { recursive: true });
 
