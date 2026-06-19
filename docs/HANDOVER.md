@@ -1,4 +1,11 @@
-# dagrunner — HANDOVER (chat-architect → Claude Code agent)
+# dagrunner — HANDOVER (retired)
+
+> This document served its purpose as the one-time bootstrap from chat-architect to Claude Code
+> agent. The working model is now established. **See `docs/STATUS.md` — the "Next session: start
+> here" block — for the live boot protocol.**
+
+<!--
+Original content preserved below for reference only. Do not act on it.
 
 > **Read this first, then read the pointers in §1.** This document transfers the driver's seat from
 > the chat-based architect ("chat-Claude") to **you** — a Claude Code agent with live repo access.
@@ -120,3 +127,4 @@ its own pass.
 
 Second opinions, architecture sanity-checks, "right idea / wrong harness" catches, and design
 discussion when you want a sounding board. You drive; chat-Claude advises.
+-->

@@ -6,7 +6,32 @@
 > `testing-protocol` skill. This file is kept current under the same anti-drift discipline —
 > when state changes, update it.
 >
-> Last updated: 2026-06-19 (night-mode permission posture: bypassPermissions for unattended nodes, boundary intact via sandbox + deny-guard).
+> Last updated: 2026-06-19 (night-mode permission posture; dr-build agent consolidation; fresh-session handoff model adopted).
+
+## Next session: start here
+
+> Read this block first. Everything else in this file is background.
+
+**Current task:** Draft and execute the **sibling ownership redesign**.
+Siblings (`ci-babysit`, `pr-triage`, `seed-data`) currently live unversioned in the Camunda
+private `.claude/` — improvements made on a live worktree die when the worktree is deleted.
+Target: dagrunner owns and versions them; they get seeded onto the worktree at run-start,
+same mechanism as `payload/`. No live-worktree edits; improvements go to the reflection store.
+
+**First action:**
+
+1. Draft the plan: use `docs/changes/_TEMPLATE.md`, ground in the real sibling files at
+   `$DEVHARNESS_SRC/.claude/commands/` (three files: `ci-babysit.md`, `pr-triage.md`,
+   `seed-data.md`), save to `docs/changes/ready/sibling-ownership.md`.
+2. Delegate: `Agent({ subagent_type: "dr-build", prompt: "docs/changes/ready/sibling-ownership.md" })`
+
+**Also in `docs/changes/ready/`:** `run-id-collision-guard.md` — independent, can run in
+parallel with the sibling plan once both are in flight.
+
+**Working model (see memory):** always delegate implementation to the `dr-build` agent; this
+session is coordinator only. Start a fresh session after 1–2 tasks complete.
+
+---
 
 ## What dagrunner is
 
@@ -48,18 +73,19 @@ outside the pipeline: `ci-babysit`, `pr-triage`, `/seed-data`
 
 ## How we work
 
-- Design/spec/grounding happen in **chat with the architect** (no live repo access — Eddie
-  uploads a fresh **bundle** zip via `scripts/make-bundle.sh` before code-grounded work).
-- Execution is a **Claude Code build agent** via `/dr-build docs/changes/<plan>.md`. Plans use
-  `docs/changes/_TEMPLATE.md` (the lean delta); `/dr-build` carries the standing rules. Built
-  plans archive to `docs/changes/done/`.
-- Batches run unattended via `scripts/build-queue.sh <plans…>` — walks the queue, gates each on
-  `verify-baseline`, stop-on-fail, `caffeinate`, live output + heartbeat + 90m per-step timeout.
-  Headless permission posture (bypass + deny-guard) verified.
-- **Build mode:** interactive `claude` (`/dr-build <plan>`) by day (watched; avoids the `-p`
-  truncation regression); `build-queue.sh` reserved for unattended **night** runs. Night queue takes
-  **`smoke:mock`-only** plans; prompt-touching plans (which need `smoke:live`) are built interactively
-  by day.
+- **Coordinator** (this Claude Code session, rooted in `~/dev/dagrunner` on personal) owns plan
+  design, sequencing, and architecture decisions. Has live repo access — no zip uploads needed.
+- **Implementation** is always delegated to the `dr-build` agent
+  (`Agent({ subagent_type: "dr-build", prompt: "docs/changes/ready/<plan>.md" })`). The agent
+  self-briefs, TDDs, runs `verify-baseline`, reconciles docs, commits, and returns a build report.
+  Independent plans can be fanned out in parallel.
+- **Plans** use `docs/changes/_TEMPLATE.md` (the lean delta). Built plans archive to
+  `docs/changes/done/`.
+- **Session cadence:** fresh session after 1–2 tasks. Each session boots from this file's
+  "Next session: start here" block — no re-orientation needed.
+- **Night queue:** `scripts/build-queue.sh <plans…>` for unattended batches — gates each on
+  `verify-baseline`, stop-on-fail, `caffeinate`. Night queue takes `smoke:mock`-only plans;
+  prompt-touching plans need `smoke:live` run by hand.
 
 ## Done this session
 
@@ -70,11 +96,10 @@ now fast + deterministic) · verify-election observability recommendation · TDD
 `/dr-build` + charter · **reflect re-architecture**: pure capture via `dagrun reflect-append`,
 auto-apply subsystem removed, `pr` is terminal. **hook-driven reflection capture**: SessionEnd
 hook reads `reflections.md` → store log; `notes.md` → `reflections.md` sweep; CLI renamed to
-`dagrun reflect`; smoke hard-asserts ≥1 store entry. **Night-mode permission posture**: attended
-nodes keep `acceptEdits`; `--night` nodes use `bypassPermissions` so no maven/bash hangs; sandbox
-
-- deny-guard boundary unchanged (proven by teeth-check unit tests). \*\*Core hardening + reflection
-- night-mode prompt posture are complete.\*\*
+`dagrun reflect`; smoke hard-asserts ≥1 store entry. **Night-mode permission posture**: attended nodes keep `acceptEdits`; `--night` nodes use
+`bypassPermissions` so no maven/bash hangs; sandbox + deny-guard boundary unchanged (proven by
+teeth-check unit tests). **`dr-build` agent**: slash command retired, single self-briefing agent
+now handles all plan execution. **Core hardening + reflection + night-mode prompt posture complete.**
 
 ## Pending / next
 
