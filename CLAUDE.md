@@ -55,6 +55,12 @@ must export `DEVHARNESS_SRC`, `DAGRUN_ARTIFACTS` (per-node), `DAGRUN_RUN_ID`, `D
 the SessionStart sync, artifact writes, and the SessionEnd reflection-capture hook. Also: the SDK does NOT load `.claude/settings.json` (hooks/deny rules) unless
 `settingSources: ["project"]` is set in `query()` options.
 
+## Grill Me / sibling walkthrough sessions
+
+When walking through a sibling (seed-data, ci-babysit, pr-triage) step by step with the user,
+**always use the AskUserQuestion tool** for every question — never ask questions as plain prose.
+One question at a time, surfaced via the tool.
+
 ## Where design decisions live
 
 The full locked design is the `architecture-spec` skill, chunked by theme. Load only the slice a
