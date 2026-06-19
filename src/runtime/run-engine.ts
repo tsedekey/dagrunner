@@ -113,6 +113,61 @@ export function makeRunId(
 }
 
 // ---------------------------------------------------------------------------
+// Branch naming — Conventional Commits style
+// ---------------------------------------------------------------------------
+
+const WORKFLOW_TYPE_PREFIX: Record<string, string> = {
+  feature: "feat",
+  fix: "fix",
+  docs: "docs",
+  chore: "chore",
+  refactor: "refactor",
+  test: "test",
+  ci: "ci",
+  build: "build",
+  perf: "perf",
+  style: "style",
+  revert: "revert",
+};
+
+/**
+ * Extract the first H1/H2 heading from a plan file and slugify it.
+ * Falls back to "run" if no heading is found.
+ * Exported for unit testing.
+ */
+export function slugifyPlanHeading(planPath: string): string {
+  const content = readFileSync(planPath, "utf8");
+  const match = content.match(/^#{1,2}\s+(.+)/m);
+  const heading = (match ? match[1] : undefined) ?? "run";
+  return heading
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .slice(0, 30)
+    .replace(/-$/, "");
+}
+
+/**
+ * Compute the git branch name for a new run.
+ * Format: <type>/<heading-slug>-<3-hex>
+ *   e.g. feat/add-retry-logic-a3f
+ *
+ * The suffix is injectable for deterministic unit testing.
+ * Exported for unit testing.
+ */
+export function makeBranchName(
+  workflowName: string,
+  planPath: string,
+  suffix = randomBytes(2).toString("hex").slice(0, 3),
+): string {
+  const prefix = WORKFLOW_TYPE_PREFIX[workflowName] ?? "feat";
+  const slug = slugifyPlanHeading(planPath);
+  return `${prefix}/${slug}-${suffix}`;
+}
+
+// ---------------------------------------------------------------------------
 // Worktree hygiene — structural scratch backstop
 // ---------------------------------------------------------------------------
 
@@ -398,8 +453,10 @@ export async function startRun(opts: {
   mkdirSync(join(runDir, "plan"), { recursive: true });
   cpSync(planPath, join(runDir, "plan", "plan.md"));
 
+  const branchName = makeBranchName(workflow.name, planPath);
+
   // Create git worktree from DEVHARNESS_SRC (must run in that repo's root).
-  execSync(`git worktree add "${worktreePath}" -b "feature/${runId}"`, {
+  execSync(`git worktree add "${worktreePath}" -b "${branchName}"`, {
     cwd: config.DEVHARNESS_SRC,
     stdio: "inherit",
   });
@@ -475,7 +532,7 @@ export async function startRun(opts: {
     updatedAt: new Date().toISOString(),
     status: "running",
     worktreePath,
-    branch: `feature/${runId}`,
+    branch: branchName,
     sourcePlanPath: planPath,
     nodes: makeInitialNodeStates(workflow),
   };

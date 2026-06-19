@@ -60,13 +60,27 @@ BODY
 
 Write to the resolved path from Step 0. Use the Write tool or a heredoc — your choice, but the file must land at `$DAGRUN_ARTIFACTS/pr-meta.json`:
 
+The `title` field must follow [Conventional Commits](https://www.conventionalcommits.org/) format
+as required by the Camunda monorepo:
+
+```
+<type>: <short description>
+```
+
+- **type** — pick the one that best fits the work: `feat` (new feature), `fix` (bug fix),
+  `docs` (documentation only), `chore` (maintenance), `refactor` (no behavior change),
+  `test` (tests only), `ci` (CI changes), `build`, `perf`, `style`, `revert`.
+  Read `plan.md` and `implement/summary.md` to decide.
+- **short description** — lowercase, imperative mood, no period, ≤60 chars after the prefix.
+  Example: `feat: add retry logic to job activation` ✓ `feat: Added Retry Logic` ✗
+
 ```json
 {
   "runId": "<DAGRUN_RUN_ID>",
   "branch": "<branch from: cd $DAGRUN_WORKTREE && git rev-parse --abbrev-ref HEAD>",
   "worktreePath": "<DAGRUN_WORKTREE>",
   "bodyPath": "<resolved DAGRUN_ARTIFACTS>/body.md",
-  "title": "<concise PR title from guide.md, ≤70 chars>",
+  "title": "<type>: <short description>",
   "verifyRan": <true|false>,
   "createdAt": "<ISO timestamp>"
 }
@@ -91,7 +105,7 @@ If there are uncommitted changes, commit them:
 
 ```bash
 git add -A
-git commit -m "feat: <title from guide.md> (dagrun: $DAGRUN_RUN_ID)"
+git commit -m "<type>: <short description> (dagrun: $DAGRUN_RUN_ID)"
 ```
 
 Under normal flow `implement.md` commits first — this is a no-op if that happened.
