@@ -1,0 +1,138 @@
+---
+description: Seed a live local Orchestration Cluster from a dagrunner verify-guide seeding-spec.json via c8ctl
+argument-hint: [path/to/seeding-spec.json] [--profile <c8ctl-profile-name>]
+---
+
+# /seed-data — Seed Live Cluster from seeding-spec.json
+
+**Input**: $ARGUMENTS
+
+Seeds a running local Orchestration Cluster so a feature can be demonstrated or manually tested.
+Reads a `seeding-spec.json` produced by the dagrunner `verify-guide` node, resolves abstract BPMN
+descriptions to concrete deployable resources, deploys them, starts process instances, and confirms
+that expected observations (Elasticsearch document present; REST call recorded) are reachable.
+
+**Design note:** The architecture dropped a dedicated environment-creator sibling — c8ctl's `dev`
+plugin covers cluster spin-up. This command targets the cluster by c8ctl profile rather than
+`environment.json`. **Start the OC before invoking this command.**
+
+**Field paths verified against c8ctl v3.1.0 dry-run output and the Camunda v2 REST API spec;
+a live end-to-end run against a running cluster is required to confirm all of the following.
+If any of these come back wrong, run with `--verbose` and adjust:**
+
+- **deploy response**: `.key`, `.deployments[0].process.processDefinitionKey`
+- **create-pi response**: `.processInstanceKey`
+- **ES index name**: `operate-list-view*` — real clusters may add a leading prefix; if the 90s
+  timeout fires without confirming, check the UNCONFIRMED warning output for actual index names.
+- **ES query field**: `term.key` (using the processInstanceKey as ES doc `key` field)
+- **c8ctl profile fields**: `.Name`, `.URL` (from `c8ctl list profiles --json`)
+- **c8ctl create pi**: use `--processDefinitionId <bpmn-process-id-string>`, NOT the numeric key;
+  do NOT use `--awaitCompletion` unless the process has no service tasks (it will hang)
+- **c8ctl topology error shape**: `{"status":"error","message":"..."}`
+
+**Scripts:** bash logic lives in `.claude/scripts/seed-data/`. The MD calls them; edit the
+scripts for logic changes.
+
+---
+
+## Phase 0 — Resolve arguments and locate seeding-spec.json
+
+Parse `$ARGUMENTS`. Write resolved state to `/tmp/seed-data-state.json` for later phases.
+
+```bash
+SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/seed-data"
+zsh "$SCRIPT_DIR/phase-0-bootstrap.sh" "$ARGUMENTS"
+```
+
+**PHASE_0_CHECKPOINT:**
+
+- [ ] `/tmp/seed-data-state.json` written with `spec_path` and `profile`
+- [ ] `verify-demo/` directory created
+
+---
+
+## Phase 1 — Cluster reachability check
+
+```bash
+SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/seed-data"
+zsh "$SCRIPT_DIR/phase-1-cluster-check.sh"
+```
+
+**PHASE_1_CHECKPOINT:**
+
+- [ ] `c8ctl get topology` returned without error — cluster is reachable
+
+---
+
+## Phase 2 — Resolve deployments, start instances, confirm observations, write seeded.json
+
+This is one contiguous script — all deployment/instance state lives in shell variables across the
+full loop. Do not split it.
+
+```bash
+SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/seed-data"
+zsh "$SCRIPT_DIR/phase-2-deploy-and-seed.sh"
+```
+
+**PHASE_2_CHECKPOINT:**
+
+- [ ] All deployments resolved and deployed (process_definition_key captured or `unknown`)
+- [ ] All instances started (instance_key captured or `unknown` with warning)
+- [ ] ES observations confirmed or loudly warned
+- [ ] REST observations recorded as `ready_to_run` entries
+- [ ] `verify-demo/seeded.json` written and valid JSON
+
+---
+
+## Phase 3 — Summary
+
+```bash
+SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/seed-data"
+zsh "$SCRIPT_DIR/phase-3-summary.sh"
+```
+
+---
+
+## Re-run behavior
+
+Re-running `/seed-data` on the same spec is **safe and additive**:
+
+- **Deploy**: creates a new process-definition version each run (version 1, 2, ...). All versions
+  remain in the cluster. This is fine for demonstration purposes.
+- **Create instance**: starts a new instance each run. Multiple instances appear in Operate.
+- **seeded.json**: overwritten on each run with the latest keys.
+
+To reset: cancel instances and delete process definitions in Operate UI, or recreate the cluster.
+
+---
+
+## Acceptance criteria (sibling spec §6)
+
+1. Abstract `simpleProcess` deployment resolved to a concrete no-service-task BPMN, deployed,
+   instance started, key captured in `verify-demo/seeded.json`.
+2. ES observation confirmed reachable (operate-list-view document present within 90s); REST
+   observation recorded as a ready-to-run call, not asserted.
+3. Re-running is safe and documented (additive by design).
+4. Failures (deploy error, export lag > 90s) exit non-zero with a loud warning — never silent.
+
+---
+
+## Learnings
+
+If this run encountered anything unexpected that is **not already documented** in
+`~/.local/share/dagrunner/store/learnings/seed-data.md`, append a new entry now using this
+format — keep it brief, one or two lines per field:
+
+```markdown
+## YYYY-MM-DD
+
+**Symptom:** <what went wrong or behaved unexpectedly>
+**Root cause:** <why it happened>
+**Resolution:** <what fixed it>
+**Watch for:** <how to spot this early on the next run>
+```
+
+Only log something if it adds knowledge that would prevent wasted time on a future run.
+Good candidates: c8ctl field shape mismatches, ES index name surprises, cluster profile
+discovery edge cases, or BPMN resolution failures that weren't covered by the spec.
+Routine "spec was incomplete" outcomes do not need an entry.

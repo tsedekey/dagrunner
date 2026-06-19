@@ -120,4 +120,36 @@ if [[ -f "${SRC_LOCAL_MD}" ]] && [[ ! -f "${DEST_LOCAL_MD}" ]]; then
     || block "SessionStart: failed to copy CLAUDE.local.md"
 fi
 
+# --- re-seed sibling commands/scripts from dagrunner source of truth --------
+#
+# DEVHARNESS_SRC's rsync above may have clobbered dagrunner's seeded siblings
+# (ci-babysit, pr-triage, seed-data). Re-apply them last so dagrunner always
+# wins. Fail-soft if DAGRUNNER_ROOT is unset — the initial cpSync at run-start
+# already ran; this step is belt-and-suspenders for the session-start overwrite.
+
+if [[ -n "${DAGRUNNER_ROOT:-}" ]]; then
+  SIBLING_COMMANDS="${DAGRUNNER_ROOT}/payload/siblings/commands"
+  SIBLING_SCRIPTS="${DAGRUNNER_ROOT}/payload/siblings/scripts"
+  if [[ -d "${SIBLING_COMMANDS}" ]]; then
+    mkdir -p "${DEST_CLAUDE}/commands"
+    if command -v rsync >/dev/null 2>&1; then
+      rsync -a "${SIBLING_COMMANDS}/" "${DEST_CLAUDE}/commands/" \
+        || block "SessionStart: rsync of sibling commands/ failed (exit $?)"
+    else
+      cp -r "${SIBLING_COMMANDS}/." "${DEST_CLAUDE}/commands/" 2>/dev/null || true
+    fi
+  fi
+  if [[ -d "${SIBLING_SCRIPTS}" ]]; then
+    mkdir -p "${DEST_CLAUDE}/scripts"
+    if command -v rsync >/dev/null 2>&1; then
+      rsync -a "${SIBLING_SCRIPTS}/" "${DEST_CLAUDE}/scripts/" \
+        || block "SessionStart: rsync of sibling scripts/ failed (exit $?)"
+    else
+      cp -r "${SIBLING_SCRIPTS}/." "${DEST_CLAUDE}/scripts/" 2>/dev/null || true
+    fi
+  fi
+else
+  printf 'SessionStart: DAGRUNNER_ROOT not set — sibling re-seed skipped (initial cpSync covers this)\n' >&2
+fi
+
 exit 0

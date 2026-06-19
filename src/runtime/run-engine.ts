@@ -219,6 +219,54 @@ function scanWorktreeForLeaks(
 }
 
 /**
+ * Seed the worktree's .claude/ with dagrunner-owned sibling commands and scripts
+ * (ci-babysit, pr-triage, seed-data). These are seeded AFTER the pipeline commands
+ * so that session-start.sh's DEVHARNESS_SRC sync can be overridden by this call.
+ *
+ * Also exports DAGRUNNER_ROOT into process.env so session-start.sh can re-apply
+ * siblings at every node session start (satisfying the env-propagation contract).
+ *
+ * Exported for unit testing (tests point at the real repo root + a temp destClaude).
+ * Fail-loud: throws if payload/siblings/commands/ is absent (broken install).
+ */
+export function seedWorktreeSiblings(
+  dagrunnerRoot: string,
+  destClaude: string,
+): void {
+  const srcSiblingCommands = join(
+    dagrunnerRoot,
+    "payload",
+    "siblings",
+    "commands",
+  );
+  const srcSiblingScripts = join(
+    dagrunnerRoot,
+    "payload",
+    "siblings",
+    "scripts",
+  );
+
+  if (!existsSync(srcSiblingCommands)) {
+    throw new Error(
+      `dagrun: payload/siblings/commands not found at ${srcSiblingCommands} — package installation may be broken`,
+    );
+  }
+
+  // Set env before any child process / session spawn so hooks can see it.
+  process.env["DAGRUNNER_ROOT"] = dagrunnerRoot;
+
+  // Seed sibling commands into .claude/commands/ (alongside pipeline commands).
+  mkdirSync(join(destClaude, "commands"), { recursive: true });
+  cpSync(srcSiblingCommands, join(destClaude, "commands"), { recursive: true });
+
+  // Seed sibling scripts into .claude/scripts/.
+  if (existsSync(srcSiblingScripts)) {
+    mkdirSync(join(destClaude, "scripts"), { recursive: true });
+    cpSync(srcSiblingScripts, join(destClaude, "scripts"), { recursive: true });
+  }
+}
+
+/**
  * Wrap an executor so that immediately before the `pr` node fires, the worktree
  * is scanned for leaked artifacts. Advisory only — never blocks the pr node.
  * Note: rerunNode does not use this wrapper (debug tool; intentional omission
@@ -391,6 +439,13 @@ export async function startRun(opts: {
   cpSync(srcCommands, join(destClaude, "commands"), { recursive: true });
   cpSync(srcHooks, join(destClaude, "hooks"), { recursive: true });
   cpSync(srcAgents, join(destClaude, "agents"), { recursive: true });
+
+  // Seed sibling commands + scripts (ci-babysit, pr-triage, seed-data) into the
+  // worktree. Also exports DAGRUNNER_ROOT so session-start.sh can re-apply siblings
+  // at every node session start (satisfying the env-propagation contract in CLAUDE.md).
+  // Must run AFTER pipeline commands so siblings land last and always win over
+  // any DEVHARNESS_SRC rsync that session-start.sh may have applied.
+  seedWorktreeSiblings(dagrunnerRoot, destClaude);
 
   // Runtime settings.json: full permission/sandbox/network model (Phase 2a D1).
   // DISTINCT from the build-harness settings.json (bypassPermissions).
@@ -868,6 +923,15 @@ export async function resumeRun(opts: {
     }
   }
 
+  // Re-seed siblings into the worktree and export DAGRUNNER_ROOT so session-start.sh
+  // can re-apply them at every node session start. resumeRun is a fresh process —
+  // DAGRUNNER_ROOT set in a prior startRun does not survive here.
+  {
+    const dagrunnerRoot = new URL("../../", import.meta.url).pathname;
+    const destClaude = join(state.worktreePath, ".claude");
+    seedWorktreeSiblings(dagrunnerRoot, destClaude);
+  }
+
   // Re-run the DAG engine with the (possibly updated) state.
   const executor = wrapWithPrScan(
     (opts.executorFactory ?? makeSDKRunner)(
@@ -1096,6 +1160,10 @@ export async function rerunNode(opts: {
     cpSync(srcHooks, join(destClaude, "hooks"), { recursive: true });
   if (existsSync(srcAgents))
     cpSync(srcAgents, join(destClaude, "agents"), { recursive: true });
+
+  // Re-seed siblings and export DAGRUNNER_ROOT (rerunNode is a fresh process).
+  seedWorktreeSiblings(dagrunnerRoot, destClaude);
+
   const seededSettings = buildSeededSettings({
     runDir,
     homeDir: homedir(),

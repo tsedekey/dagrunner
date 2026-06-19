@@ -324,6 +324,14 @@ Format: `<block> · <decision> · <why>`
 
 - run-id-collision-guard · existsSync assert placed before lock acquisition in `startRun` · the assert is Tier C (orchestration), not unit-tested; belt-and-suspenders only — the random suffix makes it essentially dead code; consistent with "fail loud, never silent" invariant
 
+## sibling-ownership
+
+- sibling-ownership · siblings moved to `payload/siblings/` as dagrunner source of truth · siblings (`ci-babysit`, `pr-triage`, `seed-data`) previously lived unversioned in `DEVHARNESS_SRC/.claude/commands/`; improvements made on a live worktree died on worktree deletion; moving them to `payload/siblings/` puts them under dagrunner's git history and the normal plan-and-build workflow; `pr-review.md` stays private/standalone (out of scope)
+
+- sibling-ownership · `DAGRUNNER_ROOT` exported into `process.env` at the same point `dagrunnerRoot` is first computed (before any `query()` call) so hooks can see it · env-propagation contract from CLAUDE.md requires vars set before `query()` spawns; `seedWorktreeSiblings` sets `process.env["DAGRUNNER_ROOT"]` as its first side-effect; called in `startRun`, `resumeRun`, and `rerunNode` code paths
+
+- sibling-ownership · `session-start.sh` re-seeds siblings from `$DAGRUNNER_ROOT/payload/siblings/` AFTER the DEVHARNESS_SRC `rsync -a` sync · DEVHARNESS_SRC sync uses `rsync -a` (overwrite, no `--ignore-existing`) and would clobber dagrunner's seeded siblings; re-applying them last ensures dagrunner always wins; fail-soft if `DAGRUNNER_ROOT` unset (warn to stderr, don't block) — the initial `cpSync` already ran and the hook is belt-and-suspenders
+
 ## night-mode-permission-posture
 
 - night-mode-permission-posture · `selectPermissionMode(nightMode?)` exported as a pure function from `sdk-runner.ts` rather than inlining the ternary · pure export enables a teeth-checked unit test (red before the export, green after); the function documents the invariant explicitly (two-posture rule) alongside the code that enforces it; inlining would make the property invisible to tests

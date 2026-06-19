@@ -46,7 +46,7 @@ primitives, build only the cross-process/worktree gaps.
 (`verify` is elected after Gate 2; `pr` is the final node.) Each node may write `reflections.md`; the SessionEnd hook appends it to `~/.local/share/dagrunner/store/reflection-log.jsonl`
 (fail-soft — never blocks shipping). Manual/sibling append: `dagrun reflect`. Plus three human-driven sibling commands
 outside the pipeline: `ci-babysit`, `pr-triage`, `/seed-data`
-(canonical home: Camunda private `.claude/`).
+(canonical home: dagrunner `payload/siblings/`).
 
 ## Repo structure (post-restructure)
 
@@ -99,7 +99,7 @@ hook reads `reflections.md` → store log; `notes.md` → `reflections.md` sweep
 `dagrun reflect`; smoke hard-asserts ≥1 store entry. **Night-mode permission posture**: attended nodes keep `acceptEdits`; `--night` nodes use
 `bypassPermissions` so no maven/bash hangs; sandbox + deny-guard boundary unchanged (proven by
 teeth-check unit tests). **`dr-build` agent**: slash command retired, single self-briefing agent
-now handles all plan execution. **Core hardening + reflection + night-mode prompt posture complete.**
+now handles all plan execution. **Core hardening + reflection + night-mode prompt posture complete.** **Sibling ownership**: `ci-babysit`, `pr-triage`, `seed-data` moved to `payload/siblings/` (versioned); `seedWorktreeSiblings` seeds both run-start and resume; `session-start.sh` re-seeds after DEVHARNESS_SRC sync so dagrunner always wins; 4 TDD unit tests green.
 
 ## Pending / next
 
