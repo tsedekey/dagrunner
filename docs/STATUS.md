@@ -6,7 +6,7 @@
 > `testing-protocol` skill. This file is kept current under the same anti-drift discipline —
 > when state changes, update it.
 >
-> Last updated: 2026-06-18 (hook-driven reflection capture: SessionEnd hook reads reflections.md → store; reflect command renamed; smoke hard-assert).
+> Last updated: 2026-06-19 (night-mode permission posture: bypassPermissions for unattended nodes, boundary intact via sandbox + deny-guard).
 
 ## What dagrunner is
 
@@ -70,7 +70,11 @@ now fast + deterministic) · verify-election observability recommendation · TDD
 `/dr-build` + charter · **reflect re-architecture**: pure capture via `dagrun reflect-append`,
 auto-apply subsystem removed, `pr` is terminal. **hook-driven reflection capture**: SessionEnd
 hook reads `reflections.md` → store log; `notes.md` → `reflections.md` sweep; CLI renamed to
-`dagrun reflect`; smoke hard-asserts ≥1 store entry. **Core hardening + reflection are complete.**
+`dagrun reflect`; smoke hard-asserts ≥1 store entry. **Night-mode permission posture**: attended
+nodes keep `acceptEdits`; `--night` nodes use `bypassPermissions` so no maven/bash hangs; sandbox
+
+- deny-guard boundary unchanged (proven by teeth-check unit tests). \*\*Core hardening + reflection
+- night-mode prompt posture are complete.\*\*
 
 ## Pending / next
 
