@@ -313,3 +313,11 @@ Format: `<block> · <decision> · <why>`
 - night-mode · smoke:mock adds Run C (clean → auto-approve + park at verify-election) and Run D (seeded concern → park at Gate 1) · these are the primary validation gates per the plan; Run C uses the existing `gate-pause` scenario (clean content, no concerns); Run D uses the new `gate-pause-with-concerns` scenario added to mock-executor; smoke:live is not required (no prompt changes)
 
 - night-mode · `gate-pause-with-concerns` added to NodeScenario in mock-executor.ts · reuse of the mock executor injection seam; alternative (custom per-test factory writing to files) would duplicate artifact-write logic; adding the scenario is cheaper and consistent with the existing mock taxonomy
+
+## night-mode-permission-posture
+
+- night-mode-permission-posture · `selectPermissionMode(nightMode?)` exported as a pure function from `sdk-runner.ts` rather than inlining the ternary · pure export enables a teeth-checked unit test (red before the export, green after); the function documents the invariant explicitly (two-posture rule) alongside the code that enforces it; inlining would make the property invisible to tests
+
+- night-mode-permission-posture · `nightMode` threaded into `makeSDKRunner` as an optional 6th parameter; `ExecutorFactory` type left at 5 parameters (unchanged) · night-aware default factory created as a local closure inside `startRun` so the type boundary stays clean and tests that supply a custom `executorFactory` are unaffected; the closure captures `opts.nightMode` at construction time, which is correct because nightMode is constant for the life of a run
+
+- night-mode-permission-posture · `sandbox.enabled` + deny-guard hook wired in `buildSeededSettings` independently of `permissionMode` (no nightMode parameter added to settings-seed) · the boundary must never be conditional on the prompt-bypass flag; testing via `sdk-runner.test.ts` teeth-check asserts `sandbox.enabled=true` and `stop-verifier` hook presence from the seeded settings, proving structural independence

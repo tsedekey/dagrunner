@@ -54,6 +54,30 @@ function trunc(s: string, maxLen = 80): string {
 }
 
 // ---------------------------------------------------------------------------
+// selectPermissionMode
+// ---------------------------------------------------------------------------
+
+/**
+ * Select the SDK permissionMode for a node execution.
+ *
+ * Attended runs keep prompts on (acceptEdits) so the human can answer.
+ * Night-mode runs bypass prompts (bypassPermissions) so they don't hang
+ * at 3am waiting for a maven/bash approval — but the safety boundary
+ * (sandbox + deny-guard hook) is set independently in the seeded
+ * settings.json and is unaffected by this selection.
+ *
+ * Two distinct concepts that must NOT be conflated:
+ *   - permissionMode: controls whether Claude Code shows prompt dialogs.
+ *   - sandbox + deny-guard: kernel-enforced + hook-enforced mutation boundary.
+ * Bypassing prompts (night) leaves the boundary intact.
+ */
+export function selectPermissionMode(
+  nightMode?: boolean,
+): "bypassPermissions" | "acceptEdits" {
+  return nightMode === true ? "bypassPermissions" : "acceptEdits";
+}
+
+// ---------------------------------------------------------------------------
 // makeSDKRunner
 // ---------------------------------------------------------------------------
 
@@ -63,6 +87,7 @@ export function makeSDKRunner(
   runDir: string,
   worktreePath: string,
   storeDir: string,
+  nightMode?: boolean,
 ): NodeExecutor {
   return async function sdkRunner(
     nodeId: string,
@@ -110,12 +135,15 @@ export function makeSDKRunner(
 
     // Build SDK options object — only set keys whose values are defined
     // (exactOptionalPropertyTypes: never assign key: undefined).
-    // Runtime nodes run under the seeded settings.json permission model
-    // (acceptEdits + sandbox). Do NOT bypass — the permission boundary must
-    // exist before any node mutates the real repo (Phase 2a D1 requirement).
+    // Two-posture rule (see selectPermissionMode above):
+    //   attended = acceptEdits: human is present, prompts are answered.
+    //   night    = bypassPermissions: unattended; prompts would hang forever.
+    // The safety boundary (sandbox.enabled + deny-guard hook) is enforced by
+    // the seeded settings.json written at run-start — it is independent of
+    // permissionMode and is NOT weakened by night-mode bypass.
     const options: Parameters<typeof query>[0]["options"] = {
       cwd: worktreePath,
-      permissionMode: "acceptEdits",
+      permissionMode: selectPermissionMode(nightMode),
       settingSources: ["project"],
       systemPrompt: { type: "preset", preset: "claude_code" },
     };

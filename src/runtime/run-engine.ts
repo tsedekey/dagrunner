@@ -405,8 +405,12 @@ export async function startRun(opts: {
   writeState(stateFile, state);
   process.stdout.write(`dagrun: starting run ${runId}\n`);
 
+  // When no custom factory is provided, use makeSDKRunner with the night flag
+  // so the correct permissionMode is selected per the two-posture rule.
+  const defaultFactory: ExecutorFactory = (c, rid, rdir, wt, sd) =>
+    makeSDKRunner(c, rid, rdir, wt, sd, opts.nightMode);
   const executor = wrapWithPrScan(
-    (opts.executorFactory ?? makeSDKRunner)(
+    (opts.executorFactory ?? defaultFactory)(
       config,
       runId,
       runDir,
