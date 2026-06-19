@@ -6,27 +6,25 @@
 > `testing-protocol` skill. This file is kept current under the same anti-drift discipline —
 > when state changes, update it.
 >
-> Last updated: 2026-06-19 (night-mode permission posture; dr-build agent consolidation; fresh-session handoff model adopted).
+> Last updated: 2026-06-19 (sibling ownership redesign + run-id collision guard shipped).
 
 ## Next session: start here
 
 > Read this block first. Everything else in this file is background.
 
-**Current task:** Draft and execute the **sibling ownership redesign**.
-Siblings (`ci-babysit`, `pr-triage`, `seed-data`) currently live unversioned in the Camunda
-private `.claude/` — improvements made on a live worktree die when the worktree is deleted.
-Target: dagrunner owns and versions them; they get seeded onto the worktree at run-start,
-same mechanism as `payload/`. No live-worktree edits; improvements go to the reflection store.
+**Both this-session tasks are complete** (committed as of `95ea625` / `b8c37cf`):
 
-**First action:**
+- **sibling-ownership** — `ci-babysit`, `pr-triage`, `seed-data` versioned in `payload/siblings/`;
+  seeded at run-start and re-applied at every node session-start via `session-start.sh`; `DAGRUNNER_ROOT` exported.
+- **run-id-collision-guard** — run-id is now `<slug>-<timestamp>-<6-hex>`; fail-loud existsSync backstop added.
 
-1. Draft the plan: use `docs/changes/_TEMPLATE.md`, ground in the real sibling files at
-   `$DEVHARNESS_SRC/.claude/commands/` (three files: `ci-babysit.md`, `pr-triage.md`,
-   `seed-data.md`), save to `docs/changes/ready/sibling-ownership.md`.
-2. Delegate: `Agent({ subagent_type: "dr-build", prompt: "docs/changes/ready/sibling-ownership.md" })`
+**Next task (no plan yet — needs drafting):**
 
-**Also in `docs/changes/ready/`:** `run-id-collision-guard.md` — independent, can run in
-parallel with the sibling plan once both are in flight.
+Pick one of the open items from the "Pending / next" section below. Good candidates:
+
+- **Pin the Claude Code CLI/SDK version** — the `-p` empty-result regression is still open.
+- **Wire siblings to `dagrun reflect`** — have `ci-babysit` / `pr-triage` append to the reflection store (separate plan, see STATUS "Pending").
+- **Build-queue credit cap** — per-build budget guard on `scripts/build-queue.sh`.
 
 **Working model (see memory):** always delegate implementation to the `dr-build` agent; this
 session is coordinator only. Start a fresh session after 1–2 tasks complete.
