@@ -1,6 +1,11 @@
 {
   "permissions": {
-    "allow": ["Edit(*.*)", "Edit(/src/**)"],
+    "allow": [
+      "Edit(*.*)",
+      "Edit(/src/**)",
+      "Bash(jar -tf *)",
+      "Bash(c8ctl get *)"
+    ],
     "defaultMode": "bypassPermissions",
     "disallowedTools": [
       "Bash(sudo:*)",
