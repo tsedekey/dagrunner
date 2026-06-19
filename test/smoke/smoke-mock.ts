@@ -18,7 +18,13 @@
 
 import assert from "node:assert";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startRun } from "../../src/runtime/run-engine.js";
@@ -618,9 +624,140 @@ console.log(
 );
 
 // ---------------------------------------------------------------------------
+// RUN E — stale gate from prior workflow version is auto-skipped on resume
+// ---------------------------------------------------------------------------
+// Simulates a run created before reflect/apply-reflection were removed.
+// State has all current workflow nodes done/skipped, plus reflect=awaiting-gate
+// and apply-reflection=pending left over from the old workflow. resumeRun must
+// auto-skip the stale gate without requiring user input and resolve the run done.
+
+const HOME_E = `/tmp/dagrun-smoke-mock-e-${Date.now()}`;
+mkdirSync(join(HOME_E, "runs"), { recursive: true });
+mkdirSync(join(HOME_E, "worktrees"), { recursive: true });
+mkdirSync(join(HOME_E, "store"), { recursive: true });
+
+const STALE_RUN_ID = "old-plan-1700000000000-aaaaaa";
+const staleRunDir = join(HOME_E, "runs", STALE_RUN_ID);
+mkdirSync(staleRunDir, { recursive: true });
+
+// Hand-craft state as if it came from the old workflow (reflect + apply-reflection existed).
+const staleState = {
+  runId: STALE_RUN_ID,
+  workflow: "feature",
+  createdAt: "2026-06-17T00:00:00.000Z",
+  updatedAt: "2026-06-17T01:00:00.000Z",
+  status: "paused",
+  worktreePath: TOY_REPO_PATH,
+  branch: "feat/stale-test-aaa",
+  sourcePlanPath: TOY_PLAN_PATH,
+  verifyElection: "y",
+  nodes: {
+    expand: {
+      status: "done",
+      artifacts: [],
+      iteration: 0,
+      cost: 0,
+      gateHistory: [],
+    },
+    implement: {
+      status: "done",
+      artifacts: [],
+      iteration: 0,
+      cost: 0,
+      gateHistory: [],
+    },
+    review: {
+      status: "done",
+      artifacts: [],
+      iteration: 0,
+      cost: 0,
+      gateHistory: [],
+    },
+    fix: {
+      status: "done",
+      artifacts: [],
+      iteration: 0,
+      cost: 0,
+      gateHistory: [],
+    },
+    verify: {
+      status: "done",
+      artifacts: [],
+      iteration: 0,
+      cost: 0,
+      gateHistory: [],
+    },
+    pr: {
+      status: "done",
+      artifacts: [],
+      iteration: 0,
+      cost: 0,
+      gateHistory: [],
+    },
+    // Stale nodes from the old workflow.
+    reflect: {
+      status: "awaiting-gate",
+      artifacts: [],
+      iteration: 0,
+      cost: 0,
+      gateHistory: [],
+    },
+    "apply-reflection": {
+      status: "pending",
+      artifacts: [],
+      iteration: 0,
+      cost: 0,
+      gateHistory: [],
+    },
+  },
+};
+writeFileSync(
+  join(staleRunDir, "state.json"),
+  JSON.stringify(staleState, null, 2),
+  "utf8",
+);
+
+await resumeRun({
+  runId: STALE_RUN_ID,
+  homeDir: HOME_E,
+  config,
+  executorFactory: mockFactory,
+});
+
+{
+  const state = readState(staleRunDir);
+  assert.strictEqual(
+    state.status,
+    "done",
+    `E: run must be done after stale gate auto-skip, got ${state.status}`,
+  );
+  assert.strictEqual(
+    state.nodes["reflect"]?.status,
+    "skipped",
+    `E: stale reflect gate must be skipped, got ${String(state.nodes["reflect"]?.status)}`,
+  );
+  assert.strictEqual(
+    state.nodes["apply-reflection"]?.status,
+    "skipped",
+    `E: stale apply-reflection must be skipped, got ${String(state.nodes["apply-reflection"]?.status)}`,
+  );
+  // All current workflow nodes must remain done.
+  for (const id of ["expand", "implement", "review", "fix", "verify", "pr"]) {
+    assert.strictEqual(
+      state.nodes[id]?.status,
+      "done",
+      `E: node ${id} must still be done, got ${String(state.nodes[id]?.status)}`,
+    );
+  }
+}
+console.log(
+  "step E passed: stale gate (reflect awaiting-gate) auto-skipped on resume -> run done",
+);
+
+// ---------------------------------------------------------------------------
 // Done
 // ---------------------------------------------------------------------------
 
 console.log(
-  "\nall smoke-mock steps passed (Run A: election=n, Run B: election=y, Run C: night clean, Run D: night flagged)",
+  "\nall smoke-mock steps passed (Run A: election=n, Run B: election=y, Run C: night clean, Run D: night flagged, Run E: stale gate auto-skip)",
 );

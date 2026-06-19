@@ -770,124 +770,63 @@ export async function resumeRun(opts: {
 
     // Find the gate config for maxIterations check.
     const gateNode = workflow.nodes.find((n) => n.id === gateNodeId);
-    const maxIterations = gateNode?.gate?.maxIterations ?? 10;
 
-    if (opts.rejectComment !== undefined) {
-      // Check maxIterations — at the limit, do not auto-revise (spec: terminal choice).
-      if (gateNodeState.iteration >= maxIterations) {
-        process.stdout.write(
-          `dagrun: maxIterations (${maxIterations}) reached for "${gateNodeId}".\n` +
-            `  Use --approve to accept as-is, or dagrun abort ${runId} to abort.\n`,
-        );
-        releaseLock(homeDir);
-        process.exit(0);
-      }
-
-      // Write feedback file (feedback-N.md where N = iteration count + 1).
-      const n = gateNodeState.iteration + 1;
-      writeFileSync(
-        join(artifactsDir, `feedback-${n}.md`),
-        opts.rejectComment,
-        "utf8",
-      );
-
-      // Reset to pending so DAG re-runs the node with the feedback.
-      state = {
-        ...state,
-        nodes: {
-          ...state.nodes,
-          [gateNodeId]: {
-            ...gateNodeState,
-            status: "pending",
-            iteration: n,
-            gateHistory: [
-              ...gateNodeState.gateHistory,
-              {
-                decision: "reject",
-                comment: opts.rejectComment,
-                timestamp: new Date().toISOString(),
-              },
-            ],
-          },
-        },
-        status: "running",
-        updatedAt: new Date().toISOString(),
-      };
-      writeState(stateFile, state);
+    // Stale gate: node existed in a prior workflow version but is not in the current one.
+    // Auto-skip it — the node is non-runnable; no user decision makes sense.
+    if (gateNode === undefined) {
       process.stdout.write(
-        `dagrun: rejected — node "${gateNodeId}" will revise (iteration ${n})\n`,
+        `dagrun: skipping stale gate "${gateNodeId}" (node not in current workflow)\n`,
       );
-    } else if (opts.approve === true) {
-      // Approve: mark done, continue.
       state = {
         ...state,
         nodes: {
           ...state.nodes,
           [gateNodeId]: {
             ...gateNodeState,
-            status: "done",
-            gateHistory: [
-              ...gateNodeState.gateHistory,
-              {
-                decision: "approve",
-                timestamp: new Date().toISOString(),
-              },
-            ],
+            status: "skipped",
+            endedAt: new Date().toISOString(),
           },
         },
         status: "running",
         updatedAt: new Date().toISOString(),
       };
       writeState(stateFile, state);
-      process.stdout.write(`dagrun: approved — continuing run\n`);
     } else {
-      // Interactive gate UX — preview the primary produces artifact.
-      const primaryProduces = gateNode?.produces?.[0] ?? "artifact";
-      const artifactPath = join(artifactsDir, primaryProduces);
-      if (existsSync(artifactPath)) {
-        const preview = readFileSync(artifactPath, "utf8")
-          .split("\n")
-          .slice(0, 40)
-          .join("\n");
-        process.stdout.write(
-          `\n--- ${gateNodeId} (iteration ${gateNodeState.iteration}/${maxIterations}) ---\n` +
-            `${preview}\n---\n\n`,
-        );
-      }
-      const skippable = gateNode?.gate?.skippable === true;
-      const quitHint = skippable ? "[q]uit/skip" : "[q]uit";
-      process.stdout.write(
-        `[a]pprove  [r]eject <comment>  [s]how full  ${quitHint}\n> `,
-      );
-      const line = await readOneLine();
-      if (line === "a" || line === "approve") {
-        await resumeRun({ ...opts, approve: true });
-        return;
-      } else if (line.startsWith("r")) {
-        const comment = line.slice(1).trim() || "rejected";
-        await resumeRun({ ...opts, rejectComment: comment });
-        return;
-      } else if (line.startsWith("s")) {
-        if (existsSync(artifactPath)) {
-          process.stdout.write(readFileSync(artifactPath, "utf8") + "\n");
+      const maxIterations = gateNode.gate?.maxIterations ?? 10;
+
+      if (opts.rejectComment !== undefined) {
+        // Check maxIterations — at the limit, do not auto-revise (spec: terminal choice).
+        if (gateNodeState.iteration >= maxIterations) {
+          process.stdout.write(
+            `dagrun: maxIterations (${maxIterations}) reached for "${gateNodeId}".\n` +
+              `  Use --approve to accept as-is, or dagrun abort ${runId} to abort.\n`,
+          );
+          releaseLock(homeDir);
+          process.exit(0);
         }
-        await resumeRun(opts);
-        return;
-      } else if (skippable) {
-        // Skippable gate (e.g. reflect): quit marks node skipped, run continues done.
+
+        // Write feedback file (feedback-N.md where N = iteration count + 1).
+        const n = gateNodeState.iteration + 1;
+        writeFileSync(
+          join(artifactsDir, `feedback-${n}.md`),
+          opts.rejectComment,
+          "utf8",
+        );
+
+        // Reset to pending so DAG re-runs the node with the feedback.
         state = {
           ...state,
           nodes: {
             ...state.nodes,
             [gateNodeId]: {
               ...gateNodeState,
-              status: "skipped",
-              endedAt: new Date().toISOString(),
+              status: "pending",
+              iteration: n,
               gateHistory: [
                 ...gateNodeState.gateHistory,
                 {
-                  decision: "reject" as const,
-                  comment: "skipped by user",
+                  decision: "reject",
+                  comment: opts.rejectComment,
                   timestamp: new Date().toISOString(),
                 },
               ],
@@ -898,15 +837,99 @@ export async function resumeRun(opts: {
         };
         writeState(stateFile, state);
         process.stdout.write(
-          `dagrun: ${gateNodeId} gate skipped — run will complete done (PR already shipped)\n`,
+          `dagrun: rejected — node "${gateNodeId}" will revise (iteration ${n})\n`,
         );
-        // Fall through: no gateEntry remaining, runDag resumes below.
+      } else if (opts.approve === true) {
+        // Approve: mark done, continue.
+        state = {
+          ...state,
+          nodes: {
+            ...state.nodes,
+            [gateNodeId]: {
+              ...gateNodeState,
+              status: "done",
+              gateHistory: [
+                ...gateNodeState.gateHistory,
+                {
+                  decision: "approve",
+                  timestamp: new Date().toISOString(),
+                },
+              ],
+            },
+          },
+          status: "running",
+          updatedAt: new Date().toISOString(),
+        };
+        writeState(stateFile, state);
+        process.stdout.write(`dagrun: approved — continuing run\n`);
       } else {
-        process.stdout.write("dagrun: quit\n");
-        releaseLock(homeDir);
-        process.exit(0);
+        // Interactive gate UX — preview the primary produces artifact.
+        const primaryProduces = gateNode?.produces?.[0] ?? "artifact";
+        const artifactPath = join(artifactsDir, primaryProduces);
+        if (existsSync(artifactPath)) {
+          const preview = readFileSync(artifactPath, "utf8")
+            .split("\n")
+            .slice(0, 40)
+            .join("\n");
+          process.stdout.write(
+            `\n--- ${gateNodeId} (iteration ${gateNodeState.iteration}/${maxIterations}) ---\n` +
+              `${preview}\n---\n\n`,
+          );
+        }
+        const skippable = gateNode?.gate?.skippable === true;
+        const quitHint = skippable ? "[q]uit/skip" : "[q]uit";
+        process.stdout.write(
+          `[a]pprove  [r]eject <comment>  [s]how full  ${quitHint}\n> `,
+        );
+        const line = await readOneLine();
+        if (line === "a" || line === "approve") {
+          await resumeRun({ ...opts, approve: true });
+          return;
+        } else if (line.startsWith("r")) {
+          const comment = line.slice(1).trim() || "rejected";
+          await resumeRun({ ...opts, rejectComment: comment });
+          return;
+        } else if (line.startsWith("s")) {
+          if (existsSync(artifactPath)) {
+            process.stdout.write(readFileSync(artifactPath, "utf8") + "\n");
+          }
+          await resumeRun(opts);
+          return;
+        } else if (skippable) {
+          // Skippable gate (e.g. reflect): quit marks node skipped, run continues done.
+          state = {
+            ...state,
+            nodes: {
+              ...state.nodes,
+              [gateNodeId]: {
+                ...gateNodeState,
+                status: "skipped",
+                endedAt: new Date().toISOString(),
+                gateHistory: [
+                  ...gateNodeState.gateHistory,
+                  {
+                    decision: "reject" as const,
+                    comment: "skipped by user",
+                    timestamp: new Date().toISOString(),
+                  },
+                ],
+              },
+            },
+            status: "running",
+            updatedAt: new Date().toISOString(),
+          };
+          writeState(stateFile, state);
+          process.stdout.write(
+            `dagrun: ${gateNodeId} gate skipped — run will complete done (PR already shipped)\n`,
+          );
+          // Fall through: no gateEntry remaining, runDag resumes below.
+        } else {
+          process.stdout.write("dagrun: quit\n");
+          releaseLock(homeDir);
+          process.exit(0);
+        }
       }
-    }
+    } // closes else (gateNode !== undefined)
   }
 
   // verify-election: conducted once, after fix (Gate 2) is approved.
