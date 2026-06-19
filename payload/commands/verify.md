@@ -70,7 +70,7 @@ Rules:
 - Each `how` must be a concrete, actionable step the human can follow without guessing.
 - Keep it minimal: the minimum seeding that proves the feature works, not a full test suite.
 - `expected_observations` must only use `where: "rest-api"` or `where: "elasticsearch"` — verification uses Postman (REST) and ElasticVue (Elasticsearch), not the Operate/Tasklist UI. Convert any UI checks to their equivalent REST or ES query.
-- If a BPMN resource needs to be created for seeding, write it to `$DAGRUN_ARTIFACTS/<process-id>.bpmn` and reference that path in `bpmn_resource` (never write to `/tmp/`).
+- For `bpmn_resource`: only reference a file if a suitable `.bpmn` already exists in the worktree (search `$DAGRUN_WORKTREE` for a file whose `process id` matches). If none exists, **omit `bpmn_resource` entirely** — do not create BPMN files. seed-data generates what it needs at seeding time.
 - Write valid JSON to `$DAGRUN_ARTIFACTS/seeding-spec.json`.
 
 ---
