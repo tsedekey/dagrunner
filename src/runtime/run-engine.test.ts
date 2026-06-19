@@ -26,29 +26,52 @@ import {
 // makeRunId
 // ---------------------------------------------------------------------------
 
-test("makeRunId: converts plan basename to slug and appends timestamp", () => {
-  const result = makeRunId("/a/b/my-plan.md", 123);
-  assert.equal(result, "my-plan-123");
+test("makeRunId: converts plan basename to slug and appends timestamp and suffix", () => {
+  const result = makeRunId("/a/b/my-plan.md", 123, "abc");
+  assert.equal(result, "my-plan-123-abc");
 });
 
 test("makeRunId: special chars in filename are replaced with hyphens", () => {
-  const result = makeRunId("/path/to/My Plan (v2).md", 456);
-  // uppercase → lowercase, spaces and parens → hyphens
-  assert.ok(result.endsWith("-456"), `expected to end with -456: ${result}`);
+  const result = makeRunId("/path/to/My Plan (v2).md", 456, "abc");
+  // uppercase → lowercase, spaces and parens → hyphens, then -<timestamp>-<suffix>
   assert.ok(
-    /^[a-z0-9-]+-456$/.test(result),
+    result.endsWith("-456-abc"),
+    `expected to end with -456-abc: ${result}`,
+  );
+  assert.ok(
+    /^[a-z0-9-]+-456-abc$/.test(result),
     `slug must be lowercase alnum+hyphens: ${result}`,
   );
 });
 
 test("makeRunId: filename without .md extension — .md stripped only", () => {
-  const result = makeRunId("/path/to/plan.md", 789);
-  assert.equal(result, "plan-789");
+  const result = makeRunId("/path/to/plan.md", 789, "def");
+  assert.equal(result, "plan-789-def");
 });
 
-test("makeRunId: timestamp zero produces slug-0", () => {
-  const result = makeRunId("/x/simple.md", 0);
-  assert.equal(result, "simple-0");
+test("makeRunId: timestamp zero produces slug-0-<suffix>", () => {
+  const result = makeRunId("/x/simple.md", 0, "xyz");
+  assert.equal(result, "simple-0-xyz");
+});
+
+test("makeRunId: default suffix is git-branch-safe (lowercase hex only)", () => {
+  // Call without a suffix to exercise the default randomBytes path.
+  const result = makeRunId("/x/plan.md", 100);
+  // Format: <slug>-<timestamp>-<hex suffix>
+  assert.ok(
+    /^[a-z][a-z0-9-]*-100-[0-9a-f]+$/.test(result),
+    `runId must match <slug>-<timestamp>-<hex>: ${result}`,
+  );
+});
+
+test("makeRunId: two calls with same plan+timestamp (pinned clock) produce distinct ids", () => {
+  const id1 = makeRunId("/x/plan.md", 1750000000000);
+  const id2 = makeRunId("/x/plan.md", 1750000000000);
+  assert.notEqual(
+    id1,
+    id2,
+    `same-ms calls must produce distinct ids: both were ${id1}`,
+  );
 });
 
 // ---------------------------------------------------------------------------

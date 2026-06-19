@@ -20,6 +20,7 @@ import {
   readdirSync,
   existsSync,
 } from "node:fs";
+import { randomBytes } from "node:crypto";
 
 // Mutable ref so the SIGINT handler in cli.ts can find the active run dir and
 // release the lock cleanly. Mutated (not reassigned) so the export stays stable.
@@ -87,14 +88,28 @@ export function hasConcerns(content: string): boolean {
 }
 
 /**
- * Build a deterministic run ID from a plan path and a timestamp.
+ * Build a unique run ID from a plan path, a timestamp, and a short random
+ * suffix. The suffix (default: 3 random bytes as lowercase hex) closes the
+ * same-millisecond collision window while keeping the id human-readable.
+ *
+ * Format: <slug>-<timestamp>-<hex suffix>
+ *   e.g. my-plan-1750000000000-a3f9b2
+ *
+ * The suffix is injectable for deterministic unit testing (pass a fixed
+ * string); production code uses the default randomBytes path.
+ *
+ * All three segments are lowercase alphanumeric + hyphens — git-branch-safe.
  * Exported for unit testing.
  */
-export function makeRunId(planPath: string, now: number): string {
+export function makeRunId(
+  planPath: string,
+  now: number,
+  suffix = randomBytes(3).toString("hex"),
+): string {
   const slug = basename(planPath, ".md")
     .replace(/[^a-z0-9-]/gi, "-")
     .toLowerCase();
-  return `${slug}-${now}`;
+  return `${slug}-${now}-${suffix}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -314,6 +329,14 @@ export async function startRun(opts: {
   const runDir = join(homeDir, "runs", runId);
   const stateFile = join(runDir, "state.json");
   const worktreePath = join(homeDir, "worktrees", runId);
+
+  // Defensive backstop: the random suffix makes collision essentially impossible,
+  // but we assert loudly rather than silently clobber an existing run.
+  if (existsSync(runDir)) {
+    throw new Error(
+      `dagrun: run directory "${runDir}" already exists — this should never happen with the unique run-id scheme; aborting to avoid clobbering an existing run`,
+    );
+  }
 
   // Track for SIGINT diagnostic handler in cli.ts.
   activeRun.runDir = runDir;

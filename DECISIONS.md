@@ -314,6 +314,16 @@ Format: `<block> · <decision> · <why>`
 
 - night-mode · `gate-pause-with-concerns` added to NodeScenario in mock-executor.ts · reuse of the mock executor injection seam; alternative (custom per-test factory writing to files) would duplicate artifact-write logic; adding the scenario is cheaper and consistent with the existing mock taxonomy
 
+## run-id-collision-guard
+
+- run-id-collision-guard · plan path discrepancy: plan references `src/run-engine.ts ~L116`; actual location after restructure is `src/runtime/run-engine.ts ~L93`; proceeded with actual file per boot rule 5 (code is truth), noted here · pre-restructure plan authored before `restructure-src-cohesion-folders`; no further action needed
+
+- run-id-collision-guard · option (c) chosen: random suffix for uniqueness + existsSync assert as loud backstop · (a) suffix-only closes the window but gives no structural defence; (b) assert-only honours fail-loud but blocks same-ms retries that are legitimate; (c) suffix makes collision essentially impossible in practice, assert fires only under genuinely pathological conditions (e.g. RNG collision or manual run-dir pre-creation); both properties are desirable so (c) is the clear choice; chosen per plan recommendation
+
+- run-id-collision-guard · suffix is injectable in `makeRunId(planPath, now, suffix?)` with `randomBytes(3).toString("hex")` as the default · injectability makes the function unit-testable (deterministic with a fixed suffix) while production code gets random uniqueness; the default parameter evaluates per-call (each invocation gets a fresh suffix); `node:crypto` is explicitly allowed in CLAUDE.md's builtin list; hex is `[0-9a-f]` — git-branch-safe
+
+- run-id-collision-guard · existsSync assert placed before lock acquisition in `startRun` · the assert is Tier C (orchestration), not unit-tested; belt-and-suspenders only — the random suffix makes it essentially dead code; consistent with "fail loud, never silent" invariant
+
 ## night-mode-permission-posture
 
 - night-mode-permission-posture · `selectPermissionMode(nightMode?)` exported as a pure function from `sdk-runner.ts` rather than inlining the ternary · pure export enables a teeth-checked unit test (red before the export, green after); the function documents the invariant explicitly (two-posture rule) alongside the code that enforces it; inlining would make the property invisible to tests
