@@ -1,5 +1,9 @@
 # CLAUDE.md — dagrunner build (always-on context)
 
+## Where setttings live
+
+Your settiing.json and main directory is `/Users/eddie.tsedeke/.claude-personal/`. Don't make any configuration changes else where.
+
 These rules are true on **every turn** of this build. Keep this file short; everything that is only
 sometimes relevant lives in a skill, not here.
 
