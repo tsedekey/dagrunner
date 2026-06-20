@@ -87,37 +87,28 @@ zsh "$SCRIPT_DIR/phase-2-deploy-and-seed.sh"
 
 ## Phase 2b — Generate Postman collection
 
-Read the seeded.json, the original seeding-spec.json, and the OpenAPI spec from the worktree
-to produce an accurate, import-ready Postman collection. No scripts for this phase — the agent
-does this directly.
+Read `seeded.json` and `seeding-spec.json` to produce an accurate, import-ready Postman
+collection. No scripts for this phase — the agent does this directly.
+
+The `seeding-spec.json` was produced by the verify node, which already looked up every
+`rest-api` observation in the OpenAPI spec. Trust the `how` field exactly — do not re-read
+the OpenAPI spec or re-derive endpoint details independently.
 
 ```bash
 STATE_FILE="${TMPDIR%/}/seed-data-state.json"
 SEED_SCRATCH=$(jq -r .seed_scratch "$STATE_FILE")
 SPEC_PATH=$(jq -r .spec_path "$STATE_FILE")
-WORKTREE="$(git rev-parse --show-toplevel)"
 
 cat "$SEED_SCRATCH/seeded.json"
 cat "$SPEC_PATH"
-
-# Locate the Camunda REST API OpenAPI spec
-find "$WORKTREE" \( -name "openapi.yaml" -o -name "openapi.json" \) \
-  ! -path "*/target/*" ! -path "*/node_modules/*" ! -path "*/.git/*"
 ```
 
-Read the relevant OpenAPI spec file(s) found above. For each `rest-api` observation in
-seeding-spec.json:
+For each `rest-api` observation in seeding-spec.json:
 
-1. **Identify the endpoint** — extract the HTTP method and path from the `how` field
-   (e.g. `PATCH /v2/jobs/{jobKey}/update`). The method comes from `seeding-spec.json`
-   which was grounded in the OpenAPI spec by the verify node — trust it exactly.
-2. **Look it up in the OpenAPI spec** — find the exact path + method entry.
-3. **Extract from the spec:**
-   - Path parameters (names, types)
-   - Query parameters (names, types, required/optional)
-   - Request body schema (required fields and their types/formats)
-4. **Build the Postman request** using the spec — not guesswork. Every field name,
-   parameter name, and body shape must match the spec exactly.
+1. **Read the `how` field** — it contains the spec-grounded HTTP method, path, and required
+   request body fields. Use them as-is; do not guess or supplement.
+2. **Build the Postman request** directly from the `how` field. Every method, field name, and
+   body shape comes from that field — not from independent lookup.
 
 Substitute actual keys from seeded.json (instance keys). Job keys are not known at
 seeding time since jobs are created by the service task once a worker activates — use a
@@ -153,16 +144,16 @@ returned key here").
     {
       "name": "<observation.what>",
       "request": {
-        "method": "<method from OpenAPI spec>",
+        "method": "<HTTP method from observation.how>",
         "header": [{ "key": "Content-Type", "value": "application/json" }],
         "url": {
-          "raw": "{{baseUrl}}/v2/<path from spec with {{variables}} for path params>",
+          "raw": "{{baseUrl}}/v2/<path from observation.how with {{variables}} for path params>",
           "host": ["{{baseUrl}}"],
           "path": ["v2", "<path segments>"]
         },
         "body": {
           "mode": "raw",
-          "raw": "<JSON body matching the spec requestBody schema exactly>"
+          "raw": "<JSON body as described in observation.how>"
         },
         "description": "<observation.how — full text>"
       }
@@ -174,7 +165,7 @@ returned key here").
 **PHASE_2B_CHECKPOINT:**
 
 - [ ] `$SEED_SCRATCH/postman-collection.json` written and valid JSON
-- [ ] Every request body matches the OpenAPI spec schema — no invented field names
+- [ ] Every request method and body matches what seeding-spec.json `how` fields specify
 
 ---
 
