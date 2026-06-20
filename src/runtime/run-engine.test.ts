@@ -24,6 +24,7 @@ import {
   agentDecidable,
   hasConcerns,
   seedWorktreeSiblings,
+  parseGateDecision,
 } from "./run-engine.js";
 
 // ---------------------------------------------------------------------------
@@ -408,4 +409,77 @@ test("seedWorktreeSiblings: throws if payload/siblings/commands/ is missing", ()
     /siblings.*not found|payload\/siblings/i,
     "expected a loud throw when payload/siblings/commands/ is missing",
   );
+});
+
+// ---------------------------------------------------------------------------
+// parseGateDecision
+// ---------------------------------------------------------------------------
+
+test("parseGateDecision: approve with no body → {decision:'approve', body:''}", () => {
+  const result = parseGateDecision("decision: approve\n");
+  assert.deepEqual(result, { decision: "approve", body: "" });
+});
+
+test("parseGateDecision: approve with trailing whitespace/blank lines → body empty", () => {
+  const result = parseGateDecision("decision: approve\n\n  \n");
+  assert.deepEqual(result, { decision: "approve", body: "" });
+});
+
+test("parseGateDecision: reject with multi-paragraph body → body extracted (no decision line)", () => {
+  const content =
+    "decision: reject\n\nThe function does not handle the edge case.\n\nPlease add null checks.\n";
+  const result = parseGateDecision(content);
+  assert.deepEqual(result, {
+    decision: "reject",
+    body: "The function does not handle the edge case.\n\nPlease add null checks.",
+  });
+});
+
+test("parseGateDecision: reject with no body → {decision:'reject', body:''}", () => {
+  // An empty-body reject is still a valid reject — route as reject with empty feedback.
+  const result = parseGateDecision("decision: reject\n");
+  assert.deepEqual(result, { decision: "reject", body: "" });
+});
+
+test("parseGateDecision: reject with blank separator line only → body empty", () => {
+  const result = parseGateDecision("decision: reject\n\n");
+  assert.deepEqual(result, { decision: "reject", body: "" });
+});
+
+test("parseGateDecision: case-insensitive decision value is accepted", () => {
+  const approve = parseGateDecision("decision: Approve\n");
+  assert.deepEqual(approve, { decision: "approve", body: "" });
+
+  const reject = parseGateDecision("decision: Reject\n");
+  assert.deepEqual(reject, { decision: "reject", body: "" });
+});
+
+test("parseGateDecision: extra whitespace around value is trimmed", () => {
+  const result = parseGateDecision("decision:   approve   \n");
+  assert.deepEqual(result, { decision: "approve", body: "" });
+});
+
+test("parseGateDecision: empty string → null", () => {
+  assert.equal(parseGateDecision(""), null);
+});
+
+test("parseGateDecision: no decision: line → null", () => {
+  assert.equal(parseGateDecision("approved by user\n"), null);
+});
+
+test("parseGateDecision: unknown decision value → null", () => {
+  assert.equal(parseGateDecision("decision: maybe\n"), null);
+});
+
+test("parseGateDecision: malformed (decision: on second line, not first) → null", () => {
+  // The decision: line must be the first non-empty line.
+  assert.equal(parseGateDecision("some preamble\ndecision: approve\n"), null);
+});
+
+test("parseGateDecision: body of approve is always empty regardless of trailing content", () => {
+  // approve is a terminal decision — any body text is ignored (not an error, just dropped).
+  const result = parseGateDecision(
+    "decision: approve\n\nThis was a well-written artifact.\n",
+  );
+  assert.deepEqual(result, { decision: "approve", body: "" });
 });

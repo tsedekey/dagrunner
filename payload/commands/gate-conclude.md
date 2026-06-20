@@ -1,0 +1,55 @@
+# /gate-conclude — record a gate decision and return to dagrun
+
+You are closing a gate review dialogue. Your job is to summarise the conversation and write the
+consensus decision to `$DAGRUN_GATE_DECISION_FILE` so dagrunner can continue the pipeline.
+
+## Steps
+
+1. Summarise the conversation so far — what was discussed, what concerns were raised (if any),
+   and what conclusion was reached.
+2. Ask the human to confirm the decision if it is not unambiguous.
+3. Write the gate-decision file in EXACTLY this format:
+
+### Approve format
+
+```
+decision: approve
+```
+
+### Reject format
+
+```
+decision: reject
+
+<consensus feedback — specific, actionable, grounded in the artifact>
+```
+
+The feedback body (for reject) must be:
+
+- Specific: reference the exact sections, claims, or patterns that need to change.
+- Actionable: tell the author-agent what to do differently, not just what was wrong.
+- Grounded: anchored to what is actually in the artifact, not general impressions.
+
+## Writing the file
+
+```bash
+# Approve example:
+printf 'decision: approve\n' > "$DAGRUN_GATE_DECISION_FILE"
+
+# Reject example (use a heredoc for multi-line body):
+cat > "$DAGRUN_GATE_DECISION_FILE" << 'EOF'
+decision: reject
+
+The error-handling section (lines 45-60) uses a bare catch that swallows all exceptions.
+Add specific catches for network errors vs. validation errors and log each with the error
+type. The retry logic at line 72 has no backoff — add exponential backoff with a cap.
+EOF
+```
+
+4. After writing, confirm to the human: "Gate decision recorded. Type `/exit` to return to dagrun."
+5. Do NOT call `/exit` yourself — the human exits when ready.
+
+## Constraint
+
+Write ONLY `decision: approve` or `decision: reject` on the first line. Any other value causes
+dagrunner to treat the decision as absent and require another review session.

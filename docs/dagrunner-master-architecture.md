@@ -1,7 +1,7 @@
 # dagrunner — Master Architecture (Source of Truth)
 
 Status: Canonical, reconciled with the built code through Phase 3 (all three siblings built). Each sibling build also gets its own implementation plan. Cross-references cleaned up after the /verify-demo split into /seed-data.
-Last updated: 2026-06-18 (hook-driven reflection capture: SessionEnd hook reads reflections.md → store log; reflect-append command renamed to reflect; notes.md renamed to reflections.md; de-flake: reflection mechanism tested deterministically via hook unit test + seeded smoke:live — no longer gated on spontaneous model output)
+Last updated: 2026-06-21 (gate-dialogue-ux: replace one-line terminal gate prompt with interactive claude session spawn; /gate-review + /gate-conclude slash commands; parseGateDecision pure function; SDK session IDs not resumable via CLI — fresh session approach documented)
 Owner: Eddie Tsedeke
 
 ---
@@ -76,7 +76,7 @@ Phase 3 is three LOCAL siblings (/seed-data + ci-babysit + pr-triage) — one su
 
 Reviewer selection (from diff-triage): correctness + test-adequacy always; api-stability when touches_public_api; distributed-systems when touches_runtime; migration-safety when touches_schema_or_proto; performance when triage judges it.
 
-**Gates:** all checkpoint-and-exit, single-awaiting-gate invariant, conversation-led reject (resume same session + feedback artifact). Gates live ONLY on static nodes.
+**Gates:** all checkpoint-and-exit, single-awaiting-gate invariant. Human review via a fresh interactive `claude` session (SDK session IDs are not resumable from the CLI — two stores don't share state); `/gate-review` + `/gate-conclude` write a `gate-decision.md` handshake file. Author-agent revision still resumes the same SDK session (via `options.resume` + `feedback-N.md`) so it revises with memory. Gates live ONLY on static nodes.
 
 **Night-mode (`dagrun start feature --night`):** unattended overnight execution. One rule — agent-decidable gates (Gate 1 = expand, Gate 2 = fix) are auto-approved when no "Concerns / plan challenges" heading is present in the gate artifact; the verify-election always pauses (human-only). A flagged concern or an unreadable/missing artifact also pauses (fail toward the human). Every auto-decision is logged to `gateHistory` with `mode: "night"` and `basis: "no concerns flagged"` for morning audit. `agentDecidable(nodeId)` is the exported predicate; `hasConcerns(content)` is the exported concern check (both pure, unit-tested).
 

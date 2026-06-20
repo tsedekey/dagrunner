@@ -10,7 +10,7 @@
  *   - A running run holds the lock for the full DAG execution.
  */
 
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import {
   cpSync,
   mkdirSync,
@@ -19,6 +19,7 @@ import {
   readFileSync,
   readdirSync,
   existsSync,
+  unlinkSync,
 } from "node:fs";
 import { randomBytes } from "node:crypto";
 
@@ -64,6 +65,55 @@ export function formatVerifyRecommendation(findings: unknown): string {
     return `Observability advisory: manual test recommended — surface: ${surface}. ${rationale}`;
   }
   return `Observability advisory: manual test not recommended — ${rationale || "change has no observable UI or API surface"}`;
+}
+
+/**
+ * Parse the content of a `gate-decision.md` file written by the /gate-conclude
+ * slash command inside an interactive Claude Code dialogue session.
+ *
+ * Expected format:
+ *   decision: approve
+ * or:
+ *   decision: reject
+ *
+ *   <multi-paragraph feedback body>
+ *
+ * Returns null when the content is missing, the decision: line is absent,
+ * or the decision value is not "approve" or "reject".
+ * Dagrunner treats null the same as an absent file (no decision recorded).
+ *
+ * Exported for unit testing. Pure function — no I/O.
+ */
+export function parseGateDecision(
+  content: string,
+): { decision: "approve" | "reject"; body: string } | null {
+  if (!content || content.trim() === "") return null;
+
+  const lines = content.split("\n");
+  // First non-empty line must be the decision: line.
+  const firstNonEmpty = lines.find((l) => l.trim() !== "");
+  if (firstNonEmpty === undefined) return null;
+
+  const match = /^decision:\s*(.+?)\s*$/i.exec(firstNonEmpty);
+  if (match === null || match[1] === undefined) return null;
+
+  const value = match[1].toLowerCase();
+  if (value !== "approve" && value !== "reject") return null;
+
+  // Body = everything after the decision: line, with the leading blank line stripped.
+  // For approve, body is always empty (no feedback needed).
+  let body = "";
+  if (value === "reject") {
+    // Skip the decision: line and any immediately following blank line.
+    const restLines = lines.slice(lines.indexOf(firstNonEmpty) + 1);
+    // Drop leading blank lines.
+    let start = 0;
+    while (start < restLines.length && (restLines[start] ?? "").trim() === "")
+      start++;
+    body = restLines.slice(start).join("\n").trimEnd();
+  }
+
+  return { decision: value, body };
 }
 
 /** Node IDs that night-mode may auto-approve (Gate 1 + Gate 2). */
@@ -863,70 +913,107 @@ export async function resumeRun(opts: {
         writeState(stateFile, state);
         process.stdout.write(`dagrun: approved — continuing run\n`);
       } else {
-        // Interactive gate UX — preview the primary produces artifact.
+        // Interactive gate UX — spawn a fresh Claude Code session for review dialogue.
+        //
+        // The human and a Claude agent review the artifact together over as many turns
+        // as needed. /gate-review opens the review; /gate-conclude writes the decision.
+        // dagrunner reads gate-decision.md after the claude process exits and routes
+        // accordingly (approve / reject / absent = still open).
+        //
+        // Note: `claude --resume <sdkSessionId>` does NOT work here — the Agent SDK
+        // and the interactive Claude Code CLI do not share a session store.
+        // See DECISIONS.md § gate-dialogue-ux.
+
         const primaryProduces = gateNode?.produces?.[0] ?? "artifact";
         const artifactPath = join(artifactsDir, primaryProduces);
-        if (existsSync(artifactPath)) {
-          const preview = readFileSync(artifactPath, "utf8")
-            .split("\n")
-            .slice(0, 40)
-            .join("\n");
-          process.stdout.write(
-            `\n--- ${gateNodeId} (iteration ${gateNodeState.iteration}/${maxIterations}) ---\n` +
-              `${preview}\n---\n\n`,
-          );
+
+        // Paths for the two handshake files.
+        const contextFilePath = join(artifactsDir, "gate-context.md");
+        const decisionFilePath = join(artifactsDir, "gate-decision.md");
+
+        // Guard: delete any stale decision from a prior iteration.
+        if (existsSync(decisionFilePath)) {
+          unlinkSync(decisionFilePath);
         }
-        const skippable = gateNode?.gate?.skippable === true;
-        const quitHint = skippable ? "[q]uit/skip" : "[q]uit";
+
+        // Write gate-context.md so /gate-review can orient the dialogue.
+        const artifactContent = existsSync(artifactPath)
+          ? readFileSync(artifactPath, "utf8")
+          : "(artifact not found)";
+        const contextContent = [
+          `# Gate context — ${gateNodeId}`,
+          ``,
+          `**Node:** ${gateNodeId}`,
+          `**Run ID:** ${runId}`,
+          `**Iteration:** ${gateNodeState.iteration + 1} / ${maxIterations}`,
+          `**Artifact path:** ${artifactPath}`,
+          `**Gate-decision file:** ${decisionFilePath}`,
+          ``,
+          `## Artifact`,
+          ``,
+          artifactContent,
+        ].join("\n");
+        writeFileSync(contextFilePath, contextContent, "utf8");
+
+        // Print guidance before spawning.
         process.stdout.write(
-          `[a]pprove  [r]eject <comment>  [s]how full  ${quitHint}\n> `,
+          `\ndagrun: gate — node "${gateNodeId}" (iteration ${gateNodeState.iteration + 1}/${maxIterations})\n` +
+            `dagrun: opening Claude Code for review dialogue...\n` +
+            `  → In the session: run /gate-review to start the review\n` +
+            `  → When done:       run /gate-conclude to record your decision\n` +
+            `  → To exit:         type /exit (not Ctrl-C)\n\n`,
         );
-        const line = await readOneLine();
-        if (line === "a" || line === "approve") {
-          await resumeRun({ ...opts, approve: true });
-          return;
-        } else if (line.startsWith("r")) {
-          const comment = line.slice(1).trim() || "rejected";
-          await resumeRun({ ...opts, rejectComment: comment });
-          return;
-        } else if (line.startsWith("s")) {
-          if (existsSync(artifactPath)) {
-            process.stdout.write(readFileSync(artifactPath, "utf8") + "\n");
-          }
-          await resumeRun(opts);
-          return;
-        } else if (skippable) {
-          // Skippable gate (e.g. reflect): quit marks node skipped, run continues done.
-          state = {
-            ...state,
-            nodes: {
-              ...state.nodes,
-              [gateNodeId]: {
-                ...gateNodeState,
-                status: "skipped",
-                endedAt: new Date().toISOString(),
-                gateHistory: [
-                  ...gateNodeState.gateHistory,
-                  {
-                    decision: "reject" as const,
-                    comment: "skipped by user",
-                    timestamp: new Date().toISOString(),
-                  },
-                ],
-              },
-            },
-            status: "running",
-            updatedAt: new Date().toISOString(),
-          };
-          writeState(stateFile, state);
-          process.stdout.write(
-            `dagrun: ${gateNodeId} gate skipped — run will complete done (PR already shipped)\n`,
+
+        // Spawn an interactive claude session. spawnSync blocks until the user exits.
+        const spawnResult = spawnSync("claude", [], {
+          stdio: "inherit",
+          cwd: state.worktreePath,
+          env: {
+            ...process.env,
+            DAGRUN_GATE_NODE_ID: gateNodeId,
+            DAGRUN_GATE_CONTEXT_FILE: contextFilePath,
+            DAGRUN_GATE_DECISION_FILE: decisionFilePath,
+          },
+        });
+
+        // If claude couldn't launch (e.g. not on PATH), fail loud — never look like success.
+        if (spawnResult.error !== undefined) {
+          process.stderr.write(
+            `dagrun: failed to launch 'claude' — ${spawnResult.error.message}\n` +
+              `  Ensure the claude CLI is on PATH and retry: dagrun resume ${runId}\n`,
           );
-          // Fall through: no gateEntry remaining, runDag resumes below.
-        } else {
-          process.stdout.write("dagrun: quit\n");
+          releaseLock(homeDir);
+          process.exit(1);
+        }
+
+        // Read and parse the decision written by /gate-conclude.
+        if (!existsSync(decisionFilePath)) {
+          process.stdout.write(
+            `dagrun: no gate decision recorded — run \`dagrun resume ${runId}\` to review again\n`,
+          );
           releaseLock(homeDir);
           process.exit(0);
+        }
+
+        const decisionContent = readFileSync(decisionFilePath, "utf8");
+        const parsed = parseGateDecision(decisionContent);
+
+        if (parsed === null) {
+          process.stdout.write(
+            `dagrun: gate-decision.md could not be parsed — run \`dagrun resume ${runId}\` to review again\n`,
+          );
+          releaseLock(homeDir);
+          process.exit(0);
+        }
+
+        if (parsed.decision === "approve") {
+          await resumeRun({ ...opts, approve: true });
+          return;
+        } else {
+          // reject: pass the consensus feedback body as the rejectComment.
+          const comment = parsed.body !== "" ? parsed.body : "rejected";
+          await resumeRun({ ...opts, rejectComment: comment });
+          return;
         }
       }
     } // closes else (gateNode !== undefined)

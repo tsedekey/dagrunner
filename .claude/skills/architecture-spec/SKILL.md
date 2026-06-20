@@ -90,8 +90,12 @@ structured output, format/friction/sync hooks, within-node revise (session resum
   turn → node revises WITH memory of why it wrote the artifact. Persist per-node `sessionId` in state.json.
 - **Two verbs only:** approve / reject(+comment). The NODE decides whether a comment is a question or a
   revision request; both re-pause. No separate "question" verb.
-- **resume UX:** prints awaiting node, iteration n/max, artifact path, ~40-line preview, then inline
-  `[a]pprove · [r]eject (opens $EDITOR) · [s]how full · [q]uit`. Non-interactive: `--approve`/`--reject`.
+- **resume UX:** prints node/iteration/max, then spawns a fresh interactive `claude` session in the
+  worktree (SDK session IDs are not resumable via the CLI — tested empirically). The human runs
+  `/gate-review` to review the full artifact, discusses concerns over as many turns as needed, then
+  runs `/gate-conclude` to write the consensus decision (approve/reject + grounded feedback body) to
+  `gate-decision.md`. dagrunner reads that file after the session exits and routes accordingly.
+  Non-interactive: `--approve`/`--reject` bypass the dialogue entirely.
 - **Bounded iterations = bounded auto-revisions, never auto-cancel.** At maxIterations (default ~10),
   pause with terminal choice (approve-as-is / abort / `--force` one more). Bound spend, not authority.
 - Scheduled/unattended runs NEVER auto-approve a gate — checkpoint, exit, notify.

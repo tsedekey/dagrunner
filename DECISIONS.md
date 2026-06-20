@@ -351,3 +351,17 @@ Format: `<block> · <decision> · <why>`
 - night-mode-permission-posture · `nightMode` threaded into `makeSDKRunner` as an optional 6th parameter; `ExecutorFactory` type left at 5 parameters (unchanged) · night-aware default factory created as a local closure inside `startRun` so the type boundary stays clean and tests that supply a custom `executorFactory` are unaffected; the closure captures `opts.nightMode` at construction time, which is correct because nightMode is constant for the life of a run
 
 - night-mode-permission-posture · `sandbox.enabled` + deny-guard hook wired in `buildSeededSettings` independently of `permissionMode` (no nightMode parameter added to settings-seed) · the boundary must never be conditional on the prompt-bypass flag; testing via `sdk-runner.test.ts` teeth-check asserts `sandbox.enabled=true` and `stop-verifier` hook presence from the seeded settings, proving structural independence
+
+## gate-dialogue-ux
+
+- gate-dialogue-ux · `claude --resume <sdkSessionId>` returns "No conversation found" when called from the interactive CLI — the Agent SDK and the interactive Claude Code CLI do NOT share a session store · empirically confirmed; fresh-session spawn is the only viable approach for human review dialogue; the author-agent's revision mechanism (sdk-runner session-resume via options.resume + feedback-N.md) is unaffected — it uses the SDK directly and that path works correctly; ONLY the human review dialogue is affected
+
+- gate-dialogue-ux · interactive gate UX replaced with `spawnSync('claude')` + two-file handshake (gate-context.md written by dagrunner; gate-decision.md written by /gate-conclude inside the session) · the one-line terminal prompt (`[r]eject <comment>`) was too clunky for nuanced feedback; a full dialogue session lets human and agent review the artifact together, discuss concerns over multiple turns, and produce a grounded consensus summary; `parseGateDecision` is the pure seam that parses the written decision
+
+- gate-dialogue-ux · stale gate-decision.md is deleted before spawning · multi-iteration gates reuse the same artifact dir; a prior rejection's decision file must not contaminate the current review session
+
+- gate-dialogue-ux · spawnSync ENOENT (claude not on PATH) is a hard fail, not a silent "no decision" · consistent with fail-loud invariant; the absent-decision path is "user exited without deciding", not "launch failed"; the two cases must be distinguished
+
+- gate-dialogue-ux · smoke:live does NOT cover /gate-review or /gate-conclude · they are interactive gate commands, not pipeline nodes; the 35-min live pipeline never invokes them; manual smoke (acceptance criterion 3 in the plan) is the verification path; this is the accepted tradeoff — the same as model-judgment behaviour that cannot be unit-tested first
+
+- gate-dialogue-ux · skippable gate sub-branch preserved in dead code · no live workflow node sets gate.skippable=true (reflect-rearchitecture removed the only user); the branch is unreachable but retained to avoid surprising future readers if skippable is re-introduced; it is dead code, not a bug
