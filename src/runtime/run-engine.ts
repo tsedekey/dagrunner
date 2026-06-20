@@ -1350,3 +1350,200 @@ export async function rerunNode(opts: {
     process.stdout.write(`  To continue: dagrun resume ${runId}\n`);
   }
 }
+
+// ---------------------------------------------------------------------------
+// scaffoldRun — create an isolated run for a single node with deps pre-done
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a scaffold run for a single DAG node in isolation.
+ *
+ * This lets a developer test one node without running the full pipeline:
+ *   1. Creates a fresh run dir + git worktree seeded from a feature branch
+ *   2. Writes state.json with all transitive deps marked "done", target "pending"
+ *   3. Optionally copies mock artifacts into dep dirs
+ *   4. Prints the run ID and the `dagrun rerun` command to execute the node
+ *
+ * Lock discipline: scaffoldRun does NOT acquire the run lock — like rerunNode,
+ * it is a debug/developer tool. The node is run via `dagrun rerun` which also
+ * does not acquire the lock.
+ */
+export async function scaffoldRun(opts: {
+  nodeId: string;
+  homeDir: string;
+  config: DagrunnerConfig;
+  /** Feature branch name to checkout from DEVHARNESS_SRC (creates a new scaffold branch starting there) */
+  branch: string;
+  /** Optional dir whose contents are cpSync'd into runDir (structure: <mocksDir>/<depNodeId>/<file>) */
+  mocksDir?: string;
+}): Promise<void> {
+  const { nodeId, homeDir, config, branch, mocksDir } = opts;
+
+  // Step 1: Load workflow and find the target node. Fail loud if not found.
+  const workflow = featureWorkflow;
+  const node = workflow.nodes.find((n) => n.id === nodeId);
+  if (node === undefined) {
+    const available = workflow.nodes.map((n) => n.id).join(", ");
+    process.stderr.write(
+      `dagrun scaffold: node "${nodeId}" not found in workflow "feature".\n` +
+        `  Available nodes: ${available}\n`,
+    );
+    process.exit(1);
+  }
+
+  // Step 2: Validate branch exists in DEVHARNESS_SRC before any side effects.
+  try {
+    execSync(
+      `git -C "${config.DEVHARNESS_SRC}" rev-parse --verify --quiet "${branch}"`,
+      { stdio: "pipe" },
+    );
+  } catch {
+    process.stderr.write(
+      `dagrun scaffold: branch '${branch}' not found in DEVHARNESS_SRC — fetch it first\n`,
+    );
+    process.exit(1);
+  }
+
+  // Step 3: Generate run ID and paths. Capture timestamp ONCE so runId, branch
+  // name, and state.json all agree on the same timestamp.
+  const ts = Date.now();
+  const runId = `scaffold-${nodeId}-${ts}`;
+  const branchName = `scaffold/${nodeId}-${ts}`;
+  const runDir = join(homeDir, "runs", runId);
+  const worktreePath = join(homeDir, "worktrees", runId);
+
+  // Step 4: Create run dir.
+  mkdirSync(runDir, { recursive: true });
+
+  // Step 5: Create worktree from the feature branch start-point.
+  execSync(
+    `git worktree add "${worktreePath}" -b "${branchName}" "${branch}"`,
+    {
+      cwd: config.DEVHARNESS_SRC,
+      stdio: "inherit",
+    },
+  );
+
+  // Step 6: Seed .claude/ into the worktree (same pattern as rerunNode).
+  const dagrunnerRoot = new URL("../../", import.meta.url).pathname;
+  const destClaude = join(worktreePath, ".claude");
+  mkdirSync(join(destClaude, "commands"), { recursive: true });
+  mkdirSync(join(destClaude, "hooks"), { recursive: true });
+  mkdirSync(join(destClaude, "agents"), { recursive: true });
+  const srcCommands = join(dagrunnerRoot, "payload", "commands");
+  const srcHooks = join(dagrunnerRoot, ".claude", "hooks");
+  const srcAgents = join(dagrunnerRoot, "payload", "agents");
+  if (existsSync(srcCommands))
+    cpSync(srcCommands, join(destClaude, "commands"), { recursive: true });
+  if (existsSync(srcHooks))
+    cpSync(srcHooks, join(destClaude, "hooks"), { recursive: true });
+  if (existsSync(srcAgents))
+    cpSync(srcAgents, join(destClaude, "agents"), { recursive: true });
+
+  seedWorktreeSiblings(dagrunnerRoot, destClaude);
+
+  const seededSettings = buildSeededSettings({
+    runDir,
+    homeDir: homedir(),
+    tmpDir: tmpdir(),
+    passthrough: readSourcePassthrough(config.DEVHARNESS_SRC),
+    ...(config.claudeConfigDir !== undefined
+      ? { claudeConfigDir: config.claudeConfigDir }
+      : {}),
+    workProfileMcpServers: readWorkProfileMcpServers(homedir(), worktreePath),
+    devharnessSrc: config.DEVHARNESS_SRC,
+    dagrunnerHome: homeDir,
+  });
+  writeFileSync(
+    join(destClaude, "settings.json"),
+    JSON.stringify(seededSettings, null, 2),
+    "utf8",
+  );
+
+  // Step 7: Compute transitive deps of nodeId via BFS over dependsOn.
+  const transitiveDeps = new Set<string>();
+  const queue: string[] = [...(node.dependsOn ?? [])];
+  const visited = new Set<string>();
+  while (queue.length > 0) {
+    const depId = queue.shift()!;
+    if (visited.has(depId)) continue;
+    visited.add(depId);
+    transitiveDeps.add(depId);
+    const depNode = workflow.nodes.find((n) => n.id === depId);
+    for (const grandDep of depNode?.dependsOn ?? []) {
+      if (!visited.has(grandDep)) queue.push(grandDep);
+    }
+  }
+
+  // Step 8: Build node states — reuse makeInitialNodeStates for correct typing,
+  // then flip transitive deps to "done". Target + rest stay "pending".
+  const nodes = makeInitialNodeStates(workflow);
+  for (const depId of transitiveDeps) {
+    const existing = nodes[depId];
+    if (existing !== undefined) {
+      nodes[depId] = {
+        ...existing,
+        status: "done",
+        artifacts: [],
+        iteration: 0,
+        cost: 0,
+        gateHistory: [],
+      };
+    }
+  }
+
+  const now = new Date().toISOString();
+  const state: RunState = {
+    runId,
+    workflow: "feature",
+    createdAt: now,
+    updatedAt: now,
+    status: "paused",
+    worktreePath,
+    branch: branchName,
+    sourcePlanPath: "",
+    nodes,
+  };
+
+  const stateFile = join(runDir, "state.json");
+  writeState(stateFile, state);
+
+  // Step 9: Create artifact dirs for each dep node.
+  for (const depId of transitiveDeps) {
+    mkdirSync(join(runDir, depId), { recursive: true });
+  }
+
+  // Step 10: Copy mock artifacts if provided.
+  if (mocksDir !== undefined) {
+    if (existsSync(mocksDir)) {
+      cpSync(mocksDir, runDir, { recursive: true });
+    } else {
+      process.stderr.write(
+        `dagrun scaffold: warning — --mocks dir "${mocksDir}" does not exist; skipping mock copy\n`,
+      );
+    }
+  }
+
+  // Step 11: Print summary.
+  const depList = Array.from(transitiveDeps);
+  const mockHints = depList
+    .map((depId) => {
+      const depNode = workflow.nodes.find((n) => n.id === depId);
+      const produces = depNode?.produces ?? [];
+      const suffix = produces.length > 0 ? `  <- ${produces.join(", ")}` : "";
+      return `  ${join(runDir, depId)}/${suffix}`;
+    })
+    .join("\n");
+
+  process.stdout.write(
+    `dagrun: scaffold run created: ${runId}\n` +
+      `  Worktree: ${worktreePath}  (branch: ${branchName} from ${branch})\n` +
+      `  Artifacts dir: ${runDir}\n` +
+      `\n` +
+      `Dep mock locations (place files here before rerunning):\n` +
+      (mockHints.length > 0 ? `${mockHints}\n` : `  (no deps)\n`) +
+      `\n` +
+      `To run the node:\n` +
+      `  dagrun rerun ${runId} ${nodeId}\n`,
+  );
+}

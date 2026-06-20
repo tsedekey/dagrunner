@@ -34,6 +34,7 @@ import {
   startRun,
   resumeRun,
   rerunNode,
+  scaffoldRun,
   listRuns,
   activeRun,
 } from "../runtime/run-engine.js";
@@ -637,6 +638,27 @@ function writeDiagnostic(runDir: string): void {
   process.stderr.write(`\ndagrun: diagnostic → ${reportPath}\n`);
 }
 
+async function cmdScaffold(argv: string[]): Promise<void> {
+  const nodeId = argv[1];
+  const branch = flagValue(argv, "--branch");
+  const mocksDir = flagValue(argv, "--mocks");
+  if (!nodeId || nodeId.startsWith("--") || !branch) {
+    process.stderr.write(
+      "Usage: dagrun scaffold <node-id> --branch <feature-branch> [--mocks <dir>]\n",
+    );
+    process.exit(1);
+  }
+  const homeDir = resolveHome();
+  const config = resolveConfig(homeDir);
+  await scaffoldRun({
+    nodeId,
+    homeDir,
+    config,
+    branch,
+    ...(mocksDir !== undefined ? { mocksDir } : {}),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Help
 // ---------------------------------------------------------------------------
@@ -661,6 +683,7 @@ function printHelp(): void {
       "  dagrun report <run-id>",
       "  dagrun logs <run-id> <node>",
       "  dagrun rerun <run-id> <node-id>",
+      "  dagrun scaffold <node-id> --branch <feature-branch> [--mocks <dir>]",
       '  dagrun reflect --source <node> --kind camunda-knowledge|dagrunner-harness --body "<text>" [--run-id <id>]',
       "",
     ].join("\n"),
@@ -735,6 +758,10 @@ async function main(argv: string[]): Promise<number> {
 
     case "rerun":
       await cmdRerun(rest);
+      return 0;
+
+    case "scaffold":
+      await cmdScaffold(rest);
       return 0;
 
     case "report":

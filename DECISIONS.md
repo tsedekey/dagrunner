@@ -200,6 +200,18 @@ Format: `<block> · <decision> · <why>`
 
 - split-smoke · mock-vs-live tradeoff documented (not hidden): a bad node-prompt edit that passes the mock but breaks real-model behaviour slips past the per-plan gate until the next smoke:live · mitigation: run `smoke:live` when a plan touches `payload/commands/*.md`, before merging, and once at the end of a queue; auto-running smoke:live from `build-queue.sh` on prompt changes or queue-end is a follow-up change (out of scope here)
 
+## scaffold-command
+
+- scaffold · no run lock acquired (same discipline as rerunNode) · scaffoldRun is a debug/developer setup tool; it creates a paused run state and worktree but does not execute any node; the developer then runs `dagrun rerun` which also does not acquire the lock; acquiring a lock for a paused run that requires manual `dagrun rerun` to start would block concurrent use unnecessarily
+
+- scaffold · timestamp captured once into `ts = Date.now()` and used for both `runId` and `branchName` · using `Date.now()` inline in two places (as the spec literally shows) creates a race window where `runId` and `branchName` use different timestamps; `dagrun status` and cleanup both read `state.branch` to reference the git branch, so a mismatch would reference a non-existent branch name
+
+- scaffold · node state map built via `makeInitialNodeStates(workflow)` then dep status flipped, not a hand-rolled object literal · `exactOptionalPropertyTypes: true` in tsconfig makes an object literal `{status: 'done'}` not assignable to `NodeState`; reusing `makeInitialNodeStates` gives a correctly-typed map and also carries the `model` field (haiku/sonnet) for verify/pr which the hand-rolled form would lose
+
+- scaffold · `assertAuth` omitted from `cmdScaffold` · scaffold spawns no agent session — it is git + filesystem setup only; auth is checked at `dagrun rerun` time (which calls `rerunNode` which omits assertAuth too per the same rationale); adding assertAuth here would require a Claude CLI binary check for a command that writes no API requests
+
+- scaffold · fail-soft on missing --mocks dir (warning to stderr, not exit 1) · the mocks dir is optional scaffolding scaffolding convenience; a missing dir is most likely a typo in the path, not a fatal error; the worktree and state.json are already created by this point; warning lets the developer correct and re-copy manually without losing the scaffold run
+
 ## unit-test-backfill-2b (Tier B + golden + schema-contract)
 
 - backfill-2b-cli-dispatch-deferred · `cli.ts` dispatch (inline `main`) not extracted; `parseArgs`/`dispatch` not exported · plan's lean: defer to smoke — cli is glue, not logic; no parse bug has bitten; extracting would be a refactor inside a backfill, which the plan explicitly forbids; deferred and smoke owns cli coverage
