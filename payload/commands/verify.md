@@ -70,7 +70,7 @@ demonstrate this feature end-to-end. The schema is:
   ],
   "expected_observations": [
     {
-      "where": "elasticsearch|rest-api",
+      "where": "rest-api",
       "what": "<field or observable>",
       "expected_value": "<what to look for>",
       "how": "<concrete steps to find it — e.g. 'open Operate, navigate to instance X, check field Y'>"
@@ -83,11 +83,11 @@ Rules:
 
 - Derive everything from the artifacts and diff — the implement reflections and fix summary are the
   primary record of what changed; the diff confirms specific code paths.
-- `expected_observations` must reference the specific fields or behavior introduced by this PR
-  (e.g. the exact Elasticsearch field, the REST API response field, the log message).
-- Each `how` must be a concrete, actionable step the human can follow without guessing.
+- `expected_observations` must reference the specific REST API behavior introduced by this PR
+  (e.g. the correct response status, response body fields, or error shape).
+- Each `how` must be a concrete, actionable Postman call the human can follow without guessing.
 - Keep it minimal: the minimum seeding that proves the feature works, not a full test suite.
-- `expected_observations` must only use `where: "rest-api"` or `where: "elasticsearch"` — verification uses Postman (REST) and ElasticVue (Elasticsearch), not the Operate/Tasklist UI. Convert any UI checks to their equivalent REST or ES query.
+- `expected_observations` must only use `where: "rest-api"` — verification is done entirely via the Postman collection that `/seed-data` generates. No Elasticsearch queries, no curl commands, no UI steps.
 - **REST observations must be spec-grounded**: for every `where: "rest-api"` observation, grep
   the OpenAPI spec for the relevant endpoint path _before_ writing the `how` field. Copy the
   exact HTTP method, path parameters, and required requestBody fields from the spec. Never guess
@@ -140,7 +140,7 @@ Follow these steps in order. Each step corresponds to an expected observation in
 
 ### N. <short label for what is being verified>
 
-**Where:** <the system to check — e.g. Operate, Elasticsearch, Tasklist, REST API, logs>
+**Where:** REST API (Postman)
 
 **What to do:** <the concrete how from seeding-spec.json — exactly what to navigate to or query>
 

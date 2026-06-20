@@ -43,7 +43,8 @@ RUN_DIR=$(dirname "$(dirname "$SPEC_PATH")")
 SEED_SCRATCH="$RUN_DIR/seed-data"
 mkdir -p "$SEED_SCRATCH/generated"
 
-STATE_FILE="${TMPDIR%/}/seed-data-state.json"
+REPO_ROOT=$(git rev-parse --show-toplevel)
+STATE_FILE="$REPO_ROOT/.claude/seed-data-state.json"
 
 jq -n \
   --arg spec "$SPEC_PATH" \

@@ -37,7 +37,7 @@ scripts for logic changes.
 
 ## Phase 0 — Resolve arguments and locate seeding-spec.json
 
-Parse `$ARGUMENTS`. Write resolved state to `$TMPDIR/seed-data-state.json` for later phases.
+Parse `$ARGUMENTS`. Write resolved state to `<repo-root>/.claude/seed-data-state.json` for later phases.
 
 ```bash
 SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/seed-data"
@@ -46,7 +46,7 @@ zsh "$SCRIPT_DIR/phase-0-bootstrap.sh" "$ARGUMENTS"
 
 **PHASE_0_CHECKPOINT:**
 
-- [ ] `$TMPDIR/seed-data-state.json` written with `spec_path`, `profile`, `run_dir`, `seed_scratch`
+- [ ] `<repo-root>/.claude/seed-data-state.json` written with `spec_path`, `profile`, `run_dir`, `seed_scratch`
 - [ ] `$SEED_SCRATCH/generated/` directory created (`<run-dir>/seed-data/generated/`)
 
 ---
@@ -95,7 +95,7 @@ The `seeding-spec.json` was produced by the verify node, which already looked up
 the OpenAPI spec or re-derive endpoint details independently.
 
 ```bash
-STATE_FILE="${TMPDIR%/}/seed-data-state.json"
+STATE_FILE="$(git rev-parse --show-toplevel)/.claude/seed-data-state.json"
 SEED_SCRATCH=$(jq -r .seed_scratch "$STATE_FILE")
 SPEC_PATH=$(jq -r .spec_path "$STATE_FILE")
 

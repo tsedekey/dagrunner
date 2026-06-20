@@ -3,21 +3,22 @@
 # across the full loop. Do not split it.
 set -euo pipefail
 
-STATE_FILE="${TMPDIR%/}/seed-data-state.json"
+REPO_ROOT=$(git rev-parse --show-toplevel)
+STATE_FILE="$REPO_ROOT/.claude/seed-data-state.json"
 SPEC_PATH=$(jq -r .spec_path "$STATE_FILE")
 PROFILE=$(jq -r .profile "$STATE_FILE")
 SEED_SCRATCH=$(jq -r .seed_scratch "$STATE_FILE")
 SPEC=$(cat "$SPEC_PATH")
-WORKTREE="${DAGRUN_WORKTREE:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+WORKTREE="${DAGRUN_WORKTREE:-$REPO_ROOT}"
 
 DEPLOY_COUNT=$(echo "$SPEC" | jq '.deployments | length')
 INSTANCE_COUNT=$(echo "$SPEC" | jq '.instances | length')
 echo "Deployments to process: $DEPLOY_COUNT"
 echo "Instances to start:     $INSTANCE_COUNT"
 
-DEPLOY_RECORDS_FILE="${TMPDIR%/}/seed-data-deploy-records.json"
-INSTANCE_RECORDS_FILE="${TMPDIR%/}/seed-data-instance-records.json"
-OBS_RECORDS_FILE="${TMPDIR%/}/seed-data-obs-records.json"
+DEPLOY_RECORDS_FILE="$REPO_ROOT/.claude/seed-data-deploy-records.json"
+INSTANCE_RECORDS_FILE="$REPO_ROOT/.claude/seed-data-instance-records.json"
+OBS_RECORDS_FILE="$REPO_ROOT/.claude/seed-data-obs-records.json"
 echo "[]" > "$DEPLOY_RECORDS_FILE"
 echo "[]" > "$INSTANCE_RECORDS_FILE"
 echo "[]" > "$OBS_RECORDS_FILE"
@@ -161,7 +162,7 @@ BPMN_END
     --arg defk "$DEF_KEY" \
     --arg bpmn "$BPMN_PATH" \
     '{"process_id":$pid,"deployment_key":$dk,"process_definition_key":$defk,"bpmn_path":$bpmn}')
-  DEPLOY_TMP="${TMPDIR%/}/seed-data-deploy-records-tmp.json"
+  DEPLOY_TMP="$REPO_ROOT/.claude/seed-data-deploy-records-tmp.json"
   jq --argjson r "$RECORD" '. + [$r]' "$DEPLOY_RECORDS_FILE" > "$DEPLOY_TMP"
   mv "$DEPLOY_TMP" "$DEPLOY_RECORDS_FILE"
 
@@ -206,7 +207,7 @@ while [ "$j" -lt "$INSTANCE_COUNT" ]; do
     --arg pid "$PROCESS_ID" \
     --arg k "$PI_KEY" \
     '{"process_id":$pid,"instance_key":$k}')
-  INSTANCE_TMP="${TMPDIR%/}/seed-data-instance-records-tmp.json"
+  INSTANCE_TMP="$REPO_ROOT/.claude/seed-data-instance-records-tmp.json"
   jq --argjson r "$RECORD" '. + [$r]' "$INSTANCE_RECORDS_FILE" > "$INSTANCE_TMP"
   mv "$INSTANCE_TMP" "$INSTANCE_RECORDS_FILE"
 
@@ -331,7 +332,7 @@ while [ "$k" -lt "$OBS_COUNT" ]; do
     echo "NOTE: '$WHERE' observations are not checked by seed-data. Review manually."
   fi
 
-  OBS_TMP="${TMPDIR%/}/seed-data-obs-records-tmp.json"
+  OBS_TMP="$REPO_ROOT/.claude/seed-data-obs-records-tmp.json"
   jq --argjson r "$OBS_REC" '. + [$r]' "$OBS_RECORDS_FILE" > "$OBS_TMP"
   mv "$OBS_TMP" "$OBS_RECORDS_FILE"
 

@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 
-STATE_FILE="${TMPDIR%/}/seed-data-state.json"
+STATE_FILE="$(git rev-parse --show-toplevel)/.claude/seed-data-state.json"
 PROFILE=$(jq -r .profile "$STATE_FILE")
 
 echo "Checking cluster reachability (profile: $PROFILE)..."

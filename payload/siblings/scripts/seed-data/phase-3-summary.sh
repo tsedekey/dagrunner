@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 
-STATE_FILE="${TMPDIR%/}/seed-data-state.json"
+STATE_FILE="$(git rev-parse --show-toplevel)/.claude/seed-data-state.json"
 SEED_SCRATCH=$(jq -r .seed_scratch "$STATE_FILE")
 SEEDED="$SEED_SCRATCH/seeded.json"
 
