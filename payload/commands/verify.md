@@ -16,18 +16,35 @@ You have access to the following env vars:
 
 ## Step 1 — Read inputs
 
-```bash
-# Full feature diff
-cd "$DAGRUN_WORKTREE" && git diff origin/main...HEAD
+Read in this priority order:
 
-# Artifacts from earlier nodes (check existence before reading)
+1. **Artifacts from earlier nodes** — these are the definitive record of what changed and what was built; use them as the primary source for deciding what to seed and test.
+2. **Git log** — commit summaries confirm scope and intent.
+3. **Git diff** — use to identify specific changed code paths and REST endpoint signatures.
+4. **OpenAPI spec** — required to ground any `rest-api` observations in Step 2 with the correct HTTP method, path, and request schema.
+
+```bash
+# 1. Artifacts from earlier nodes (check existence before reading)
 cat "$DAGRUN_RUN_DIR/plan/plan.md" 2>/dev/null
 cat "$DAGRUN_RUN_DIR/expand/guide.md" 2>/dev/null
 cat "$DAGRUN_RUN_DIR/expand/reflections.md" 2>/dev/null
 cat "$DAGRUN_RUN_DIR/implement/reflections.md" 2>/dev/null
 cat "$DAGRUN_RUN_DIR/review/findings.json" 2>/dev/null
 cat "$DAGRUN_RUN_DIR/fix/summary.md" 2>/dev/null
+
+# 2. Recent commits on this branch
+cd "$DAGRUN_WORKTREE" && git log origin/main..HEAD --oneline
+
+# 3. Full feature diff
+cd "$DAGRUN_WORKTREE" && git diff origin/main...HEAD
+
+# 4. Locate the Camunda REST API OpenAPI spec (used in Step 2 to verify REST endpoints)
+find "$DAGRUN_WORKTREE" \( -name "openapi.yaml" -o -name "openapi.json" \) \
+  ! -path "*/target/*" ! -path "*/node_modules/*" ! -path "*/.git/*" | head -5
 ```
+
+For each REST endpoint you identify from the diff, grep the spec for that path before writing
+any `expected_observations` entry — do not read the full spec file.
 
 ---
 
@@ -64,12 +81,17 @@ demonstrate this feature end-to-end. The schema is:
 
 Rules:
 
-- Derive everything from the diff — use the actual changed code paths to decide what to seed.
+- Derive everything from the artifacts and diff — the implement reflections and fix summary are the
+  primary record of what changed; the diff confirms specific code paths.
 - `expected_observations` must reference the specific fields or behavior introduced by this PR
   (e.g. the exact Elasticsearch field, the REST API response field, the log message).
 - Each `how` must be a concrete, actionable step the human can follow without guessing.
 - Keep it minimal: the minimum seeding that proves the feature works, not a full test suite.
 - `expected_observations` must only use `where: "rest-api"` or `where: "elasticsearch"` — verification uses Postman (REST) and ElasticVue (Elasticsearch), not the Operate/Tasklist UI. Convert any UI checks to their equivalent REST or ES query.
+- **REST observations must be spec-grounded**: for every `where: "rest-api"` observation, grep
+  the OpenAPI spec for the relevant endpoint path _before_ writing the `how` field. Copy the
+  exact HTTP method, path parameters, and required requestBody fields from the spec. Never guess
+  the HTTP method — a wrong method (e.g. POST instead of PATCH) produces an unusable spec.
 - For `bpmn_resource`: only reference a file if a suitable `.bpmn` already exists in the worktree (search `$DAGRUN_WORKTREE` for a file whose `process id` matches). If none exists, **omit `bpmn_resource` entirely** — do not create BPMN files. seed-data generates what it needs at seeding time.
 - Write valid JSON to `$DAGRUN_ARTIFACTS/seeding-spec.json`.
 

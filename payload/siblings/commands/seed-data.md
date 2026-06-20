@@ -109,7 +109,8 @@ Read the relevant OpenAPI spec file(s) found above. For each `rest-api` observat
 seeding-spec.json:
 
 1. **Identify the endpoint** — extract the HTTP method and path from the `how` field
-   (e.g. `POST /v2/jobs/{jobKey}/update`).
+   (e.g. `PATCH /v2/jobs/{jobKey}/update`). The method comes from `seeding-spec.json`
+   which was grounded in the OpenAPI spec by the verify node — trust it exactly.
 2. **Look it up in the OpenAPI spec** — find the exact path + method entry.
 3. **Extract from the spec:**
    - Path parameters (names, types)
