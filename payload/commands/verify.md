@@ -87,7 +87,7 @@ Rules:
   (e.g. the correct response status, response body fields, or error shape).
 - Each `how` must be a concrete, actionable Postman call the human can follow without guessing.
 - Keep it minimal: the minimum seeding that proves the feature works, not a full test suite.
-- `expected_observations` must only use `where: "rest-api"` — verification is done entirely via the Postman collection that `/seed-data` generates. No Elasticsearch queries, no curl commands, no UI steps.
+- `expected_observations` must only use `where: "rest-api"` — verification is done via the user's own Postman collection. No Elasticsearch queries, no curl commands, no UI steps.
 - **REST observations must be spec-grounded**: for every `where: "rest-api"` observation, grep
   the OpenAPI spec for the relevant endpoint path _before_ writing the `how` field. Copy the
   exact HTTP method, path parameters, and required requestBody fields from the spec. Never guess
@@ -118,6 +118,7 @@ Derived from the diff and plan — write it for a human who hasn't read the code
 ## Prerequisites
 
 - A local Orchestration Cluster is running. Start one via `c8ctl dev` if not already up.
+- Your Postman collection (linked to the Camunda REST API spec) is open and its base URL points to your local cluster.
 - You are in the feature worktree (the worktree path for this run).
 
 ## Step 1 — Seed the cluster
@@ -140,7 +141,7 @@ Follow these steps in order. Each step corresponds to an expected observation in
 
 ### N. <short label for what is being verified>
 
-**Where:** REST API (Postman)
+**Where:** REST API — use your Postman collection
 
 **What to do:** <the concrete how from seeding-spec.json — exactly what to navigate to or query>
 

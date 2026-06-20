@@ -314,8 +314,8 @@ while [ "$k" -lt "$OBS_COUNT" ]; do
       --arg w "$WHERE" --arg wh "$WHAT" --arg ev "$EXPECTED" \
       --arg base "${BASE_URL:-http://localhost:8080}" \
       '{"where":$w,"status":"RECORDED","what":$wh,"expected_value":$ev,
-        "ready_to_run":{"base_url":$base,"note":"Use Postman — see postman-collection.json","what":$wh}}')
-    echo "REST observation recorded (see postman-collection.json)."
+        "ready_to_run":{"base_url":$base,"note":"Use your Postman collection — see manual-test.md for the specific request details","what":$wh}}')
+    echo "REST observation recorded."
     echo "Base URL: ${BASE_URL:-http://localhost:8080}"
 
   elif [ "$WHERE" = "operate" ]; then

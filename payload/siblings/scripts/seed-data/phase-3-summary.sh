@@ -19,9 +19,6 @@ cat "$SEEDED" | jq '{
 echo ""
 echo "Artifacts written to: $SEED_SCRATCH"
 echo "  seeded.json                — instance keys and observation records"
-[ -f "$SEED_SCRATCH/postman-collection.json" ] && \
-  echo "  postman-collection.json    — import into Postman to run REST observations" || \
-  echo "  postman-collection.json    — (not yet generated — see Phase 2b)"
 ls "$SEED_SCRATCH/generated/"*.bpmn 2>/dev/null && \
   echo "  generated/*.bpmn           — generated BPMN resources" || true
 
@@ -37,7 +34,7 @@ while [ "$m" -lt "$OBS_LEN" ]; do
   STATUS=$(cat "$SEEDED" | jq -r ".observations[$m].status")
   if [ "$WHERE" = "rest-api" ]; then
     REST_N=$((REST_N + 1))
-    echo "[ ] REST: $WHAT — use Postman (see postman-collection.json, request $REST_N)"
+    echo "[ ] REST: $WHAT — run in your Postman collection (see manual-test.md for details)"
   elif [ "$WHERE" = "elasticsearch" ]; then
     ES_N=$((ES_N + 1))
     echo "[ ] ES ($STATUS): $WHAT"
