@@ -639,7 +639,7 @@ function writeDiagnostic(runDir: string): void {
 }
 
 async function cmdScaffold(argv: string[]): Promise<void> {
-  const nodeId = argv[1];
+  const nodeId = argv[0];
   const branch = flagValue(argv, "--branch");
   const mocksDir = flagValue(argv, "--mocks");
   if (!nodeId || nodeId.startsWith("--") || !branch) {
