@@ -1,6 +1,6 @@
 ---
 description: Triage new PR review comments — one incremental tick: fetch new comments, classify each, draft replies as artifacts, surface per-comment human approve/post gate
-argument-hint: [--pr <number>] [--run-id <run-id>] [--repo owner/repo]
+argument-hint: [--pr <number>] [--repo owner/repo] [--run-id <run-id>]  # all optional — auto-discovered from git branch
 ---
 
 # /pr-triage — PR Review Comment Triage Tick
@@ -49,8 +49,10 @@ phases 3–4 are model work described inline.
 
 ## Phase 0 — Bootstrap
 
-Parse `$ARGUMENTS`. Validate that this is a dagrunner worktree on a feature branch. Discover the
-open PR. Fail loud if the worktree or branch is missing, or if no open PR is found.
+Parse `$ARGUMENTS` (all optional). Validate that this is a dagrunner worktree on a `feature/<slug>`
+or `feat/<slug>` branch. Discover the open PR. Fail loud if the worktree or branch is missing, or
+if no open PR is found. All values (PR number, repo, run-id) are auto-discovered from git if not
+supplied as arguments.
 
 ```bash
 SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/pr-triage"
@@ -59,9 +61,10 @@ zsh "$SCRIPT_DIR/phase-0-bootstrap.sh" "$ARGUMENTS"
 
 **PHASE_0_CHECKPOINT:**
 
-- [ ] Running on a `feature/<slug>` branch inside a worktree
+- [ ] Running on a `feature/<slug>` or `feat/<slug>` branch inside a worktree
 - [ ] PR number discovered (non-empty)
-- [ ] `/tmp/pr-triage-state.json` written with `{run_id, pr_number, branch, worktree, repo, artifacts}`
+- [ ] `$ARTIFACTS_DIR/pr-triage-state.json` written with `{run_id, pr_number, branch, worktree, repo, artifacts}`
+      where `ARTIFACTS_DIR = ~/.local/share/dagrunner/runs/<run-id>/pr-triage/`
 
 ---
 
@@ -79,7 +82,7 @@ zsh "$SCRIPT_DIR/phase-1-fetch-comments.sh"
 - [ ] PR state confirmed OPEN (or exited cleanly if merged/closed)
 - [ ] All three comment endpoints fetched (or warned on failure, defaulting to [])
 - [ ] `new_or_edited` array computed (empty if nothing changed)
-- [ ] `/tmp/pr-triage-tick.json` written
+- [ ] `$ARTIFACTS_DIR/pr-triage-tick.json` written (alongside per-source raw + delta files)
 
 ---
 
@@ -104,17 +107,25 @@ If the script exits 0 with "tick is a no-op" output, skip to Phase 5. Otherwise 
 
 ## Phase 3 — Classify and draft replies
 
-**MODEL WORK — no script.** Read `/tmp/pr-triage-tick.json`. For each entry in `new_or_edited`:
+**MODEL WORK — no script.** Derive the artifacts path, then read the tick and triage state:
+
+```bash
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+RUN_ID="${DAGRUN_RUN_ID:-$(echo "$BRANCH" | sed -E 's|^(feature|feat)/||')}"
+ARTIFACTS_DIR="${DAGRUN_ARTIFACTS:-$HOME/.local/share/dagrunner/runs/${RUN_ID}/pr-triage}"
+TRIAGE_STATE="$ARTIFACTS_DIR/triage-state.json"
+TICK_FILE="$ARTIFACTS_DIR/pr-triage-tick.json"
+```
+
+For each entry in `new_or_edited` (read from `$TICK_FILE`):
 
 ### 3.1 Load the full comment
 
-Pull the full comment object from the appropriate array in tick.json:
+Pull the full comment object from the per-source files in `$ARTIFACTS_DIR`:
 
-- `source == "inline"` → from `inline_comments[]` where `.id == entry.id`
-- `source == "issue"` → from `issue_comments[]` where `.id == entry.id`
-- `source == "review"` → from `review_summaries[]` where `.id == entry.id`
-
-Load state: `TRIAGE_STATE=$(jq -r .artifacts /tmp/pr-triage-state.json)/triage-state.json`
+- `source == "inline"` → `jq --argjson id <id> '.[] | select(.id == $id)' "$ARTIFACTS_DIR/inline-raw.json"`
+- `source == "issue"` → `jq --argjson id <id> '.[] | select(.id == $id)' "$ARTIFACTS_DIR/issue-raw.json"`
+- `source == "review"` → `jq --argjson id <id> '.[] | select(.id == $id)' "$ARTIFACTS_DIR/reviews-filtered.json"`
 
 ### 3.2 Determine source type
 
@@ -346,7 +357,7 @@ zsh "$SCRIPT_DIR/phase-5-persist.sh"
 - [ ] triage-state.json updated: `last_tick_at` and `last_fetched_sha` advanced
 - [ ] New `seen` entries added for any comments not yet touched by phase 3/4
 - [ ] Tick log written to `$ARTIFACTS_DIR/tick-<timestamp>.md`
-- [ ] `/tmp/pr-triage-state.json` and `/tmp/pr-triage-tick.json` cleaned up
+- [ ] `triage-state.json` written atomically (via temp file, no partial writes)
 
 ---
 

@@ -33,25 +33,26 @@ if [ -z "$WORKTREE" ]; then
 fi
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-if ! echo "$BRANCH" | grep -q "^feature/"; then
-  echo "ERROR: Current branch '$BRANCH' is not a feature branch (expected feature/<slug>)."
+if ! echo "$BRANCH" | grep -qE "^(feature|feat)/"; then
+  echo "ERROR: Current branch '$BRANCH' is not a feature branch (expected feature/<slug> or feat/<slug>)."
   echo "pr-triage runs inside a dagrunner worktree on the feature/<slug> branch."
   exit 1
 fi
 
 RUN_ID="${RUN_ID_ARG:-${DAGRUN_RUN_ID:-}}"
 if [ -z "$RUN_ID" ]; then
-  RUN_ID=$(echo "$BRANCH" | sed 's|^feature/||')
+  RUN_ID=$(echo "$BRANCH" | sed -E 's|^(feature|feat)/||')
 fi
 
-# Warn if ci-babysit machinery appears absent — pr-triage depends on ci-babysit being built first.
-# This is a warning, not a failure: ci-babysit may be on a different tick schedule.
-CI_BABYSIT_LEARNINGS="$HOME/.local/share/dagrunner/store/learnings/ci-babysit.md"
+ARTIFACTS_DIR="${DAGRUN_ARTIFACTS:-$HOME/.local/share/dagrunner/runs/${RUN_ID}/pr-triage}"
+mkdir -p "$ARTIFACTS_DIR"
+mkdir -p "$ARTIFACTS_DIR/drafts"
+
+STATE_FILE="$ARTIFACTS_DIR/pr-triage-state.json"
+
 CI_BABYSIT_STATE="$HOME/.local/share/dagrunner/runs/${RUN_ID}/ci-babysit/since-state.json"
-if [ ! -f "$CI_BABYSIT_LEARNINGS" ] && [ ! -f "$CI_BABYSIT_STATE" ]; then
-  echo "WARNING: ci-babysit does not appear to have run for this worktree."
-  echo "  pr-triage reuses ci-babysit's poll/trigger pattern. Build and run ci-babysit first."
-  echo "  Continuing — pr-triage can still triage comments independently."
+if [ ! -f "$CI_BABYSIT_STATE" ]; then
+  echo "WARNING: ci-babysit has not run for this worktree. Continuing — pr-triage can triage independently."
 fi
 
 GH_FLAGS=()
@@ -63,14 +64,9 @@ else
 fi
 if [ -z "$PR_NUMBER" ]; then
   echo "ERROR: No open PR found for branch '$BRANCH'."
-  echo "The dagrunner 'pr' node must open the PR before running pr-triage."
   echo "  gh pr list --head $BRANCH   — confirm PR existence"
   exit 1
 fi
-
-ARTIFACTS_DIR="$HOME/.local/share/dagrunner/runs/${RUN_ID}/pr-triage"
-mkdir -p "$ARTIFACTS_DIR"
-mkdir -p "$ARTIFACTS_DIR/drafts"
 
 jq -n \
   --arg run_id "$RUN_ID" \
@@ -80,9 +76,10 @@ jq -n \
   --arg repo "$REPO_ARG" \
   --arg artifacts "$ARTIFACTS_DIR" \
   '{"run_id":$run_id,"pr_number":$pr,"branch":$branch,"worktree":$worktree,"repo":$repo,"artifacts":$artifacts}' \
-  > /tmp/pr-triage-state.json
+  > "$STATE_FILE"
 
 echo "Run ID:    ${RUN_ID}"
 echo "PR:        #${PR_NUMBER} (branch: ${BRANCH})"
 echo "Worktree:  ${WORKTREE}"
 echo "Artifacts: ${ARTIFACTS_DIR}"
+echo "State:     ${STATE_FILE}"
