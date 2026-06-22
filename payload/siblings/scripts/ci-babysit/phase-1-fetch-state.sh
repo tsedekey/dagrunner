@@ -1,9 +1,15 @@
 #!/bin/zsh
 set -euo pipefail
 
-ARTIFACTS_DIR=$(jq -r .artifacts /tmp/ci-babysit-state.json)
-PR_NUMBER=$(jq -r .pr_number /tmp/ci-babysit-state.json)
-REPO_ARG=$(jq -r '.repo' /tmp/ci-babysit-state.json)
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+RUN_ID=$(echo "$BRANCH" | sed 's|^feat[a-z]*/||')
+DAGRUNNER_HOME="${DAGRUNNER_HOME:-$HOME/.local/share/dagrunner}"
+ARTIFACTS_DIR="$DAGRUNNER_HOME/runs/$RUN_ID/ci-babysit"
+STATE_FILE="$ARTIFACTS_DIR/ci-babysit-state.json"
+TICK_FILE="$ARTIFACTS_DIR/ci-babysit-tick.json"
+
+PR_NUMBER=$(jq -r .pr_number "$STATE_FILE")
+REPO_ARG=$(jq -r '.repo' "$STATE_FILE")
 GH_FLAGS=(); [ -n "$REPO_ARG" ] && GH_FLAGS=(-R "$REPO_ARG")
 SINCE_STATE="$ARTIFACTS_DIR/since-state.json"
 
@@ -21,8 +27,18 @@ PR_STATE=$(echo "$PR_VIEW" | jq -r '.state')
 
 if [ "$PR_STATE" != "OPEN" ]; then
   echo "PR #${PR_NUMBER} is ${PR_STATE} — nothing to babysit. Exiting."
-  rm -f /tmp/ci-babysit-state.json
+  rm -f "$STATE_FILE"
   exit 0
+fi
+
+# Sync local worktree to remote PR head to avoid diagnosing stale state
+git fetch origin "$BRANCH" --quiet 2>/dev/null || true
+LOCAL_HEAD=$(git rev-parse HEAD 2>/dev/null || echo "")
+REMOTE_BRANCH_HEAD=$(git rev-parse "origin/$BRANCH" 2>/dev/null || echo "")
+if [ -n "$REMOTE_BRANCH_HEAD" ] && [ "$LOCAL_HEAD" != "$REMOTE_BRANCH_HEAD" ]; then
+  echo "Syncing worktree: local=${LOCAL_HEAD:0:8} remote=${REMOTE_BRANCH_HEAD:0:8}"
+  git merge --ff-only "origin/$BRANCH" 2>/dev/null || \
+    echo "WARNING: Could not fast-forward to remote head (non-linear history?). Proceeding with local HEAD."
 fi
 
 CHECKS_RAW=$(gh pr checks "$PR_NUMBER" --json bucket,completedAt,link,name,state,workflow \
@@ -96,7 +112,7 @@ jq -n \
     prior_check_conclusions:$prior_check_conclusions, prior_check_actions:$prior_check_actions,
     head_changed:($head_changed=="true"), base_advanced:($base_advanced=="true"),
     newly_failed:$newly_failed, all_pass:($all_pass=="true"), is_draft:($is_draft=="true")}' \
-  > /tmp/ci-babysit-tick.json
+  > "$TICK_FILE"
 
 echo "PR #${PR_NUMBER}  head: ${CURRENT_HEAD:0:8}  base: ${BASE_BRANCH} (${BASE_HEAD:0:8})"
 echo "Draft:          $IS_DRAFT"

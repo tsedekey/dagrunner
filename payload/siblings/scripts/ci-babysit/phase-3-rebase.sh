@@ -1,11 +1,18 @@
 #!/bin/zsh
 set -euo pipefail
 
-NOOP=$(jq -r '.noop // false' /tmp/ci-babysit-tick.json)
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+RUN_ID=$(echo "$BRANCH" | sed 's|^feat[a-z]*/||')
+DAGRUNNER_HOME="${DAGRUNNER_HOME:-$HOME/.local/share/dagrunner}"
+ARTIFACTS_DIR="$DAGRUNNER_HOME/runs/$RUN_ID/ci-babysit"
+STATE_FILE="$ARTIFACTS_DIR/ci-babysit-state.json"
+TICK_FILE="$ARTIFACTS_DIR/ci-babysit-tick.json"
+
+NOOP=$(jq -r '.noop // false' "$TICK_FILE")
 if [ "$NOOP" = "true" ]; then echo "No-op tick — skipping Phase 4."; exit 0; fi
 
-BASE_ADVANCED=$(jq -r '.base_advanced' /tmp/ci-babysit-tick.json)
-BASE_BRANCH=$(jq -r '.base_branch' /tmp/ci-babysit-tick.json)
+BASE_ADVANCED=$(jq -r '.base_advanced' "$TICK_FILE")
+BASE_BRANCH=$(jq -r '.base_branch' "$TICK_FILE")
 
 if [ "$BASE_ADVANCED" = "false" ]; then
   echo "Base branch not advanced — skipping rebase."
@@ -22,8 +29,8 @@ else
     NEW_BASE_HEAD=$(git rev-parse "origin/$BASE_BRANCH" 2>/dev/null || echo "")
     jq --arg bh "$NEW_BASE_HEAD" --arg rh "$REBASE_HEAD" \
       '.base_head = $bh | .current_head = $rh | .rebased = true' \
-      /tmp/ci-babysit-tick.json > /tmp/ci-babysit-tick.tmp && \
-      mv /tmp/ci-babysit-tick.tmp /tmp/ci-babysit-tick.json
+      "$TICK_FILE" > "$TICK_FILE.tmp" && \
+      mv "$TICK_FILE.tmp" "$TICK_FILE"
     echo "Pushed. CI will pick up the rebase."
   else
     git rebase --abort 2>/dev/null || true
@@ -41,7 +48,7 @@ else
     echo "  git push --force-with-lease origin HEAD"
     echo ""
     echo "ci-babysit will resume on the next tick after you push the resolution."
-    rm -f /tmp/ci-babysit-state.json /tmp/ci-babysit-tick.json
+    rm -f "$STATE_FILE" "$TICK_FILE"
     exit 1
   fi
 fi

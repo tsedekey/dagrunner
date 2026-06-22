@@ -1,19 +1,25 @@
 #!/bin/zsh
 set -euo pipefail
 
-ARTIFACTS_DIR=$(jq -r .artifacts /tmp/ci-babysit-state.json)
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+RUN_ID=$(echo "$BRANCH" | sed 's|^feat[a-z]*/||')
+DAGRUNNER_HOME="${DAGRUNNER_HOME:-$HOME/.local/share/dagrunner}"
+ARTIFACTS_DIR="$DAGRUNNER_HOME/runs/$RUN_ID/ci-babysit"
+STATE_FILE="$ARTIFACTS_DIR/ci-babysit-state.json"
+TICK_FILE="$ARTIFACTS_DIR/ci-babysit-tick.json"
+
 SINCE_STATE="$ARTIFACTS_DIR/since-state.json"
 TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 TICK_LOG="$ARTIFACTS_DIR/tick-${TS}.md"
 
-CURRENT_HEAD=$(jq -r '.current_head' /tmp/ci-babysit-tick.json)
-BASE_HEAD=$(jq -r '.base_head' /tmp/ci-babysit-tick.json)
-CURRENT_CC=$(jq -c '.current_check_conclusions' /tmp/ci-babysit-tick.json)
-PR_NUMBER=$(jq -r .pr_number /tmp/ci-babysit-state.json)
+CURRENT_HEAD=$(jq -r '.current_head' "$TICK_FILE")
+BASE_HEAD=$(jq -r '.base_head' "$TICK_FILE")
+CURRENT_CC=$(jq -c '.current_check_conclusions' "$TICK_FILE")
+PR_NUMBER=$(jq -r .pr_number "$STATE_FILE")
 
-PRIOR_ACTIONS=$(jq -c '.prior_check_actions' /tmp/ci-babysit-tick.json)
-NEWLY_FAILED=$(jq -r '.newly_failed' /tmp/ci-babysit-tick.json)
-FIX_PUSHED=$(jq -r '.fix_pushed // "false"' /tmp/ci-babysit-tick.json)
+PRIOR_ACTIONS=$(jq -c '.prior_check_actions' "$TICK_FILE")
+NEWLY_FAILED=$(jq -r '.newly_failed' "$TICK_FILE")
+FIX_PUSHED=$(jq -r '.fix_pushed // "false"' "$TICK_FILE")
 
 NEW_ACTIONS="$PRIOR_ACTIONS"
 if [ "$FIX_PUSHED" = "true" ] && [ -n "$NEWLY_FAILED" ]; then
@@ -53,13 +59,13 @@ $(jq -r '
   "all_pass: \(.all_pass)",
   "rebased: \(.rebased // false)",
   "fix_pushed: \(.fix_pushed // false)"
-' /tmp/ci-babysit-tick.json 2>/dev/null || echo "(unavailable)")
+' "$TICK_FILE" 2>/dev/null || echo "(unavailable)")
 
 ## Check conclusions
 
-$(jq -r '.current_check_conclusions[] | "  [\(.bucket)] \(.name)"' /tmp/ci-babysit-tick.json 2>/dev/null || echo "(unavailable)")
+$(jq -r '.current_check_conclusions[] | "  [\(.bucket)] \(.name)"' "$TICK_FILE" 2>/dev/null || echo "(unavailable)")
 LOGEOF
 
 echo "Tick log: $TICK_LOG"
 
-rm -f /tmp/ci-babysit-state.json /tmp/ci-babysit-tick.json
+rm -f "$STATE_FILE" "$TICK_FILE"

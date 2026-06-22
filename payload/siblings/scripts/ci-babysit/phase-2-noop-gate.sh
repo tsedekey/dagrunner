@@ -1,11 +1,18 @@
 #!/bin/zsh
 set -euo pipefail
 
-HEAD_CHANGED=$(jq -r '.head_changed' /tmp/ci-babysit-tick.json)
-BASE_ADVANCED=$(jq -r '.base_advanced' /tmp/ci-babysit-tick.json)
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+RUN_ID=$(echo "$BRANCH" | sed 's|^feat[a-z]*/||')
+DAGRUNNER_HOME="${DAGRUNNER_HOME:-$HOME/.local/share/dagrunner}"
+ARTIFACTS_DIR="$DAGRUNNER_HOME/runs/$RUN_ID/ci-babysit"
+STATE_FILE="$ARTIFACTS_DIR/ci-babysit-state.json"
+TICK_FILE="$ARTIFACTS_DIR/ci-babysit-tick.json"
 
-CURRENT_CC=$(jq -c '.current_check_conclusions' /tmp/ci-babysit-tick.json)
-PRIOR_CC=$(jq -c '.prior_check_conclusions' /tmp/ci-babysit-tick.json)
+HEAD_CHANGED=$(jq -r '.head_changed' "$TICK_FILE")
+BASE_ADVANCED=$(jq -r '.base_advanced' "$TICK_FILE")
+
+CURRENT_CC=$(jq -c '.current_check_conclusions' "$TICK_FILE")
+PRIOR_CC=$(jq -c '.prior_check_conclusions' "$TICK_FILE")
 
 CHECKS_CHANGED="true"
 [ "$CURRENT_CC" = "$PRIOR_CC" ] && CHECKS_CHANGED="false"
@@ -19,5 +26,5 @@ else
   echo "  head_changed=$HEAD_CHANGED  base_advanced=$BASE_ADVANCED  checks_changed=$CHECKS_CHANGED"
 fi
 
-jq --argjson noop "$NOOP" '. + {noop: $noop}' /tmp/ci-babysit-tick.json \
-  > /tmp/ci-babysit-tick.tmp && mv /tmp/ci-babysit-tick.tmp /tmp/ci-babysit-tick.json
+jq --argjson noop "$NOOP" '. + {noop: $noop}' "$TICK_FILE" \
+  > "$TICK_FILE.tmp" && mv "$TICK_FILE.tmp" "$TICK_FILE"

@@ -1,17 +1,24 @@
 #!/bin/zsh
 set -euo pipefail
 
-NOOP=$(jq -r '.noop // false' /tmp/ci-babysit-tick.json)
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+RUN_ID=$(echo "$BRANCH" | sed 's|^feat[a-z]*/||')
+DAGRUNNER_HOME="${DAGRUNNER_HOME:-$HOME/.local/share/dagrunner}"
+ARTIFACTS_DIR="$DAGRUNNER_HOME/runs/$RUN_ID/ci-babysit"
+STATE_FILE="$ARTIFACTS_DIR/ci-babysit-state.json"
+TICK_FILE="$ARTIFACTS_DIR/ci-babysit-tick.json"
+
+NOOP=$(jq -r '.noop // false' "$TICK_FILE")
 if [ "$NOOP" = "true" ]; then echo "No-op tick — skipping Phase 6."; exit 0; fi
 
-ALL_PASS=$(jq -r '.all_pass' /tmp/ci-babysit-tick.json)
-IS_DRAFT=$(jq -r '.is_draft' /tmp/ci-babysit-tick.json)
-PR_NUMBER=$(jq -r .pr_number /tmp/ci-babysit-state.json)
-REPO_ARG=$(jq -r '.repo' /tmp/ci-babysit-state.json)
+ALL_PASS=$(jq -r '.all_pass' "$TICK_FILE")
+IS_DRAFT=$(jq -r '.is_draft' "$TICK_FILE")
+PR_NUMBER=$(jq -r .pr_number "$STATE_FILE")
+REPO_ARG=$(jq -r '.repo' "$STATE_FILE")
 GH_FLAGS=(); [ -n "$REPO_ARG" ] && GH_FLAGS=(-R "$REPO_ARG")
-CURRENT_HEAD=$(jq -r '.current_head' /tmp/ci-babysit-tick.json)
-BASE_BRANCH=$(jq -r '.base_branch' /tmp/ci-babysit-tick.json)
-BASE_HEAD=$(jq -r '.base_head' /tmp/ci-babysit-tick.json)
+CURRENT_HEAD=$(jq -r '.current_head' "$TICK_FILE")
+BASE_BRANCH=$(jq -r '.base_branch' "$TICK_FILE")
+BASE_HEAD=$(jq -r '.base_head' "$TICK_FILE")
 
 if [ "$ALL_PASS" != "true" ]; then
   echo "Not all checks pass — ready gate not presented."
@@ -28,7 +35,7 @@ else
   echo "Base:  ${BASE_BRANCH} (${BASE_HEAD:0:8})"
   echo ""
   echo "Checks:"
-  jq -r '.checks[] | "  [\(.bucket)]\t\(.name)"' /tmp/ci-babysit-tick.json 2>/dev/null || true
+  jq -r '.checks[] | "  [\(.bucket)]\t\(.name)"' "$TICK_FILE" 2>/dev/null || true
   echo ""
   echo "To mark this PR ready for review, run:"
   echo ""

@@ -1,6 +1,6 @@
 ---
 description: Babysit CI on the open draft PR — one incremental tick: poll checks, rebase, fix failures, surface ready gate
-argument-hint: [--pr <number>] [--run-id <run-id>] [--repo owner/repo]
+argument-hint: (no args needed — PR, run-id, and repo auto-detected from current branch and git remote)
 ---
 
 # /ci-babysit — CI Babysit Tick
@@ -16,7 +16,7 @@ independent. Run repeatedly to babysit continuously:
 ```
 
 **WORKTREE LIFETIME CONSTRAINT:** `dagrun cleanup` MUST NOT run while this command is active and
-the PR is open. Both the worktree and the feature branch must persist for the full PR lifetime.
+the PR is open. Both the worktree and the feat branch must persist for the full PR lifetime.
 ci-babysit fails loud on the next tick if either is gone.
 
 **Field names verified from `gh` v2.93.0 `--help` on this machine. JSON response shapes for live
@@ -36,7 +36,7 @@ scripts for logic changes.
 
 ## Phase 0 — Bootstrap
 
-Parse `$ARGUMENTS`. Validate that this is a dagrunner worktree on a feature branch. Discover the
+Parse `$ARGUMENTS`. Validate that this is a dagrunner worktree on a feat branch. Discover the
 open PR. Fail loud if the worktree or branch is missing, or if no open PR is found.
 
 ```bash
@@ -46,7 +46,7 @@ zsh "$SCRIPT_DIR/phase-0-bootstrap.sh" "$ARGUMENTS"
 
 **PHASE_0_CHECKPOINT:**
 
-- [ ] Running on a `feature/<slug>` branch inside a worktree
+- [ ] Running on a `feat/<slug>` branch inside a worktree
 - [ ] PR number discovered (non-empty)
 - [ ] `/tmp/ci-babysit-state.json` written
 
@@ -161,24 +161,16 @@ If there are no failing checks (e.g., checks are pending or all pass), skip to P
 
 ## Phase 4c — Re-verify locally
 
-After applying fixes, run the relevant local checks to confirm the fix works before pushing.
+After applying the fix, run the relevant local checks before pushing. Do NOT push without local verification.
 
-```bash
-SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/ci-babysit"
-zsh "$SCRIPT_DIR/phase-4c-reverify.sh"
-```
+- **Java module change**: `PATH="$HOME/.asdf/shims:$HOME/.asdf/bin:$PATH" ./mvnw verify -pl <module> -DskipTests=false` for the affected module(s). To run a specific failing test class: add `-Dtest=<ClassName> -DskipITs`. Do NOT use `-Dquickly` — it skips spotless entirely.
+- **Format-only fix**: re-run the formatter (`spotless:apply` or `prettier --write`) and confirm `git diff --stat` shows no further changes.
+- **Frontend/TypeScript change**: `npm run typecheck && npm run lint` (or equivalent for the failing package).
+- **Runtime behavior**: call the relevant REST endpoint or c8ctl command. If the local cluster is not running, state your result explicitly as "STATIC ONLY — runtime re-verification requires a running cluster."
 
-Run the local checks relevant to what was fixed:
+If any check fails: diagnose and fix before proceeding to Phase 4d. Do not push a fix that fails locally.
 
-- **Java module change**: `PATH="$HOME/.asdf/shims:$HOME/.asdf/bin:$PATH" ./mvnw verify -pl <module> -DskipTests=false -Dquickly` for the affected module(s). If a specific test class failed in CI, run it by name: `-Dtest=<ClassName> -DskipITs`.
-- **Frontend/TypeScript change**: `npm run typecheck && npm run lint` (or equivalent for the package that failed).
-- **Format-only fix**: re-run the formatter and confirm `git diff --stat` shows no further changes.
-- **Runtime behavior** (if the cluster is up): call the relevant c8ctl or REST endpoint to confirm the expected behavior.
-
-If any local check fails after the fix: diagnose again and iterate before pushing. Do not push a fix that fails locally.
-
-If the cluster is NOT running and the failure touches runtime behavior: label your verification
-result explicitly as "STATIC ONLY — runtime re-verification requires a running cluster."
+**Important:** When running `spotless:apply`, run it across ALL modules that construct any type your PR changed — not just the modules you directly edited. A call site in a downstream module can exceed the line limit even though you never touched it.
 
 ---
 
@@ -269,26 +261,24 @@ Each tick is independent and idempotent:
 5. When all checks pass: prints readiness summary and `gh pr ready` command; does NOT call it.
    Readiness is re-presented if new work arrives before the human flips.
 6. `dagrun cleanup` is forbidden until PR closes; ci-babysit fails loud (exit 1) if it wakes and
-   the worktree or `feature/<slug>` branch is missing.
+   the worktree or `feat/<slug>` branch is missing.
 
 ---
 
 ## Learnings
 
-If this tick encountered anything unexpected that is **not already documented** in
-`~/.local/share/dagrunner/store/learnings/ci-babysit.md`, append a new entry now using this
-format — keep it brief, one or two lines per field:
+If this tick encountered anything unexpected that is not already captured in prior reflections,
+append one JSON line to `~/.local/share/dagrunner/store/reflection-log.jsonl`:
 
-```markdown
-## YYYY-MM-DD
-
-**Symptom:** <what went wrong or behaved unexpectedly>
-**Root cause:** <why it happened>
-**Resolution:** <what fixed it>
-**Watch for:** <how to spot this early on the next run>
+```json
+{
+  "ts": "<ISO-8601-UTC>",
+  "source": "ci-babysit",
+  "run_id": "<run_id>",
+  "body": "## YYYY-MM-DD\n\n**Symptom:** ...\n**Root cause:** ...\n**Resolution:** ...\n**Watch for:** ..."
+}
 ```
 
-Only log something if it adds knowledge that would prevent wasted time on a future run.
-Routine failures that match expected patterns (format check, test failure, rebase) do not need
-an entry. Novel `gh` field mismatches, tool version surprises, or environment assumptions that
-proved wrong are the right candidates.
+Only log if it adds knowledge that would prevent wasted time on a future run. Routine failures
+(format check, test failure, rebase conflict) do not need an entry. Novel `gh` field mismatches,
+tool-version surprises, or environment assumptions that proved wrong are the right candidates.

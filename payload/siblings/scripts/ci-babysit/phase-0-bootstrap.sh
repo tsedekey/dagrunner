@@ -1,12 +1,14 @@
 #!/bin/zsh
 set -euo pipefail
 
-LEARNINGS_FILE="$HOME/.local/share/dagrunner/store/learnings/ci-babysit.md"
-mkdir -p "$(dirname "$LEARNINGS_FILE")"
-if [ -f "$LEARNINGS_FILE" ]; then
-  echo "=== Prior learnings for /ci-babysit ==="
-  cat "$LEARNINGS_FILE"
-  echo "========================================"
+REFLECTION_LOG="$HOME/.local/share/dagrunner/store/reflection-log.jsonl"
+if [ -f "$REFLECTION_LOG" ]; then
+  PRIOR=$(jq -r 'select(.source == "ci-babysit") | "[\(.ts)]\n\(.body)"' "$REFLECTION_LOG" 2>/dev/null || true)
+  if [ -n "$PRIOR" ]; then
+    echo "=== Prior ci-babysit reflections ==="
+    echo "$PRIOR"
+    echo "====================================="
+  fi
 fi
 
 ARGS="${1:-}"
@@ -33,15 +35,15 @@ if [ -z "$WORKTREE" ]; then
 fi
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-if ! echo "$BRANCH" | grep -q "^feature/"; then
-  echo "ERROR: Current branch '$BRANCH' is not a feature branch (expected feature/<slug>)."
-  echo "ci-babysit runs inside a dagrunner worktree on the feature/<slug> branch."
+if ! echo "$BRANCH" | grep -qE "^feat/"; then
+  echo "ERROR: Current branch '$BRANCH' is not a feat branch (expected feat/<slug>)."
+  echo "ci-babysit runs inside a dagrunner worktree on the feat/<slug> branch."
   exit 1
 fi
 
 RUN_ID="${RUN_ID_ARG:-${DAGRUN_RUN_ID:-}}"
 if [ -z "$RUN_ID" ]; then
-  RUN_ID=$(echo "$BRANCH" | sed 's|^feature/||')
+  RUN_ID=$(echo "$BRANCH" | sed 's|^feat[a-z]*/||')
 fi
 
 GH_FLAGS=()
@@ -60,6 +62,8 @@ fi
 
 ARTIFACTS_DIR="$HOME/.local/share/dagrunner/runs/${RUN_ID}/ci-babysit"
 mkdir -p "$ARTIFACTS_DIR"
+STATE_FILE="$ARTIFACTS_DIR/ci-babysit-state.json"
+TICK_FILE="$ARTIFACTS_DIR/ci-babysit-tick.json"
 
 jq -n \
   --arg run_id "$RUN_ID" \
@@ -69,9 +73,10 @@ jq -n \
   --arg repo "$REPO_ARG" \
   --arg artifacts "$ARTIFACTS_DIR" \
   '{"run_id":$run_id,"pr_number":$pr,"branch":$branch,"worktree":$worktree,"repo":$repo,"artifacts":$artifacts}' \
-  > /tmp/ci-babysit-state.json
+  > "$STATE_FILE"
 
 echo "Run ID:    ${RUN_ID}"
 echo "PR:        #${PR_NUMBER} (branch: ${BRANCH})"
 echo "Worktree:  ${WORKTREE}"
 echo "Artifacts: ${ARTIFACTS_DIR}"
+echo "State:     ${STATE_FILE}"
