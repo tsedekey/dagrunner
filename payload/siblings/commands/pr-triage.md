@@ -55,7 +55,7 @@ if no open PR is found. All values (PR number, repo, run-id) are auto-discovered
 supplied as arguments.
 
 ```bash
-SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/pr-triage"
+SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/pr-triage"
 zsh "$SCRIPT_DIR/phase-0-bootstrap.sh" "$ARGUMENTS"
 ```
 
@@ -73,7 +73,7 @@ zsh "$SCRIPT_DIR/phase-0-bootstrap.sh" "$ARGUMENTS"
 Fetch all three comment types. Compute which are new or edited since the last tick.
 
 ```bash
-SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/pr-triage"
+SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/pr-triage"
 zsh "$SCRIPT_DIR/phase-1-fetch-comments.sh"
 ```
 
@@ -92,7 +92,7 @@ If there are no new or edited comments, this tick has nothing to do. Write `noop
 Phase 5 still runs to update the tick timestamp.
 
 ```bash
-SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/pr-triage"
+SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/pr-triage"
 zsh "$SCRIPT_DIR/phase-2-noop-gate.sh"
 ```
 
@@ -213,6 +213,19 @@ For `needs-code-change` drafts, open the proposed reply section with:
 ```
 
 Then draft the reply text acknowledging the concern and describing the intended change.
+
+For `needs-code-change` drafts, also write an **Implementation plan** section after the proposed reply:
+
+```
+## Implementation plan
+
+- **File(s):** <list the specific file paths>
+- **Change:** <precise description of what to change — line numbers, method names, the before/after>
+- **Why:** <link back to the reviewer's concern>
+```
+
+This section is used by Phase 4 to apply the code change. Make it specific enough that Phase 4 can execute it without re-reading the original comment.
+
 **Do NOT edit any source files. Do NOT stage or commit anything. Do NOT push.**
 
 ### 3.7 Update triage-state.json
@@ -248,6 +261,7 @@ jq --arg key "<state_key>" \
 - [ ] Each new/edited comment has a draft written to `drafts/<id>.md`
 - [ ] Each draft includes: original comment, classification, groundedness, proposed reply
 - [ ] `needs-code-change` drafts are flagged — no source files were edited, no commits made
+- [ ] `needs-code-change` drafts include an "Implementation plan" section with file(s), change, and why
 - [ ] triage-state.json updated with `lifecycle: drafted` for each comment
 
 ---
@@ -261,23 +275,36 @@ For each comment in the current tick's `new_or_edited` set that has `lifecycle: 
 
 ### 4.1 Present the draft
 
-Print the full draft clearly, then ask:
+Print the full draft content, then use the **AskUserQuestion tool** to ask:
 
-```
-Comment [source] id=<id> by <login> (<class>)
----
-<full draft content>
----
-[A]pprove & post  [E]dit then post  [S]kip  [D]efer
-```
+Question: "Comment [source] id=<id> by <login> (<class>) — what should we do?"
+Options:
 
-Wait for human input. **Do not proceed to post without explicit response.**
+- **Approve & post** — post the reply as-is (and apply code change first if needs-code-change)
+- **Edit then post** — show the reply text for human editing, then post the edited version
+- **Skip** — leave the draft; do not post; move on
+- **Defer** — mark deferred; do not post; move on
+
+Wait for the human's selection before proceeding.
 
 ### 4.2 On Approve (A)
 
-Post the reply to the correct thread:
+**If `classification == "needs-code-change"`:**
 
-**Inline comment** (`source == "inline"`):
+1. Read the "Implementation plan" section from the draft file.
+2. Apply the code changes to the worktree — edit the file(s) listed in the implementation plan.
+3. Stage the changed files and commit using a conventional-commit subject line only (no body, no description, no trailers):
+   ```bash
+   git add <specific files only>
+   git commit -m "fix: <brief conventional-commit summary of the change>"
+   ```
+   The commit message must follow CONTRIBUTIONS.md format: subject line only, present tense, imperative mood. Do NOT add a body, description, or Co-Authored-By trailer.
+4. Capture the commit SHA: `COMMIT_SHA=$(git rev-parse --short HEAD)`
+5. Update the proposed reply to reference the commit: append `\n\nFixed in commit ${COMMIT_SHA}.` to the reply body.
+
+**Then post the reply** (for all classifications, including needs-code-change after the above):
+
+For **inline comment** (`source == "inline"`):
 
 ```bash
 REPLY_ID=$(gh api -X POST \
@@ -286,7 +313,7 @@ REPLY_ID=$(gh api -X POST \
   --jq '.id')
 ```
 
-**PR-level issue comment** (`source == "issue"`) or **review summary** (`source == "review"`):
+For **PR-level issue comment** (`source == "issue"`) or **review summary** (`source == "review"`):
 
 ```bash
 REPLY_ID=$(gh api -X POST \
@@ -339,6 +366,7 @@ presented on the next interactive session. Do not mark them skipped; do not post
 - [ ] No comment was posted without explicit per-comment human approval
 - [ ] Each disposition (approve/skip/defer) recorded in triage-state.json
 - [ ] triage-state.json is consistent after each action (no partial writes)
+- [ ] `needs-code-change` approvals: code change applied, committed (summary-only), reply references commit SHA
 
 ---
 
@@ -348,7 +376,7 @@ Advance the `since` marker and write the tick log. Runs even on a no-op tick. An
 tick that did not reach Phase 5 will re-process on the next wake (fail-safe).
 
 ```bash
-SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/pr-triage"
+SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/pr-triage"
 zsh "$SCRIPT_DIR/phase-5-persist.sh"
 ```
 
@@ -405,24 +433,25 @@ Each tick is independent and idempotent:
    the worktree or `feature/<slug>` branch is missing.
 7. Coexistence with ci-babysit: pr-triage never writes to `ci-babysit/` artifacts, never calls
    git push, never modifies source files.
+8. A `needs-code-change` comment approved by the human: code change applied to worktree, committed with summary-only conventional commit, reply posted referencing the commit SHA.
 
 ---
 
-## Learnings
+## Reflections
 
-If this tick encountered anything unexpected that is **not already documented** in
-`~/.local/share/dagrunner/store/learnings/pr-triage.md`, append a new entry now using this
-format — keep it brief, one or two lines per field:
+If this tick encountered anything unexpected that would prevent wasted time on a future run,
+append one JSON line to `~/.local/share/dagrunner/store/reflection-log.jsonl`:
 
-```markdown
-## YYYY-MM-DD
-
-**Symptom:** <what went wrong or behaved unexpectedly>
-**Root cause:** <why it happened>
-**Resolution:** <what fixed it>
-**Watch for:** <how to spot this early on the next run>
+```bash
+printf '%s\n' "$(jq -n \
+  --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg source "pr-triage" \
+  --arg run_id "${DAGRUN_RUN_ID:-unknown}" \
+  --arg body "## $(date -u +%Y-%m-%d)\n\n**Symptom:** ...\n**Root cause:** ...\n**Resolution:** ...\n**Watch for:** ..." \
+  '{ts: $ts, source: $source, run_id: $run_id, body: $body}')" \
+  >> ~/.local/share/dagrunner/store/reflection-log.jsonl
 ```
 
-Only log something if it adds knowledge that would prevent wasted time on a future run.
-Routine classification decisions (bot nit, human question) do not need an entry. Novel `gh`
-field mismatches, endpoint surprises, or grounding edge cases are the right candidates.
+Only log if it adds knowledge not already in the log. Routine classification decisions (bot nit,
+human question) do not need an entry. Novel `gh` field mismatches, endpoint surprises, or
+grounding edge cases are the right candidates.
