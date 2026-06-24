@@ -67,10 +67,9 @@ as required by the Camunda monorepo:
 <type>: <short description>
 ```
 
-- **type** — pick the one that best fits the work: `feat` (new feature), `fix` (bug fix),
-  `docs` (documentation only), `chore` (maintenance), `refactor` (no behavior change),
-  `test` (tests only), `ci` (CI changes), `build`, `perf`, `style`, `revert`.
-  Read `plan.md` and `implement/summary.md` to decide.
+- **type** — read `$DAGRUN_PR_TITLE_PREFIX` from the environment first. It is set by dagrunner
+  to the correct type prefix for this workflow (e.g. `feat:`). Use it verbatim. Only fall back to
+  deriving the type from `plan.md` and `implement/summary.md` if the env var is empty or absent.
 - **short description** — lowercase, imperative mood, no period, ≤60 chars after the prefix.
   Example: `feat: add retry logic to job activation` ✓ `feat: Added Retry Logic` ✗
 
@@ -105,11 +104,11 @@ cd "$DAGRUN_WORKTREE"
 git status --short
 ```
 
-If there are uncommitted changes, commit them:
+If there are uncommitted changes, commit them using the same type prefix as the PR title:
 
 ```bash
 git add -A
-git commit -m "<type>: <short description> (dagrun: $DAGRUN_RUN_ID)"
+git commit -m "${DAGRUN_PR_TITLE_PREFIX:-feat} <short description> (dagrun: $DAGRUN_RUN_ID)"
 ```
 
 Under normal flow `implement.md` commits first — this is a no-op if that happened.
