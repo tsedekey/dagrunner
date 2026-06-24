@@ -51,11 +51,11 @@ GH_FLAGS=()
 if [ -n "$PR_NUMBER_ARG" ]; then
   PR_NUMBER="$PR_NUMBER_ARG"
 else
-  PR_NUMBER=$(gh pr view --json number --jq '.number' "${GH_FLAGS[@]}" 2>/dev/null || echo "")
+  PR_NUMBER=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number' "${GH_FLAGS[@]}" 2>/dev/null || echo "")
 fi
 if [ -z "$PR_NUMBER" ]; then
-  echo "ERROR: No open PR found for branch '$BRANCH'."
-  echo "The dagrunner 'pr' node must open the PR before running ci-babysit."
+  echo "ERROR: No PR found for branch '$BRANCH' (draft or open)."
+  echo "The dagrunner 'pr' node must create the PR (draft is fine) before running ci-babysit."
   echo "  gh pr list --head $BRANCH   — confirm PR existence"
   exit 1
 fi

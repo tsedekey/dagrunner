@@ -1,5 +1,5 @@
 ---
-description: Babysit CI on the open draft PR — one incremental tick: poll checks, rebase, fix failures, surface ready gate
+description: Babysit CI on the PR (draft or open) — one incremental tick: poll checks, rebase, fix failures, surface ready gate
 argument-hint: (no args needed — PR, run-id, and repo auto-detected from current branch and git remote)
 ---
 
@@ -37,7 +37,7 @@ scripts for logic changes.
 ## Phase 0 — Bootstrap
 
 Parse `$ARGUMENTS`. Validate that this is a dagrunner worktree on a feat branch. Discover the
-open PR. Fail loud if the worktree or branch is missing, or if no open PR is found.
+PR (draft or open). Fail loud if the worktree or branch is missing, or if no PR is found.
 
 ```bash
 SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/ci-babysit"
