@@ -176,6 +176,8 @@ export function buildSeededSettings(opts: {
         "Read(**/.env.*)",
         "Read(**/secrets/**)",
         "Write(**/.env*)",
+        "Write(**/.gitignore)",
+        "Write(.claude/**)",
         // camunda-knowledge MCP — tools that must remain off-limits
         "mcp__camunda-knowledge__history_search",
         "mcp__camunda-knowledge__incident_search",

@@ -375,3 +375,11 @@ Format: `<block> · <decision> · <why>`
 - run-id-format · DAGRUN_PR_TITLE_PREFIX is wired but unconsumed by pr.md · the prompt uses Conventional Commits format but does not read the env var; updating pr.md is a follow-up; the var is available to the session for a future prompt edit
 
 - run-id-format · re-run branch collision is spec-mandated and not fixed · a second dagrun start for the same issue produces the same branch name (feat/{issueNum}-{slug}); git worktree add will fail; this is by design (the issue number is the uniqueness key); the operator must delete the old branch before starting a new run for the same issue
+
+## worktree-exclude-location (fix-worktree-pollution)
+
+- worktree-exclude-location · `seedWorktreeExclude` uses `--git-common-dir`, NOT `--git-dir`, for the info/exclude path · empirically confirmed: `git rev-parse --git-dir` in a worktree returns the per-worktree gitdir (`.git/worktrees/<name>`); git resolves `info/exclude` only from the common gitdir; writing to the per-worktree gitdir is a silent no-op; `--git-common-dir` returns the shared `.git/` dir that git actually reads; test run confirmed this difference (per-worktree: `?? foo.txt`; common-dir: empty status)
+
+- worktree-exclude-location · append+marker strategy instead of overwrite · the common gitdir is shared with the DEVHARNESS_SRC main checkout and all sibling worktrees; overwriting `info/exclude` would clobber any user patterns already present; append-with-idempotent-marker adds the dagrunner block once and never duplicates or clobbers; the marker `# dagrunner artifact backstop — auto-generated, do not edit` is the guard
+
+- worktree-exclude-location · `matchesHygienePattern` signature extended to `(filePath, name, pattern)` with explicit directory and glob-prefix branches · directory patterns (`.claude/`) and `**/`-prefixed patterns (`**/target/`) must match against the full path, not just the basename; branch ordering: dir-slash and `**/` before generic `*`-glob to prevent `**/target/` falling into the wrong case; test cases verify both the happy path (match) and a non-match (non-directory with 'target' in name)

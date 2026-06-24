@@ -288,6 +288,35 @@ test("findWorktreeScratch: malformed line without space is ignored (teeth)", () 
   assert.deepEqual(result, []);
 });
 
+test("findWorktreeScratch: directory pattern .claude/ matches ?? .claude/ (root-level dir)", () => {
+  // git status --porcelain shows untracked dirs as "?? .claude/"
+  const result = findWorktreeScratch(["?? .claude/"], [".claude/"]);
+  assert.deepEqual(result, [".claude/"]);
+});
+
+test("findWorktreeScratch: **/target/ pattern matches nested build output dir", () => {
+  // git status --porcelain collapses ignored dirs as "!! java/engine/target/"
+  const result = findWorktreeScratch(
+    ["!! java/engine/target/"],
+    ["**/target/"],
+  );
+  assert.deepEqual(result, ["java/engine/target/"]);
+});
+
+test("findWorktreeScratch: **/target/ does NOT match an unrelated path with 'target' in name", () => {
+  const result = findWorktreeScratch(
+    ["?? src/target-config.json"],
+    ["**/target/"],
+  );
+  assert.deepEqual(result, []);
+});
+
+test("findWorktreeScratch: existing basename tests still pass after signature change", () => {
+  // guard: pre-existing basename test still works (subdir/guide.md matched by guide.md)
+  const result = findWorktreeScratch(["!! subdir/guide.md"], ["guide.md"]);
+  assert.deepEqual(result, ["subdir/guide.md"]);
+});
+
 // ---------------------------------------------------------------------------
 // worktreeArtifactPatterns
 // ---------------------------------------------------------------------------
@@ -313,7 +342,14 @@ test("worktreeArtifactPatterns: includes all featureWorkflow produces filenames"
 
 test("worktreeArtifactPatterns: includes secondary scratch patterns", () => {
   const patterns = worktreeArtifactPatterns();
-  for (const p of ["*.tmp", "*-state.json", "pr-meta.json", ".gitignore"]) {
+  for (const p of [
+    "*.tmp",
+    "*-state.json",
+    "pr-meta.json",
+    ".gitignore",
+    ".claude/",
+    "**/target/",
+  ]) {
     assert.ok(patterns.includes(p), `expected secondary pattern "${p}"`);
   }
 });

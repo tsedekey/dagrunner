@@ -36,6 +36,8 @@
       "Read(**/.env.*)",
       "Read(**/secrets/**)",
       "Write(**/.env*)",
+      "Write(**/.gitignore)",
+      "Write(.claude/**)",
       "mcp__camunda-knowledge__history_search",
       "mcp__camunda-knowledge__incident_search",
       "mcp__camunda-knowledge__sg_search",

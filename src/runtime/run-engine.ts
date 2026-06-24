@@ -247,7 +247,14 @@ export function worktreeArtifactPatterns(): string[] {
     }
   }
   // Secondary scratch patterns that aren't in produces.
-  for (const p of ["*.tmp", "*-state.json", "pr-meta.json", ".gitignore"]) {
+  for (const p of [
+    "*.tmp",
+    "*-state.json",
+    "pr-meta.json",
+    ".gitignore",
+    ".claude/",
+    "**/target/",
+  ]) {
     names.add(p);
   }
   return Array.from(names);
@@ -272,34 +279,83 @@ export function findWorktreeScratch(
     if (line[2] !== " ") continue; // guard: must be "XY " not "XY<no-space>"
     const filePath = line.slice(3).trim();
     const name = filePath.split("/").pop() ?? filePath;
-    if (patterns.some((p) => matchesHygienePattern(name, p))) {
+    if (patterns.some((p) => matchesHygienePattern(filePath, name, p))) {
       result.push(filePath);
     }
   }
   return result;
 }
 
-function matchesHygienePattern(name: string, pattern: string): boolean {
+function matchesHygienePattern(
+  filePath: string,
+  name: string,
+  pattern: string,
+): boolean {
+  // Directory-style pattern: ".claude/" or "target/" — match if path ends with
+  // "/{dir}" or equals the dir name (with trailing slash preserved in filePath).
+  if (pattern.endsWith("/") && !pattern.startsWith("**/")) {
+    const dir = pattern.slice(0, -1); // strip trailing "/"
+    return (
+      filePath === pattern ||
+      filePath.endsWith(`/${dir}/`) ||
+      filePath === `${dir}/`
+    );
+  }
+  // Glob prefix "**/" — match any path segment that ends with the suffix.
+  // e.g. "**/target/" matches "java/engine/target/" and "target/"
+  if (pattern.startsWith("**/")) {
+    const suffix = pattern.slice(3); // strip "**/"
+    return filePath === suffix || filePath.endsWith(`/${suffix}`);
+  }
+  // Glob suffix "*" — match by name suffix (e.g. "*.tmp", "*-state.json").
   if (pattern.startsWith("*")) return name.endsWith(pattern.slice(1));
+  // Exact match on basename.
   return name === pattern;
 }
 
 /**
- * Write a .gitignore to the worktree root seeded with dagrunner artifact and
- * scratch patterns. The file lists itself so it doesn't appear in git status.
- * Fail-soft: logs a warning on error and never throws.
+ * Write dagrunner artifact patterns to the DEVHARNESS_SRC repo's common
+ * .git/info/exclude so they apply to the worktree without touching any tracked
+ * file. Uses --git-common-dir (the repo's shared .git dir) because git only
+ * reads info/exclude from the common gitdir, not per-worktree gitdirs.
+ *
+ * Append-with-marker strategy: if the dagrunner block is already present
+ * (idempotent guard), skip. Otherwise append it. Never overwrites the whole
+ * file — preserves any pre-existing user patterns. Fail-soft: logs a warning
+ * on error and never throws.
  */
-function seedWorktreeGitignore(worktreePath: string, patterns: string[]): void {
+function seedWorktreeExclude(worktreePath: string, patterns: string[]): void {
+  const MARKER = "# dagrunner artifact backstop — auto-generated, do not edit";
   try {
-    const lines = [
-      "# dagrunner artifact backstop — auto-generated, do not edit",
-      ...patterns,
-      "",
-    ].join("\n");
-    writeFileSync(join(worktreePath, ".gitignore"), lines, "utf8");
+    const commonDir = execSync("git rev-parse --git-common-dir", {
+      cwd: worktreePath,
+      encoding: "utf8",
+    }).trim();
+    const resolvedCommonDir = commonDir.startsWith("/")
+      ? commonDir
+      : join(worktreePath, commonDir);
+    const infoDir = join(resolvedCommonDir, "info");
+    mkdirSync(infoDir, { recursive: true });
+    const excludePath = join(infoDir, "exclude");
+
+    // Read existing content (may not exist yet).
+    let existing = "";
+    try {
+      existing = readFileSync(excludePath, "utf8");
+    } catch {
+      // file absent — start fresh
+    }
+
+    // Idempotent: if marker already present, do not append again.
+    if (existing.includes(MARKER)) return;
+
+    const block =
+      (existing.length > 0 && !existing.endsWith("\n") ? "\n" : "") +
+      [MARKER, ...patterns, ""].join("\n");
+    writeFileSync(excludePath, existing + block, "utf8");
   } catch (err) {
     process.stderr.write(
-      `dagrun: warning — could not seed worktree .gitignore: ${String(err)}\n`,
+      `dagrun: warning — could not seed worktree exclude: ${String(err)}\n`,
     );
   }
 }
@@ -524,10 +580,11 @@ export async function startRun(opts: {
     stdio: "inherit",
   });
 
-  // Structural scratch backstop: seed .gitignore in the worktree so known
+  // Structural scratch backstop: seed the repo's .git/info/exclude so known
   // artifact filenames can never be staged or committed even if a prompt
-  // accidentally writes to cwd instead of $DAGRUN_ARTIFACTS.
-  seedWorktreeGitignore(worktreePath, worktreeArtifactPatterns());
+  // accidentally writes to cwd instead of $DAGRUN_ARTIFACTS. Uses the common
+  // gitdir (not per-worktree) — see DECISIONS.md § worktree-exclude-location.
+  seedWorktreeExclude(worktreePath, worktreeArtifactPatterns());
 
   // Seed the worktree's .claude/ with dagrunner's bundled commands + hooks + a
   // node-run settings.json. Without this, a source repo with no .claude/commands/
