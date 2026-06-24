@@ -40,7 +40,7 @@ Parse `$ARGUMENTS`. Validate that this is a dagrunner worktree on a feat branch.
 PR (draft or open). Fail loud if the worktree or branch is missing, or if no PR is found.
 
 ```bash
-SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/ci-babysit"
+SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/ci-babysit"
 zsh "$SCRIPT_DIR/phase-0-bootstrap.sh" "$ARGUMENTS"
 ```
 
@@ -48,7 +48,7 @@ zsh "$SCRIPT_DIR/phase-0-bootstrap.sh" "$ARGUMENTS"
 
 - [ ] Running on a `feat/<slug>` branch inside a worktree
 - [ ] PR number discovered (non-empty)
-- [ ] `/tmp/ci-babysit-state.json` written
+- [ ] `~/.local/share/dagrunner/runs/{run_id}/ci-babysit/ci-babysit-state.json` written
 
 ---
 
@@ -58,7 +58,7 @@ Load `since-state.json`. Fetch current PR head SHA, base branch state, and check
 Compute what has changed since the last tick.
 
 ```bash
-SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/ci-babysit"
+SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/ci-babysit"
 zsh "$SCRIPT_DIR/phase-1-fetch-state.sh"
 ```
 
@@ -68,7 +68,7 @@ zsh "$SCRIPT_DIR/phase-1-fetch-state.sh"
 - [ ] Base branch state fetched
 - [ ] Check conclusions fetched (or empty with warning)
 - [ ] Transitions computed
-- [ ] `/tmp/ci-babysit-tick.json` written
+- [ ] `~/.local/share/dagrunner/runs/{run_id}/ci-babysit/ci-babysit-tick.json` written
 
 ---
 
@@ -79,7 +79,7 @@ to act on. Writes `noop=true` into tick.json so phases 3–5 self-skip; Phase 6 
 write the tick log.
 
 ```bash
-SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/ci-babysit"
+SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/ci-babysit"
 zsh "$SCRIPT_DIR/phase-2-noop-gate.sh"
 ```
 
@@ -97,7 +97,7 @@ rebase exits non-zero, STOP immediately and surface the conflict — do not gues
 conflicts. Push with `--force-with-lease` after a clean rebase.
 
 ```bash
-SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/ci-babysit"
+SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/ci-babysit"
 zsh "$SCRIPT_DIR/phase-3-rebase.sh"
 ```
 
@@ -115,7 +115,7 @@ Fetch the failure log for every check currently in `fail` bucket. Write logs to
 `$ARTIFACTS_DIR/check-logs/` for Phase 4b diagnosis.
 
 ```bash
-SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/ci-babysit"
+SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/ci-babysit"
 zsh "$SCRIPT_DIR/phase-4a-collect-logs.sh"
 ```
 
@@ -180,7 +180,7 @@ After local re-verification passes, push the fix. Then exit — do not wait for 
 tick. The next tick will observe the updated check results.
 
 ```bash
-SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/ci-babysit"
+SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/ci-babysit"
 zsh "$SCRIPT_DIR/phase-4d-push.sh"
 ```
 
@@ -197,7 +197,7 @@ zsh "$SCRIPT_DIR/phase-4d-push.sh"
 Present the draft → ready summary when all checks pass. **NEVER call `gh pr ready` automatically.**
 
 ```bash
-SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/ci-babysit"
+SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/ci-babysit"
 zsh "$SCRIPT_DIR/phase-5-ready-gate.sh"
 ```
 
@@ -215,7 +215,7 @@ Advance the `since` marker only after all actions in this tick are complete. An 
 that did not reach Phase 6 will re-process the same transitions on the next wake (fail-safe).
 
 ```bash
-SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/ci-babysit"
+SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/ci-babysit"
 zsh "$SCRIPT_DIR/phase-6-persist.sh"
 ```
 
