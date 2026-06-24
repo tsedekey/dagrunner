@@ -187,7 +187,7 @@ export function buildSeededSettings(opts: {
       ],
     },
     sandbox: {
-      enabled: true,
+      enabled: false,
       autoAllowBashIfSandboxed: true,
       network: {
         allowedDomains: [
@@ -201,6 +201,8 @@ export function buildSeededSettings(opts: {
           "central.maven.org",
           "*.maven.org",
           "plugins.gradle.org",
+          "localhost",
+          "127.0.0.1",
         ],
       },
     },

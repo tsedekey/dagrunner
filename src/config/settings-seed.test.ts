@@ -59,7 +59,7 @@ test("buildSeededSettings: owned keys (permissions/sandbox/hooks) come from dagr
     sandbox !== null && typeof sandbox === "object",
     "sandbox must be present",
   );
-  assert.equal(sandbox["enabled"], true);
+  assert.equal(sandbox["enabled"], false);
   assert.equal(sandbox["autoAllowBashIfSandboxed"], true);
 
   // hooks — all four lifecycle hooks present

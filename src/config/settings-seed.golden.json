@@ -46,7 +46,7 @@
     ]
   },
   "sandbox": {
-    "enabled": true,
+    "enabled": false,
     "autoAllowBashIfSandboxed": true,
     "network": {
       "allowedDomains": [
@@ -59,7 +59,9 @@
         "repo.maven.apache.org",
         "central.maven.org",
         "*.maven.org",
-        "plugins.gradle.org"
+        "plugins.gradle.org",
+        "localhost",
+        "127.0.0.1"
       ]
     }
   },
