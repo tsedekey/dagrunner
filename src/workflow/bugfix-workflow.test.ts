@@ -1,0 +1,115 @@
+/**
+ * bugfix-workflow.test.ts — schema-contract tests for bugfixWorkflow.
+ *
+ * Mirrors the pattern from feature-workflow.test.ts:
+ *   bugfixWorkflow must pass loadWorkflow (valid dependsOn chain, node ids, model strings).
+ *
+ * Run with:
+ *   node --test --import tsx src/workflow/bugfix-workflow.test.ts
+ */
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+import { bugfixWorkflow } from "./bugfix-workflow.js";
+import { loadWorkflow } from "./workflow.js";
+
+// ---------------------------------------------------------------------------
+// loadWorkflow contract
+// ---------------------------------------------------------------------------
+
+test("bugfixWorkflow: passes loadWorkflow (valid workflow)", () => {
+  // loadWorkflow throws on invalid workflows — if this passes, the schema is valid.
+  assert.doesNotThrow(() => loadWorkflow(bugfixWorkflow));
+});
+
+test("bugfixWorkflow: name is 'bugfix'", () => {
+  assert.equal(bugfixWorkflow.name, "bugfix");
+});
+
+// ---------------------------------------------------------------------------
+// Node shape
+// ---------------------------------------------------------------------------
+
+test("bugfixWorkflow: has exactly 5 nodes", () => {
+  assert.equal(bugfixWorkflow.nodes.length, 5);
+});
+
+test("bugfixWorkflow: node ids are reproduce, implement, review, fix, pr", () => {
+  const ids = bugfixWorkflow.nodes.map((n) => n.id);
+  assert.deepEqual(ids, ["reproduce", "implement", "review", "fix", "pr"]);
+});
+
+test("bugfixWorkflow: reproduce produces guide.md and has a gate", () => {
+  const node = bugfixWorkflow.nodes.find((n) => n.id === "reproduce");
+  assert.ok(node !== undefined, "reproduce node must exist");
+  assert.deepEqual(node.produces, ["guide.md"]);
+  assert.ok(node.gate !== undefined, "reproduce must have a gate");
+});
+
+test("bugfixWorkflow: implement depends on reproduce", () => {
+  const node = bugfixWorkflow.nodes.find((n) => n.id === "implement");
+  assert.ok(node !== undefined);
+  assert.ok(
+    node.dependsOn?.includes("reproduce"),
+    "implement must depend on reproduce",
+  );
+});
+
+test("bugfixWorkflow: review depends on implement", () => {
+  const node = bugfixWorkflow.nodes.find((n) => n.id === "review");
+  assert.ok(node !== undefined);
+  assert.ok(
+    node.dependsOn?.includes("implement"),
+    "review must depend on implement",
+  );
+});
+
+test("bugfixWorkflow: fix depends on review and has a gate", () => {
+  const node = bugfixWorkflow.nodes.find((n) => n.id === "fix");
+  assert.ok(node !== undefined);
+  assert.ok(node.dependsOn?.includes("review"), "fix must depend on review");
+  assert.ok(node.gate !== undefined, "fix must have a gate");
+});
+
+test("bugfixWorkflow: pr depends on fix", () => {
+  const node = bugfixWorkflow.nodes.find((n) => n.id === "pr");
+  assert.ok(node !== undefined);
+  assert.ok(node.dependsOn?.includes("fix"), "pr must depend on fix");
+});
+
+test("bugfixWorkflow: no verify node (regression testing is automated)", () => {
+  const verify = bugfixWorkflow.nodes.find((n) => n.id === "verify");
+  assert.equal(
+    verify,
+    undefined,
+    "bugfix workflow must not have a verify node",
+  );
+});
+
+test("bugfixWorkflow: pr uses haiku model", () => {
+  const node = bugfixWorkflow.nodes.find((n) => n.id === "pr");
+  assert.ok(node !== undefined);
+  assert.equal(node.model, "haiku");
+});
+
+test("bugfixWorkflow: fix has revisionInstruction", () => {
+  const node = bugfixWorkflow.nodes.find((n) => n.id === "fix");
+  assert.ok(node !== undefined);
+  assert.ok(
+    typeof node.revisionInstruction === "string" &&
+      node.revisionInstruction.length > 0,
+    "fix must have revisionInstruction",
+  );
+});
+
+test("bugfixWorkflow: implement and fix have formatCommand", () => {
+  for (const nodeId of ["implement", "fix"] as const) {
+    const node = bugfixWorkflow.nodes.find((n) => n.id === nodeId);
+    assert.ok(node !== undefined);
+    assert.ok(
+      typeof node.formatCommand === "string" && node.formatCommand.length > 0,
+      `${nodeId} must have formatCommand`,
+    );
+  }
+});

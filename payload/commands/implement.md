@@ -1,6 +1,9 @@
-Read the implementation guide at $DAGRUN_ARTIFACTS/../define/guide.md.
+Read the implementation guide. Check these paths in order and use the first one that exists:
 
-Also check for any reviewer feedback files at $DAGRUN_ARTIFACTS/../define/feedback-\*.md.
+1. `$DAGRUN_ARTIFACTS/../define/guide.md` (feature workflow)
+2. `$DAGRUN_ARTIFACTS/../reproduce/guide.md` (bugfix workflow)
+
+Also check for any reviewer feedback files at the same directory as the guide (`feedback-\*.md`).
 If any feedback files exist, incorporate those instructions into the implementation — they represent
 reviewer requests that were not fully addressed in the guide itself.
 
@@ -27,10 +30,10 @@ git status --short
 
 If the working tree is already clean (nothing to commit), note it in summary.md and skip the commit.
 
-Otherwise commit with a title derived from the first heading in `$DAGRUN_ARTIFACTS/../define/guide.md`:
+Otherwise commit with a title derived from the first heading in the guide.md you read in Step 1:
 
 ```bash
-git commit -m "feat: <concise title ≤70 chars from guide.md>"
+git commit -m "${DAGRUN_PR_TITLE_PREFIX:-feat} <concise title ≤70 chars from guide.md>"
 ```
 
 Do not push — the pr node handles the push.

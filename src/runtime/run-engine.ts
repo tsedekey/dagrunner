@@ -116,7 +116,7 @@ export function parseGateDecision(
 }
 
 /** Node IDs that night-mode may auto-approve (Gate 1 + Gate 2). */
-const AGENT_DECIDABLE_GATES = new Set(["define", "fix"]);
+const AGENT_DECIDABLE_GATES = new Set(["define", "reproduce", "fix"]);
 
 /**
  * True when night-mode may auto-decide the gate for nodeId.
@@ -149,7 +149,8 @@ function issueNumFromPlanPath(planPath: string): string {
 
 /**
  * Extract the slug segment from a plan filename.
- * Strips the leading "{issueNum}-" prefix and the "-plan" suffix.
+ * Strips the leading "{issueNum}-" prefix and the "-fix-plan" or "-plan" suffix.
+ * e.g. "53856-null-pointer-fix-plan.md" → "null-pointer"
  * e.g. "53856-single-job-priority-update-grpc-plan.md" → "single-job-priority-update-grpc"
  * Falls back to the full filename (without extension) if no prefix/suffix found.
  */
@@ -157,9 +158,58 @@ function slugFromPlanPath(planPath: string): string {
   const name = basename(planPath, ".md");
   // Strip leading "{digits}-" prefix if present.
   const withoutPrefix = name.replace(/^\d+-/, "");
-  // Strip trailing "-plan" suffix if present.
-  const withoutSuffix = withoutPrefix.replace(/-plan$/, "");
+  // Strip trailing "-fix-plan" suffix first (more specific), then "-plan".
+  const withoutSuffix = withoutPrefix
+    .replace(/-fix-plan$/, "")
+    .replace(/-plan$/, "");
   return withoutSuffix !== "" ? withoutSuffix : name;
+}
+
+// ---------------------------------------------------------------------------
+// Frontmatter parsing
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a YAML-like frontmatter block (between --- delimiters) from plan content.
+ * Supports simple `key: value` pairs only — no nested objects or arrays.
+ * Returns a record of string key → string value for all parsed lines.
+ * Returns an empty record when no frontmatter is present.
+ * Exported for unit testing. Pure function — no I/O.
+ */
+export function parseFrontmatter(content: string): Record<string, string> {
+  if (content === "" || !content.startsWith("---")) return {};
+  const lines = content.split("\n");
+  // Find closing --- (must be after line 0)
+  const closeIdx = lines.findIndex((l, i) => i > 0 && l.trimEnd() === "---");
+  if (closeIdx === -1) return {};
+
+  const result: Record<string, string> = {};
+  for (let i = 1; i < closeIdx; i++) {
+    const line = lines[i] ?? "";
+    // key: value — split on first colon only
+    const colonIdx = line.indexOf(":");
+    if (colonIdx === -1) continue;
+    const key = line.slice(0, colonIdx).trim();
+    const value = line.slice(colonIdx + 1).trim();
+    if (key !== "") result[key] = value;
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Severity-aware night-mode
+// ---------------------------------------------------------------------------
+
+/**
+ * True when bug severity forces night-mode to pause regardless of concern flags.
+ * Critical and blocker severity bugs always require a human gate — even in unattended mode.
+ * Accepts undefined (returns false — safe default, no pause forced).
+ * Exported for unit testing. Pure function — no I/O.
+ */
+export function severityForcesPause(severity: string | undefined): boolean {
+  if (severity === undefined) return false;
+  const lower = severity.toLowerCase();
+  return lower === "critical" || lower === "blocker";
 }
 
 /**
@@ -193,6 +243,7 @@ export function makeRunId(planPath: string, runsDir: string): string {
 
 const WORKFLOW_TYPE_PREFIX: Record<string, string> = {
   feature: "feat",
+  bugfix: "fix",
   fix: "fix",
   docs: "docs",
   chore: "chore",
@@ -467,6 +518,7 @@ import {
 import { acquireLock, releaseLock } from "../core/lock.js";
 import { makeSDKRunner } from "./sdk-runner.js";
 import { featureWorkflow } from "../workflow/feature-workflow.js";
+import { bugfixWorkflow } from "../workflow/bugfix-workflow.js";
 import { loadWorkflow } from "../workflow/workflow.js";
 import {
   readSourcePassthrough,
@@ -524,6 +576,7 @@ function makeInitialNodeStates(workflow: Workflow): Record<string, NodeState> {
 
 function workflowFromState(state: RunState): Workflow {
   if (state.workflow === "feature") return featureWorkflow;
+  if (state.workflow === "bugfix") return bugfixWorkflow;
   throw new Error(`run-engine: unknown workflow "${state.workflow}"`);
 }
 
@@ -568,17 +621,44 @@ export async function startRun(opts: {
   if (force === true) releaseLock(homeDir);
   acquireLock(homeDir, runId);
 
+  // Parse frontmatter from plan to extract base_branch, severity, issueUrl.
+  // Must happen before worktree creation (base_branch determines start-point).
+  const planContent = readFileSync(planPath, "utf8");
+  const frontmatter = parseFrontmatter(planContent);
+  const baseBranch = frontmatter["base_branch"] ?? "main";
+  const severity = frontmatter["severity"];
+  const issueUrl = frontmatter["issue"];
+
+  // Validate base branch exists in DEVHARNESS_SRC before any side effects.
+  // Fail loud — a typo in base_branch would silently branch from HEAD.
+  try {
+    execSync(`git rev-parse --verify --quiet "${baseBranch}"`, {
+      cwd: config.DEVHARNESS_SRC,
+      stdio: "pipe",
+    });
+  } catch {
+    releaseLock(homeDir);
+    process.stderr.write(
+      `dagrun: base_branch "${baseBranch}" not found in DEVHARNESS_SRC — fetch it first\n`,
+    );
+    process.exit(1);
+  }
+
   // Create run directory and copy plan.
   mkdirSync(join(runDir, "plan"), { recursive: true });
   cpSync(planPath, join(runDir, "plan", "plan.md"));
 
   const branchName = makeBranchName(workflow.name, planPath);
 
-  // Create git worktree from DEVHARNESS_SRC (must run in that repo's root).
-  execSync(`git worktree add "${worktreePath}" -b "${branchName}"`, {
-    cwd: config.DEVHARNESS_SRC,
-    stdio: "inherit",
-  });
+  // Create git worktree from DEVHARNESS_SRC, branching from baseBranch start-point.
+  // For feature workflow baseBranch is always "main"; for bugfix it may be a release branch.
+  execSync(
+    `git worktree add "${worktreePath}" -b "${branchName}" "${baseBranch}"`,
+    {
+      cwd: config.DEVHARNESS_SRC,
+      stdio: "inherit",
+    },
+  );
 
   // Structural scratch backstop: seed the repo's .git/info/exclude so known
   // artifact filenames can never be staged or committed even if a prompt
@@ -658,6 +738,10 @@ export async function startRun(opts: {
     branch: branchName,
     sourcePlanPath: planPath,
     nodes: makeInitialNodeStates(workflow),
+    // Frontmatter fields — survive resume via state.json.
+    ...(baseBranch !== "main" ? { baseBranch } : {}),
+    ...(severity !== undefined ? { severity } : {}),
+    ...(issueUrl !== undefined ? { issueUrl } : {}),
   };
 
   writeState(stateFile, state);
@@ -703,6 +787,17 @@ export async function startRun(opts: {
         releaseLock(homeDir);
         process.stdout.write(
           `dagrun: [night] paused — "${gateNodeId}" requires human decision\n`,
+        );
+        process.stdout.write(`dagrun: resume with: dagrun resume ${runId}\n`);
+        return;
+      }
+
+      // Severity-aware pause: critical/blocker bugs always require a human gate,
+      // regardless of whether concerns are flagged in the artifact.
+      if (severityForcesPause(nightState.severity)) {
+        releaseLock(homeDir);
+        process.stdout.write(
+          `dagrun: [night] paused at gate "${gateNodeId}" — severity "${nightState.severity ?? ""}" requires human review\n`,
         );
         process.stdout.write(`dagrun: resume with: dagrun resume ${runId}\n`);
         return;
@@ -1276,10 +1371,11 @@ function runPrPostProcess(state: RunState, runDir: string): void {
     return;
   }
 
-  // Create the draft PR.
+  // Create the draft PR, targeting the run's base branch (supports hotfix branches).
+  const baseBranch = state.baseBranch ?? "main";
   try {
     const url = execSync(
-      `gh pr create --draft --title ${JSON.stringify(title)} --body-file "${bodyPath}" --base main`,
+      `gh pr create --draft --title ${JSON.stringify(title)} --body-file "${bodyPath}" --base ${JSON.stringify(baseBranch)}`,
       { cwd: worktreePath, encoding: "utf8" },
     ).trim();
     meta["prUrl"] = url;
@@ -1290,7 +1386,7 @@ function runPrPostProcess(state: RunState, runDir: string): void {
     writeFileSync(errorPath, `gh pr create failed: ${msg}\n`);
     process.stdout.write(`dagrun: PR creation failed — see ${errorPath}\n`);
     process.stdout.write(
-      `  Manual: cd "${worktreePath}" && gh pr create --draft --title ${JSON.stringify(title)} --body-file "${bodyPath}" --base main\n`,
+      `  Manual: cd "${worktreePath}" && gh pr create --draft --title ${JSON.stringify(title)} --body-file "${bodyPath}" --base ${JSON.stringify(baseBranch)}\n`,
     );
   }
 }

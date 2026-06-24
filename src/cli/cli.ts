@@ -30,6 +30,7 @@ import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { assertAuth } from "../runtime/launcher.js";
 import { featureWorkflow } from "../workflow/feature-workflow.js";
+import { bugfixWorkflow } from "../workflow/bugfix-workflow.js";
 import {
   startRun,
   resumeRun,
@@ -146,15 +147,17 @@ async function cmdStart(argv: string[]): Promise<void> {
   }
 
   // Resolve workflow by name.
-  if (workflowName !== "feature") {
+  if (workflowName !== "feature" && workflowName !== "bugfix") {
     process.stderr.write(
-      `dagrun start: unknown workflow "${workflowName}". Available: feature\n`,
+      `dagrun start: unknown workflow "${workflowName}". Available: feature, bugfix\n`,
     );
     process.exit(1);
   }
 
+  const workflow = workflowName === "bugfix" ? bugfixWorkflow : featureWorkflow;
+
   await startRun({
-    workflow: featureWorkflow,
+    workflow,
     planPath: planFile,
     homeDir,
     config,

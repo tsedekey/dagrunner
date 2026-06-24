@@ -27,6 +27,8 @@ import {
   hasConcerns,
   seedWorktreeSiblings,
   parseGateDecision,
+  parseFrontmatter,
+  severityForcesPause,
 } from "./run-engine.js";
 
 // ---------------------------------------------------------------------------
@@ -565,4 +567,116 @@ test("parseGateDecision: body of approve is always empty regardless of trailing 
     "decision: approve\n\nThis was a well-written artifact.\n",
   );
   assert.deepEqual(result, { decision: "approve", body: "" });
+});
+
+// ---------------------------------------------------------------------------
+// parseFrontmatter
+// ---------------------------------------------------------------------------
+
+test("parseFrontmatter: full bugfix frontmatter → all fields extracted", () => {
+  const content = [
+    "---",
+    "base_branch: release/1.x",
+    "issue: https://github.com/camunda/camunda/issues/12345",
+    "severity: critical",
+    "backport-targets: [release/1.0, release/1.1]",
+    "repo: camunda/camunda",
+    "---",
+    "",
+    "# Bug fix plan",
+  ].join("\n");
+  const result = parseFrontmatter(content);
+  assert.equal(result.base_branch, "release/1.x");
+  assert.equal(result.issue, "https://github.com/camunda/camunda/issues/12345");
+  assert.equal(result.severity, "critical");
+  assert.equal(result.repo, "camunda/camunda");
+});
+
+test("parseFrontmatter: no frontmatter → empty object", () => {
+  const content = "# Bug fix plan\nSome description";
+  const result = parseFrontmatter(content);
+  assert.equal(Object.keys(result).length, 0);
+});
+
+test("parseFrontmatter: empty string → empty object", () => {
+  const result = parseFrontmatter("");
+  assert.equal(Object.keys(result).length, 0);
+});
+
+test("parseFrontmatter: only closing --- (no opening) → empty object", () => {
+  const content = "Some text\n---\nMore text";
+  const result = parseFrontmatter(content);
+  assert.equal(Object.keys(result).length, 0);
+});
+
+test("parseFrontmatter: partial fields — missing fields absent, present fields extracted", () => {
+  const content = ["---", "severity: major", "---", "# Plan"].join("\n");
+  const result = parseFrontmatter(content);
+  assert.equal(result.severity, "major");
+  assert.equal(result.base_branch, undefined);
+  assert.equal(result.issue, undefined);
+});
+
+test("parseFrontmatter: values with colons in them — full value extracted", () => {
+  const content = [
+    "---",
+    "issue: https://github.com/org/repo/issues/99",
+    "---",
+  ].join("\n");
+  const result = parseFrontmatter(content);
+  assert.equal(result.issue, "https://github.com/org/repo/issues/99");
+});
+
+test("parseFrontmatter: leading/trailing whitespace on values is trimmed", () => {
+  const content = ["---", "base_branch:   main  ", "---"].join("\n");
+  const result = parseFrontmatter(content);
+  assert.equal(result.base_branch, "main");
+});
+
+// ---------------------------------------------------------------------------
+// severityForcesPause
+// ---------------------------------------------------------------------------
+
+test("severityForcesPause: 'critical' → true", () => {
+  assert.equal(severityForcesPause("critical"), true);
+});
+
+test("severityForcesPause: 'blocker' → true", () => {
+  assert.equal(severityForcesPause("blocker"), true);
+});
+
+test("severityForcesPause: 'major' → false", () => {
+  assert.equal(severityForcesPause("major"), false);
+});
+
+test("severityForcesPause: 'minor' → false", () => {
+  assert.equal(severityForcesPause("minor"), false);
+});
+
+test("severityForcesPause: undefined → false (safe default)", () => {
+  assert.equal(severityForcesPause(undefined), false);
+});
+
+test("severityForcesPause: case-insensitive — 'CRITICAL' → true", () => {
+  assert.equal(severityForcesPause("CRITICAL"), true);
+});
+
+test("severityForcesPause: case-insensitive — 'BLOCKER' → true", () => {
+  assert.equal(severityForcesPause("BLOCKER"), true);
+});
+
+// ---------------------------------------------------------------------------
+// makeBranchName: bugfix workflow
+// ---------------------------------------------------------------------------
+
+test("makeBranchName: bugfix workflow → fix/{issueNum}-{slug}", () => {
+  const result = makeBranchName(
+    "bugfix",
+    "/plans/12345-null-pointer-in-job-activation-fix-plan.md",
+  );
+  assert.equal(result, "fix/12345-null-pointer-in-job-activation");
+});
+
+test("makePrTitlePrefix: bugfix → 'fix:'", () => {
+  assert.equal(makePrTitlePrefix("bugfix"), "fix:");
 });
