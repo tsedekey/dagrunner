@@ -350,7 +350,7 @@ Format: `<block> · <decision> · <why>`
 
 - night-mode-permission-posture · `nightMode` threaded into `makeSDKRunner` as an optional 6th parameter; `ExecutorFactory` type left at 5 parameters (unchanged) · night-aware default factory created as a local closure inside `startRun` so the type boundary stays clean and tests that supply a custom `executorFactory` are unaffected; the closure captures `opts.nightMode` at construction time, which is correct because nightMode is constant for the life of a run
 
-- night-mode-permission-posture · `sandbox.enabled` + deny-guard hook wired in `buildSeededSettings` independently of `permissionMode` (no nightMode parameter added to settings-seed) · the boundary must never be conditional on the prompt-bypass flag; testing via `sdk-runner.test.ts` teeth-check asserts `sandbox.enabled=true` and `stop-verifier` hook presence from the seeded settings, proving structural independence
+- night-mode-permission-posture · `sandbox.enabled` + deny-guard hook wired in `buildSeededSettings` independently of `permissionMode` (no nightMode parameter added to settings-seed) · the boundary must never be conditional on the prompt-bypass flag; testing via `sdk-runner.test.ts` teeth-check asserts sandbox presence and `stop-verifier` hook presence from the seeded settings, proving structural independence; note: `sandbox.enabled` is `false` since commit 3015634 (Maven builds block) — the structural boundary is the deny-guard hook, not the filesystem sandbox; sdk-runner.test.ts was corrected to assert `false` and drop the misleading "must be true" claim
 
 ## gate-dialogue-ux
 

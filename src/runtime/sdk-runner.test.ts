@@ -49,14 +49,21 @@ const minimalSettings = () =>
     passthrough: { env: {}, mcpServers: undefined },
   }) as Record<string, unknown>;
 
-test("teeth-check: seeded settings always have sandbox.enabled=true", () => {
+// sandbox.enabled is intentionally false (commit 3015634: Maven builds require
+// access to **/target/ and local-cluster ports that the sandbox blocks).
+// The authoritative test for sandbox shape is settings-seed.test.ts.
+// The real boundary teeth: deny-guard (stop-verifier) hook is always wired,
+// regardless of permissionMode — tested below.
+test("teeth-check: seeded settings have sandbox present and independent of permissionMode", () => {
   const s = minimalSettings();
   const sandbox = s["sandbox"] as Record<string, unknown>;
-  assert.equal(
-    sandbox?.["enabled"],
-    true,
-    "sandbox.enabled must always be true — night-mode must not remove it",
+  assert.ok(
+    sandbox !== null && typeof sandbox === "object",
+    "sandbox key must be present in seeded settings",
   );
+  // sandbox.enabled=false is intentional (3015634). Do not assert true here.
+  // The boundary is enforced by the deny-guard hook, not the filesystem sandbox.
+  assert.equal(sandbox?.["enabled"], false);
 });
 
 test("teeth-check: seeded settings always wire the deny-guard (stop-verifier) hook", () => {
