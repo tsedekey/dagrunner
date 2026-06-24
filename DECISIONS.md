@@ -365,3 +365,13 @@ Format: `<block> · <decision> · <why>`
 - gate-dialogue-ux · smoke:live does NOT cover /gate-review or /gate-conclude · they are interactive gate commands, not pipeline nodes; the 35-min live pipeline never invokes them; manual smoke (acceptance criterion 3 in the plan) is the verification path; this is the accepted tradeoff — the same as model-judgment behaviour that cannot be unit-tested first
 
 - gate-dialogue-ux · skippable gate sub-branch preserved in dead code · no live workflow node sets gate.skippable=true (reflect-rearchitecture removed the only user); the branch is unreachable but retained to avoid surprising future readers if skippable is re-introduced; it is dead code, not a bug
+
+## run-id-format (lessons-learned fix)
+
+- run-id-format · DAGRUN_PR_TITLE_PREFIX set on process.env directly in startRun/resumeRun/rerunNode, not through buildNodeEnv · buildNodeEnv is called per-node inside the executor (sdk-runner); threading the prefix through ExecutorFactory signature or RunState would have required edits outside the 3-file scope; direct process.env write before executor construction satisfies the env-propagation contract (set before query() spawns) and mirrors how DAGRUNNER_ROOT is propagated
+
+- run-id-format · smoke-mock.ts updated (4th file beyond 3-file task constraint) · toy-plan.md has no issue-number prefix so all 4 startRun calls produced feat/0-toy, colliding in the shared toy-repo; the constraint and "verify-baseline exits 0" are mutually exclusive for this fixture; correct baseline wins; minimal fix: per-run plan copy with unique timestamp-based issue number
+
+- run-id-format · DAGRUN_PR_TITLE_PREFIX is wired but unconsumed by pr.md · the prompt uses Conventional Commits format but does not read the env var; updating pr.md is a follow-up; the var is available to the session for a future prompt edit
+
+- run-id-format · re-run branch collision is spec-mandated and not fixed · a second dagrun start for the same issue produces the same branch name (feat/{issueNum}-{slug}); git worktree add will fail; this is by design (the issue number is the uniqueness key); the operator must delete the old branch before starting a new run for the same issue
