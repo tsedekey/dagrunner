@@ -22,7 +22,7 @@ All output files go to `$DAGRUN_ARTIFACTS/` (the value printed above).
 Read each of these inputs:
 
 - `$DAGRUN_RUN_DIR/plan/plan.md`
-- `$DAGRUN_RUN_DIR/expand/guide.md`
+- `$DAGRUN_RUN_DIR/define/guide.md`
 - `$DAGRUN_RUN_DIR/implement/summary.md`
 - `$DAGRUN_RUN_DIR/review/findings.json`
 - `$DAGRUN_RUN_DIR/fix/summary.md`

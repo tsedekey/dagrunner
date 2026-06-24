@@ -116,7 +116,7 @@ export function parseGateDecision(
 }
 
 /** Node IDs that night-mode may auto-approve (Gate 1 + Gate 2). */
-const AGENT_DECIDABLE_GATES = new Set(["expand", "fix"]);
+const AGENT_DECIDABLE_GATES = new Set(["define", "fix"]);
 
 /**
  * True when night-mode may auto-decide the gate for nodeId.

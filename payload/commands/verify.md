@@ -26,8 +26,8 @@ Read in this priority order:
 ```bash
 # 1. Artifacts from earlier nodes (check existence before reading)
 cat "$DAGRUN_RUN_DIR/plan/plan.md" 2>/dev/null
-cat "$DAGRUN_RUN_DIR/expand/guide.md" 2>/dev/null
-cat "$DAGRUN_RUN_DIR/expand/reflections.md" 2>/dev/null
+cat "$DAGRUN_RUN_DIR/define/guide.md" 2>/dev/null
+cat "$DAGRUN_RUN_DIR/define/reflections.md" 2>/dev/null
 cat "$DAGRUN_RUN_DIR/implement/reflections.md" 2>/dev/null
 cat "$DAGRUN_RUN_DIR/review/findings.json" 2>/dev/null
 cat "$DAGRUN_RUN_DIR/fix/summary.md" 2>/dev/null

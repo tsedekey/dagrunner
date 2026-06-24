@@ -332,8 +332,8 @@ test("worktreeArtifactPatterns: no duplicates", () => {
 // agentDecidable
 // ---------------------------------------------------------------------------
 
-test("agentDecidable: expand is agent-decidable (Gate 1)", () => {
-  assert.equal(agentDecidable("expand"), true);
+test("agentDecidable: define is agent-decidable (Gate 1)", () => {
+  assert.equal(agentDecidable("define"), true);
 });
 
 test("agentDecidable: fix is agent-decidable (Gate 2)", () => {

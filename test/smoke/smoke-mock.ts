@@ -82,7 +82,7 @@ const mockFactory = (
   _storeDir: string,
 ) =>
   createMockExecutor({
-    expand: "gate-pause", // writes guide.md + returns awaiting-gate
+    define: "gate-pause", // writes guide.md + returns awaiting-gate
     implement: "success", // writes summary.md
     review: "success", // writes findings.json
     fix: "gate-pause", // writes summary.md + returns awaiting-gate
@@ -129,7 +129,7 @@ const config: DagrunnerConfig = { DEVHARNESS_SRC: TOY_REPO_PATH };
 const PLAN_A = makePlanPath(HOME_A, BASE_TS);
 
 // ---------------------------------------------------------------------------
-// Step A1 — startRun -> expand gate-pause -> awaiting-gate
+// Step A1 — startRun -> define gate-pause -> awaiting-gate
 // ---------------------------------------------------------------------------
 
 await startRun({
@@ -158,21 +158,21 @@ const runDirA = join(HOME_A, "runs", RUN_ID_A);
     `A1: expected paused, got ${state.status}`,
   );
   assert.strictEqual(
-    state.nodes["expand"]?.status,
+    state.nodes["define"]?.status,
     "awaiting-gate",
-    `A1: expand must be awaiting-gate, got ${String(state.nodes["expand"]?.status)}`,
+    `A1: define must be awaiting-gate, got ${String(state.nodes["define"]?.status)}`,
   );
   assert.ok(
-    existsSync(join(runDirA, "expand", "guide.md")),
-    "A1: expand/guide.md must exist (produces contract met)",
+    existsSync(join(runDirA, "define", "guide.md")),
+    "A1: define/guide.md must exist (produces contract met)",
   );
 }
 console.log(
-  "step A1 passed: startRun -> expand awaiting-gate, guide.md written",
+  "step A1 passed: startRun -> define awaiting-gate, guide.md written",
 );
 
 // ---------------------------------------------------------------------------
-// Step A2 — resumeRun(rejectComment) -> expand re-pauses
+// Step A2 — resumeRun(rejectComment) -> define re-pauses
 // ---------------------------------------------------------------------------
 
 await resumeRun({
@@ -188,10 +188,10 @@ await resumeRun({
   // Coordinator note: this differs from smoke.ts which asserts feedback-1.md because
   // the real SDK runner returns iteration:0 on first pause.
   assert.ok(
-    readdirSync(join(runDirA, "expand")).some((f) =>
+    readdirSync(join(runDirA, "define")).some((f) =>
       /^feedback-\d+\.md$/.test(f),
     ),
-    "A2: a feedback-N.md must be written in expand/",
+    "A2: a feedback-N.md must be written in define/",
   );
   const state = readState(runDirA);
   assert.strictEqual(
@@ -200,13 +200,13 @@ await resumeRun({
     `A2: expected paused, got ${state.status}`,
   );
   assert.strictEqual(
-    state.nodes["expand"]?.status,
+    state.nodes["define"]?.status,
     "awaiting-gate",
-    `A2: expand must still be awaiting-gate after reject, got ${String(state.nodes["expand"]?.status)}`,
+    `A2: define must still be awaiting-gate after reject, got ${String(state.nodes["define"]?.status)}`,
   );
 }
 console.log(
-  "step A2 passed: rejectComment -> feedback-N.md written -> expand re-paused",
+  "step A2 passed: rejectComment -> feedback-N.md written -> define re-paused",
 );
 
 // ---------------------------------------------------------------------------
@@ -224,9 +224,9 @@ await resumeRun({
 {
   const state = readState(runDirA);
   assert.strictEqual(
-    state.nodes["expand"]?.status,
+    state.nodes["define"]?.status,
     "done",
-    `A3: expand must be done after approval, got ${String(state.nodes["expand"]?.status)}`,
+    `A3: define must be done after approval, got ${String(state.nodes["define"]?.status)}`,
   );
   assert.strictEqual(
     state.nodes["implement"]?.status,
@@ -324,7 +324,7 @@ mkdirSync(join(HOME_B, "worktrees"), { recursive: true });
 const PLAN_B = makePlanPath(HOME_B, BASE_TS + 1);
 
 // ---------------------------------------------------------------------------
-// Step B1 — startRun -> expand gate-pause -> awaiting-gate
+// Step B1 — startRun -> define gate-pause -> awaiting-gate
 // ---------------------------------------------------------------------------
 
 await startRun({
@@ -353,16 +353,16 @@ const runDirB = join(HOME_B, "runs", RUN_ID_B);
     `B1: expected paused, got ${state.status}`,
   );
   assert.strictEqual(
-    state.nodes["expand"]?.status,
+    state.nodes["define"]?.status,
     "awaiting-gate",
-    `B1: expand must be awaiting-gate, got ${String(state.nodes["expand"]?.status)}`,
+    `B1: define must be awaiting-gate, got ${String(state.nodes["define"]?.status)}`,
   );
   assert.ok(
-    existsSync(join(runDirB, "expand", "guide.md")),
-    "B1: expand/guide.md must exist",
+    existsSync(join(runDirB, "define", "guide.md")),
+    "B1: define/guide.md must exist",
   );
 }
-console.log("step B1 passed: startRun -> expand awaiting-gate");
+console.log("step B1 passed: startRun -> define awaiting-gate");
 
 // ---------------------------------------------------------------------------
 // Step B2 — resumeRun(approve Gate 1) -> implement -> review -> fix gate-pause
@@ -530,20 +530,20 @@ const runDirC = join(HOME_C, "runs", RUN_ID_C);
     `C: verifyElection must be unset (human has not decided yet)`,
   );
   assert.strictEqual(
-    state.nodes["expand"]?.status,
+    state.nodes["define"]?.status,
     "done",
-    `C: expand must be auto-approved (done), got ${String(state.nodes["expand"]?.status)}`,
+    `C: define must be auto-approved (done), got ${String(state.nodes["define"]?.status)}`,
   );
-  const expandGate = state.nodes["expand"]?.gateHistory?.at(-1);
+  const defineGate = state.nodes["define"]?.gateHistory?.at(-1);
   assert.strictEqual(
-    expandGate?.mode,
+    defineGate?.mode,
     "night",
-    `C: expand gateHistory last entry must have mode=night`,
+    `C: define gateHistory last entry must have mode=night`,
   );
   assert.strictEqual(
-    expandGate?.basis,
+    defineGate?.basis,
     "no concerns flagged",
-    `C: expand gateHistory last entry must have correct basis`,
+    `C: define gateHistory last entry must have correct basis`,
   );
   assert.strictEqual(
     state.nodes["fix"]?.status,
@@ -572,7 +572,7 @@ console.log(
 );
 
 // ---------------------------------------------------------------------------
-// RUN D — night-mode, seeded concern: park at Gate 1 (expand artifact has
+// RUN D — night-mode, seeded concern: park at Gate 1 (define artifact has
 //          the "Concerns / plan challenges" heading).
 // ---------------------------------------------------------------------------
 
@@ -589,7 +589,7 @@ const concernsFactory = (
   _storeDir: string,
 ) =>
   createMockExecutor({
-    expand: "gate-pause-with-concerns", // guide.md contains concerns section
+    define: "gate-pause-with-concerns", // guide.md contains concerns section
     implement: "success",
     review: "success",
     fix: "gate-pause",
@@ -621,9 +621,9 @@ const runDirD = join(HOME_D, "runs", RUN_ID_D);
     `D: expected paused at Gate 1 (concerns), got ${state.status}`,
   );
   assert.strictEqual(
-    state.nodes["expand"]?.status,
+    state.nodes["define"]?.status,
     "awaiting-gate",
-    `D: expand must remain awaiting-gate (night-mode parked due to concerns), got ${String(state.nodes["expand"]?.status)}`,
+    `D: define must remain awaiting-gate (night-mode parked due to concerns), got ${String(state.nodes["define"]?.status)}`,
   );
   assert.strictEqual(
     state.nodes["implement"]?.status,
@@ -632,7 +632,7 @@ const runDirD = join(HOME_D, "runs", RUN_ID_D);
   );
   // Confirm the artifact actually contains the concerns heading.
   const guideContent = readFileSync(
-    join(runDirD, "expand", "guide.md"),
+    join(runDirD, "define", "guide.md"),
     "utf8",
   );
   assert.ok(
@@ -641,7 +641,7 @@ const runDirD = join(HOME_D, "runs", RUN_ID_D);
   );
 }
 console.log(
-  "step D passed: night-mode seeded concern -> parked at Gate 1 (expand awaiting-gate)",
+  "step D passed: night-mode seeded concern -> parked at Gate 1 (define awaiting-gate)",
 );
 
 // ---------------------------------------------------------------------------

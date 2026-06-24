@@ -45,12 +45,12 @@ const FIXED_STATE: RunState = {
   branch: "feature/test-plan-1234567890",
   sourcePlanPath: "/path/to/test-plan.md",
   nodes: {
-    expand: {
+    define: {
       status: "done",
       startedAt: "2026-06-17T10:00:00.000Z",
       endedAt: "2026-06-17T10:30:00.000Z",
       artifacts: [
-        "/home/testuser/.local/share/dagrunner/runs/test-plan-1234567890/expand/guide.md",
+        "/home/testuser/.local/share/dagrunner/runs/test-plan-1234567890/define/guide.md",
       ],
       model: "sonnet",
       iteration: 1,

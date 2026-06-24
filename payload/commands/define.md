@@ -37,7 +37,7 @@ well-scoped:
 
 - Does it **over-specify** detail that belongs to the implementer?
 - Does it **diverge** from the source issue's prescribed approach (if any)?
-- Is the **requirement or acceptance** incomplete or unclear in ways that would block a good implementation? (Sparse implementation detail is expected and good — that is expand's job, not the plan's.)
+- Is the **requirement or acceptance** incomplete or unclear in ways that would block a good implementation? (Sparse implementation detail is expected and good — that is define's job, not the plan's.)
 
 If you find genuine concerns, append a **"Concerns / plan challenges"** section to
 guide.md. State each concern concretely: what you observed, what the requirement or
@@ -54,7 +54,7 @@ After guide.md is written and all other steps are complete, write any useful tip
 or gotchas to $DAGRUN_ARTIFACTS/reflections.md. Cover both:
 
 - Non-obvious facts about the Camunda code area (module invariants, gotchas, internal APIs)
-- Anything that would help future expand runs (tricky requirement patterns, issue-divergence pitfalls)
+- Anything that would help future define runs (tricky requirement patterns, issue-divergence pitfalls)
 
 Absence is fine — only write reflections.md if there is something genuinely useful.
 The SessionEnd hook captures this file automatically; you do not need to call any CLI command.

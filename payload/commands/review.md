@@ -119,7 +119,7 @@ future implementations in this code area avoid the same class of issue. Good can
   omits null-check on the entity arg — callers must guard upstream").
 - A module invariant that was violated and is easy to miss.
 - A finding dimension (e.g. migration-safety) that fired here but would not be obvious from
-  reading the code — worth flagging to future expand and implement runs.
+  reading the code — worth flagging to future define and implement runs.
 
 **Absence is fine.** Only write reflections.md if there is something genuinely non-obvious that
 reduces friction for future runs in this code area. Do not summarise the findings themselves —

@@ -17,7 +17,7 @@ import { join, dirname } from "node:path";
 // ---------------------------------------------------------------------------
 
 export interface ReflectionEntry {
-  /** Node or agent that is appending (e.g. "expand", "review", "ci-babysit"). */
+  /** Node or agent that is appending (e.g. "define", "review", "ci-babysit"). */
   source: string;
   /** Routing hint for harvest: where the tip belongs. */
   kind: "camunda-knowledge" | "dagrunner-harness";

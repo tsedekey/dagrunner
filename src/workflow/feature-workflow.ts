@@ -2,7 +2,7 @@
  * feature-workflow.ts — v1 thin-slice workflow definition.
  *
  * Phase 2a pipeline:
- *   expand (Gate 1) -> implement -> review -> fix (Gate 2)
+ *   define (Gate 1) -> implement -> review -> fix (Gate 2)
  *
  * Phase 2b adds: verify-election -> verify (Gate 3) -> pr (terminal)
  *
@@ -113,14 +113,14 @@ export const featureWorkflow: Workflow = {
   name: "feature",
   nodes: [
     {
-      id: "expand",
-      command: "/expand",
+      id: "define",
+      command: "/define",
       produces: ["guide.md"],
       gate: { maxIterations: 10, onReject: "revise-self" },
     },
     {
       id: "implement",
-      dependsOn: ["expand"],
+      dependsOn: ["define"],
       command: "/implement",
       produces: ["summary.md"],
       formatCommand: "./mvnw spotless:apply --no-transfer-progress",

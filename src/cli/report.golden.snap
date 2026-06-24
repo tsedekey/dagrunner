@@ -81,12 +81,12 @@
         <tbody>
           
         <tr>
-          <td><code>expand</code></td>
+          <td><code>define</code></td>
           <td><span style="background:#2e7d32;color:#fff;padding:2px 8px;border-radius:3px;font-size:0.85em;font-weight:600;">done</span></td>
           <td style="font-size:0.85em;">sonnet</td>
           <td style="text-align:center;">1</td>
           <td style="text-align:right;">$0.1234</td>
-          <td><a href="file:///home/testuser/.local/share/dagrunner/runs/test-plan-1234567890/expand/guide.md" style="font-family:monospace;font-size:0.85em;">guide.md</a></td>
+          <td><a href="file:///home/testuser/.local/share/dagrunner/runs/test-plan-1234567890/define/guide.md" style="font-family:monospace;font-size:0.85em;">guide.md</a></td>
           <td style="font-size:0.85em;color:#c62828;">&mdash;</td>
         </tr>
         <tr>
@@ -121,7 +121,7 @@
     <section>
       <h2>Gate History</h2>
       
-      <h3>Node: <code>expand</code></h3>
+      <h3>Node: <code>define</code></h3>
       <table>
         <thead>
           <tr><th>Decision</th><th>Comment</th><th>Timestamp</th></tr>
