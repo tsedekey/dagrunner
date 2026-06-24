@@ -236,7 +236,7 @@ export function makePrTitlePrefix(workflowName: string): string {
 
 /**
  * Returns all known artifact filenames (from featureWorkflow.produces) plus
- * secondary scratch patterns. Used for both .gitignore seeding and the
+ * secondary scratch patterns. Used for both .git/info/exclude seeding and the
  * advisory pre-pr scan. Exported for unit testing.
  */
 export function worktreeArtifactPatterns(): string[] {
@@ -381,7 +381,7 @@ function scanWorktreeForLeaks(
     const msg =
       `dagrun: [advisory] pre-pr scan found ${String(leaked.length)} leaked artifact(s) in worktree:\n` +
       leaked.map((f) => `  ${f}`).join("\n") +
-      "\n  These are excluded from git by .gitignore — they cannot be staged or committed.\n" +
+      "\n  These are excluded from git by .git/info/exclude — they cannot be staged or committed.\n" +
       "  A node prompt wrote to the worktree instead of $DAGRUN_ARTIFACTS. Fix the prompt.\n";
     process.stdout.write(msg);
     writeFileSync(join(runDir, "scratch-warning.txt"), msg, "utf8");
