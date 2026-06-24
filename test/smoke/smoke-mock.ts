@@ -42,6 +42,17 @@ const PROJECT_ROOT = join(__dirname, "..", "..");
 const TOY_PLAN_PATH = join(__dirname, "fixtures", "toy-plan.md");
 const TOY_REPO_PATH = join(__dirname, "fixtures", "toy-repo");
 
+/**
+ * Copy toy-plan.md into homeDir with a unique issue-number prefix so each
+ * smoke run produces a distinct branch name (feat/<issueNum>-toy).
+ * makeRunId and makeBranchName derive the issue number from the filename.
+ */
+function makePlanPath(homeDir: string, issueNum: number): string {
+  const dest = join(homeDir, `${issueNum}-toy-plan.md`);
+  writeFileSync(dest, readFileSync(TOY_PLAN_PATH, "utf8"), "utf8");
+  return dest;
+}
+
 // Keep PROJECT_ROOT reference to satisfy "noUnusedLocals" lint in the
 // calling tsconfig — this file is run with tsx which does not enforce it,
 // but we keep it tidy for future.
@@ -99,16 +110,23 @@ function readState(runDir: string): {
 }
 
 // ---------------------------------------------------------------------------
+// Base timestamp — used for HOME dirs and unique issue numbers per run
+// ---------------------------------------------------------------------------
+
+const BASE_TS = Date.now();
+
+// ---------------------------------------------------------------------------
 // RUN A — election=n
 // ---------------------------------------------------------------------------
 
-const HOME_A = `/tmp/dagrun-smoke-mock-a-${Date.now()}`;
+const HOME_A = `/tmp/dagrun-smoke-mock-a-${BASE_TS}`;
 // acquireLock writes active.lock into homeDir — must exist before startRun.
 // startRun also calls readdirSync on runs/ — create it too.
 mkdirSync(join(HOME_A, "runs"), { recursive: true });
 mkdirSync(join(HOME_A, "worktrees"), { recursive: true });
 
 const config: DagrunnerConfig = { DEVHARNESS_SRC: TOY_REPO_PATH };
+const PLAN_A = makePlanPath(HOME_A, BASE_TS);
 
 // ---------------------------------------------------------------------------
 // Step A1 — startRun -> expand gate-pause -> awaiting-gate
@@ -116,7 +134,7 @@ const config: DagrunnerConfig = { DEVHARNESS_SRC: TOY_REPO_PATH };
 
 await startRun({
   workflow: featureWorkflow,
-  planPath: TOY_PLAN_PATH,
+  planPath: PLAN_A,
   homeDir: HOME_A,
   config,
   executorFactory: mockFactory,
@@ -300,9 +318,10 @@ console.log(
 // RUN B — election=y
 // ---------------------------------------------------------------------------
 
-const HOME_B = `/tmp/dagrun-smoke-mock-b-${Date.now() + 1}`;
+const HOME_B = `/tmp/dagrun-smoke-mock-b-${BASE_TS + 1}`;
 mkdirSync(join(HOME_B, "runs"), { recursive: true });
 mkdirSync(join(HOME_B, "worktrees"), { recursive: true });
+const PLAN_B = makePlanPath(HOME_B, BASE_TS + 1);
 
 // ---------------------------------------------------------------------------
 // Step B1 — startRun -> expand gate-pause -> awaiting-gate
@@ -310,7 +329,7 @@ mkdirSync(join(HOME_B, "worktrees"), { recursive: true });
 
 await startRun({
   workflow: featureWorkflow,
-  planPath: TOY_PLAN_PATH,
+  planPath: PLAN_B,
   homeDir: HOME_B,
   config,
   executorFactory: mockFactory,
@@ -477,13 +496,14 @@ console.log(
 //          clean artifacts with no concerns heading).
 // ---------------------------------------------------------------------------
 
-const HOME_C = `/tmp/dagrun-smoke-mock-c-${Date.now() + 2}`;
+const HOME_C = `/tmp/dagrun-smoke-mock-c-${BASE_TS + 2}`;
 mkdirSync(join(HOME_C, "runs"), { recursive: true });
 mkdirSync(join(HOME_C, "worktrees"), { recursive: true });
+const PLAN_C = makePlanPath(HOME_C, BASE_TS + 2);
 
 await startRun({
   workflow: featureWorkflow,
-  planPath: TOY_PLAN_PATH,
+  planPath: PLAN_C,
   homeDir: HOME_C,
   config,
   executorFactory: mockFactory,
@@ -556,9 +576,10 @@ console.log(
 //          the "Concerns / plan challenges" heading).
 // ---------------------------------------------------------------------------
 
-const HOME_D = `/tmp/dagrun-smoke-mock-d-${Date.now() + 3}`;
+const HOME_D = `/tmp/dagrun-smoke-mock-d-${BASE_TS + 3}`;
 mkdirSync(join(HOME_D, "runs"), { recursive: true });
 mkdirSync(join(HOME_D, "worktrees"), { recursive: true });
+const PLAN_D = makePlanPath(HOME_D, BASE_TS + 3);
 
 const concernsFactory = (
   _config: DagrunnerConfig,
@@ -578,7 +599,7 @@ const concernsFactory = (
 
 await startRun({
   workflow: featureWorkflow,
-  planPath: TOY_PLAN_PATH,
+  planPath: PLAN_D,
   homeDir: HOME_D,
   config,
   executorFactory: concernsFactory,
@@ -631,7 +652,7 @@ console.log(
 // and apply-reflection=pending left over from the old workflow. resumeRun must
 // auto-skip the stale gate without requiring user input and resolve the run done.
 
-const HOME_E = `/tmp/dagrun-smoke-mock-e-${Date.now()}`;
+const HOME_E = `/tmp/dagrun-smoke-mock-e-${BASE_TS + 4}`;
 mkdirSync(join(HOME_E, "runs"), { recursive: true });
 mkdirSync(join(HOME_E, "worktrees"), { recursive: true });
 mkdirSync(join(HOME_E, "store"), { recursive: true });

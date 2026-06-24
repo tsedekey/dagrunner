@@ -21,7 +21,6 @@ import {
   existsSync,
   unlinkSync,
 } from "node:fs";
-import { randomBytes } from "node:crypto";
 
 // Mutable ref so the SIGINT handler in cli.ts can find the active run dir and
 // release the lock cleanly. Mutated (not reassigned) so the export stays stable.
@@ -138,28 +137,54 @@ export function hasConcerns(content: string): boolean {
 }
 
 /**
- * Build a unique run ID from a plan path, a timestamp, and a short random
- * suffix. The suffix (default: 3 random bytes as lowercase hex) closes the
- * same-millisecond collision window while keeping the id human-readable.
+ * Extract the leading issue number from a plan filename.
+ * e.g. "53856-single-job-priority-update-grpc-plan.md" → "53856"
+ * Falls back to "0" if the filename has no leading digits.
+ */
+function issueNumFromPlanPath(planPath: string): string {
+  const name = basename(planPath, ".md");
+  const match = /^(\d+)-/.exec(name);
+  return match ? (match[1] ?? "0") : "0";
+}
+
+/**
+ * Extract the slug segment from a plan filename.
+ * Strips the leading "{issueNum}-" prefix and the "-plan" suffix.
+ * e.g. "53856-single-job-priority-update-grpc-plan.md" → "single-job-priority-update-grpc"
+ * Falls back to the full filename (without extension) if no prefix/suffix found.
+ */
+function slugFromPlanPath(planPath: string): string {
+  const name = basename(planPath, ".md");
+  // Strip leading "{digits}-" prefix if present.
+  const withoutPrefix = name.replace(/^\d+-/, "");
+  // Strip trailing "-plan" suffix if present.
+  const withoutSuffix = withoutPrefix.replace(/-plan$/, "");
+  return withoutSuffix !== "" ? withoutSuffix : name;
+}
+
+/**
+ * Build a run ID from the plan path and the runs directory.
+ * Format: {issueNum}-{runCount}  e.g. "53856-1", "53856-2"
  *
- * Format: <slug>-<timestamp>-<hex suffix>
- *   e.g. my-plan-1750000000000-a3f9b2
+ * Scans runsDir for entries matching ^{issueNum}-\d+$, finds max N, returns N+1.
+ * Starts at 1 if no matching entries found. Returns "0-1" if filename has no
+ * leading issue number.
  *
- * The suffix is injectable for deterministic unit testing (pass a fixed
- * string); production code uses the default randomBytes path.
- *
- * All three segments are lowercase alphanumeric + hyphens — git-branch-safe.
  * Exported for unit testing.
  */
-export function makeRunId(
-  planPath: string,
-  now: number,
-  suffix = randomBytes(3).toString("hex"),
-): string {
-  const slug = basename(planPath, ".md")
-    .replace(/[^a-z0-9-]/gi, "-")
-    .toLowerCase();
-  return `${slug}-${now}-${suffix}`;
+export function makeRunId(planPath: string, runsDir: string): string {
+  const issueNum = issueNumFromPlanPath(planPath);
+  const pattern = new RegExp(`^${issueNum}-\\d+$`);
+  let maxN = 0;
+  if (existsSync(runsDir)) {
+    for (const entry of readdirSync(runsDir, { withFileTypes: true })) {
+      if (entry.isDirectory() && pattern.test(entry.name)) {
+        const n = parseInt(entry.name.split("-").pop() ?? "0", 10);
+        if (n > maxN) maxN = n;
+      }
+    }
+  }
+  return `${issueNum}-${maxN + 1}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,40 +206,28 @@ const WORKFLOW_TYPE_PREFIX: Record<string, string> = {
 };
 
 /**
- * Extract the first H1/H2 heading from a plan file and slugify it.
- * Falls back to "run" if no heading is found.
+ * Compute the git branch name for a new run.
+ * Format: {type}/{issueNum}-{slug}
+ *   e.g. feat/53856-single-job-priority-update-grpc
+ *
+ * The issue number makes the branch unique — no random suffix needed.
  * Exported for unit testing.
  */
-export function slugifyPlanHeading(planPath: string): string {
-  const content = readFileSync(planPath, "utf8");
-  const match = content.match(/^#{1,2}\s+(.+)/m);
-  const heading = (match ? match[1] : undefined) ?? "run";
-  return heading
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, "")
-    .trim()
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .slice(0, 30)
-    .replace(/-$/, "");
+export function makeBranchName(workflowName: string, planPath: string): string {
+  const prefix = WORKFLOW_TYPE_PREFIX[workflowName] ?? "feat";
+  const issueNum = issueNumFromPlanPath(planPath);
+  const slug = slugFromPlanPath(planPath);
+  return `${prefix}/${issueNum}-${slug}`;
 }
 
 /**
- * Compute the git branch name for a new run.
- * Format: <type>/<heading-slug>-<3-hex>
- *   e.g. feat/add-retry-logic-a3f
- *
- * The suffix is injectable for deterministic unit testing.
+ * Return the PR title prefix for a workflow: "{type}:"
+ *   e.g. "feat:" for feature, "fix:" for fix.
+ * The pr node uses this to enforce Conventional Commits format.
  * Exported for unit testing.
  */
-export function makeBranchName(
-  workflowName: string,
-  planPath: string,
-  suffix = randomBytes(2).toString("hex").slice(0, 3),
-): string {
-  const prefix = WORKFLOW_TYPE_PREFIX[workflowName] ?? "feat";
-  const slug = slugifyPlanHeading(planPath);
-  return `${prefix}/${slug}-${suffix}`;
+export function makePrTitlePrefix(workflowName: string): string {
+  return (WORKFLOW_TYPE_PREFIX[workflowName] ?? "feat") + ":";
 }
 
 // ---------------------------------------------------------------------------
@@ -478,13 +491,13 @@ export async function startRun(opts: {
   // Validate workflow at load time (hard rule: fail at load, not at runtime).
   loadWorkflow(workflow);
 
-  const runId = makeRunId(planPath, Date.now());
+  const runId = makeRunId(planPath, join(homeDir, "runs"));
   const runDir = join(homeDir, "runs", runId);
   const stateFile = join(runDir, "state.json");
   const worktreePath = join(homeDir, "worktrees", runId);
 
-  // Defensive backstop: the random suffix makes collision essentially impossible,
-  // but we assert loudly rather than silently clobber an existing run.
+  // Defensive backstop: the run-count scheme ensures a unique ID is computed by
+  // scanning existing dirs, but we assert loudly rather than silently clobber.
   if (existsSync(runDir)) {
     throw new Error(
       `dagrun: run directory "${runDir}" already exists — this should never happen with the unique run-id scheme; aborting to avoid clobbering an existing run`,
@@ -592,6 +605,11 @@ export async function startRun(opts: {
 
   writeState(stateFile, state);
   process.stdout.write(`dagrun: starting run ${runId}\n`);
+
+  // Export PR title prefix so the pr node session inherits it (env-propagation rule).
+  // Must be set before the executor/SDK query() is spawned. The pr node uses this
+  // to enforce Conventional Commits format: "{type}: {description}".
+  process.env["DAGRUN_PR_TITLE_PREFIX"] = makePrTitlePrefix(workflow.name);
 
   // When no custom factory is provided, use makeSDKRunner with the night flag
   // so the correct permissionMode is selected per the two-posture rule.
@@ -1102,6 +1120,10 @@ export async function resumeRun(opts: {
     seedWorktreeSiblings(dagrunnerRoot, destClaude);
   }
 
+  // Export PR title prefix before executor/SDK query() so the pr node session inherits it.
+  // resumeRun is a fresh process — the env set in startRun does not survive here.
+  process.env["DAGRUN_PR_TITLE_PREFIX"] = makePrTitlePrefix(workflow.name);
+
   // Re-run the DAG engine with the (possibly updated) state.
   const executor = wrapWithPrScan(
     (opts.executorFactory ?? makeSDKRunner)(
@@ -1364,6 +1386,9 @@ export async function rerunNode(opts: {
       `  Worktree: ${worktreePath}\n` +
       `  Artifacts: ${artifactsDir}\n`,
   );
+
+  // Export PR title prefix before executor/SDK query() so the pr node session inherits it.
+  process.env["DAGRUN_PR_TITLE_PREFIX"] = makePrTitlePrefix(state.workflow);
 
   const executor = (opts.executorFactory ?? makeSDKRunner)(
     config,

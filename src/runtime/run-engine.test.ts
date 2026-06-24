@@ -1,10 +1,10 @@
 /**
  * run-engine.test.ts — unit tests for pure exports only.
  *
- * Scope: pure exported helpers (makeRunId). NOT orchestration — startRun,
- * resumeRun, runDag, and their collaborators are Tier C and owned by smoke.
- * This file tests only the extracted pure functions that have no orchestration
- * dependencies. See DECISIONS.md § unit-test-backfill-2b.
+ * Scope: pure exported helpers (makeRunId, makeBranchName, makePrTitlePrefix).
+ * NOT orchestration — startRun, resumeRun, runDag, and their collaborators are
+ * Tier C and owned by smoke. This file tests only the extracted pure functions
+ * that have no orchestration dependencies. See DECISIONS.md § unit-test-backfill-2b.
  *
  * Run with:
  *   node --test --import tsx src/runtime/run-engine.test.ts
@@ -18,6 +18,8 @@ import { join } from "node:path";
 
 import {
   makeRunId,
+  makeBranchName,
+  makePrTitlePrefix,
   formatVerifyRecommendation,
   findWorktreeScratch,
   worktreeArtifactPatterns,
@@ -31,52 +33,97 @@ import {
 // makeRunId
 // ---------------------------------------------------------------------------
 
-test("makeRunId: converts plan basename to slug and appends timestamp and suffix", () => {
-  const result = makeRunId("/a/b/my-plan.md", 123, "abc");
-  assert.equal(result, "my-plan-123-abc");
+test("makeRunId: extracts issue number from filename, first run returns {issueNum}-1", () => {
+  const runsDir = mkdtempSync(join(tmpdir(), "dr-runid-"));
+  const result = makeRunId(
+    "/plans/53856-single-job-priority-update-grpc-plan.md",
+    runsDir,
+  );
+  assert.equal(result, "53856-1");
 });
 
-test("makeRunId: special chars in filename are replaced with hyphens", () => {
-  const result = makeRunId("/path/to/My Plan (v2).md", 456, "abc");
-  // uppercase → lowercase, spaces and parens → hyphens, then -<timestamp>-<suffix>
+test("makeRunId: second run (runsDir has 53856-1) returns 53856-2", () => {
+  const runsDir = mkdtempSync(join(tmpdir(), "dr-runid-"));
+  mkdirSync(join(runsDir, "53856-1"), { recursive: true });
+  const result = makeRunId(
+    "/plans/53856-single-job-priority-update-grpc-plan.md",
+    runsDir,
+  );
+  assert.equal(result, "53856-2");
+});
+
+test("makeRunId: no issue number in filename falls back to 0-N", () => {
+  const runsDir = mkdtempSync(join(tmpdir(), "dr-runid-"));
+  const result = makeRunId(
+    "/plans/single-job-priority-update-grpc-plan.md",
+    runsDir,
+  );
+  assert.equal(result, "0-1");
+});
+
+test("makeRunId: runsDir does not exist — count starts at 1 (no error)", () => {
+  const result = makeRunId("/plans/53856-my-plan.md", "/nonexistent/runs/dir");
+  assert.equal(result, "53856-1");
+});
+
+test("makeRunId: skips entries that don't match {issueNum}-N pattern", () => {
+  const runsDir = mkdtempSync(join(tmpdir(), "dr-runid-"));
+  // An unrelated run dir should not affect the count
+  mkdirSync(join(runsDir, "scaffold-fix-1234567890"), { recursive: true });
+  mkdirSync(join(runsDir, "53856-1"), { recursive: true });
+  const result = makeRunId("/plans/53856-my-plan.md", runsDir);
+  assert.equal(result, "53856-2");
+});
+
+// ---------------------------------------------------------------------------
+// makeBranchName
+// ---------------------------------------------------------------------------
+
+test("makeBranchName: standard feature plan → feat/{issueNum}-{slug}", () => {
+  const result = makeBranchName(
+    "feature",
+    "/plans/53856-single-job-priority-update-grpc-plan.md",
+  );
+  assert.equal(result, "feat/53856-single-job-priority-update-grpc");
+});
+
+test("makeBranchName: fix workflow → fix/{issueNum}-{slug}", () => {
+  const result = makeBranchName("fix", "/plans/12345-add-retry-logic-plan.md");
+  assert.equal(result, "fix/12345-add-retry-logic");
+});
+
+test("makeBranchName: no leading digits in filename — falls back gracefully (no issue prefix)", () => {
+  const result = makeBranchName(
+    "feature",
+    "/plans/single-job-priority-update-grpc-plan.md",
+  );
+  // No leading digits → issueNum is "0", slug is the full filename sans extension
+  assert.ok(result.startsWith("feat/"), `expected feat/ prefix: ${result}`);
   assert.ok(
-    result.endsWith("-456-abc"),
-    `expected to end with -456-abc: ${result}`,
-  );
-  assert.ok(
-    /^[a-z0-9-]+-456-abc$/.test(result),
-    `slug must be lowercase alnum+hyphens: ${result}`,
+    result.includes("single-job-priority-update-grpc"),
+    `expected slug in result: ${result}`,
   );
 });
 
-test("makeRunId: filename without .md extension — .md stripped only", () => {
-  const result = makeRunId("/path/to/plan.md", 789, "def");
-  assert.equal(result, "plan-789-def");
+test("makeBranchName: unknown workflow type falls back to feat/", () => {
+  const result = makeBranchName("unknown-type", "/plans/99-test-plan.md");
+  assert.ok(result.startsWith("feat/"), `expected feat/ prefix: ${result}`);
 });
 
-test("makeRunId: timestamp zero produces slug-0-<suffix>", () => {
-  const result = makeRunId("/x/simple.md", 0, "xyz");
-  assert.equal(result, "simple-0-xyz");
+// ---------------------------------------------------------------------------
+// makePrTitlePrefix
+// ---------------------------------------------------------------------------
+
+test("makePrTitlePrefix: feature → 'feat:'", () => {
+  assert.equal(makePrTitlePrefix("feature"), "feat:");
 });
 
-test("makeRunId: default suffix is git-branch-safe (lowercase hex only)", () => {
-  // Call without a suffix to exercise the default randomBytes path.
-  const result = makeRunId("/x/plan.md", 100);
-  // Format: <slug>-<timestamp>-<hex suffix>
-  assert.ok(
-    /^[a-z][a-z0-9-]*-100-[0-9a-f]+$/.test(result),
-    `runId must match <slug>-<timestamp>-<hex>: ${result}`,
-  );
+test("makePrTitlePrefix: fix → 'fix:'", () => {
+  assert.equal(makePrTitlePrefix("fix"), "fix:");
 });
 
-test("makeRunId: two calls with same plan+timestamp (pinned clock) produce distinct ids", () => {
-  const id1 = makeRunId("/x/plan.md", 1750000000000);
-  const id2 = makeRunId("/x/plan.md", 1750000000000);
-  assert.notEqual(
-    id1,
-    id2,
-    `same-ms calls must produce distinct ids: both were ${id1}`,
-  );
+test("makePrTitlePrefix: unknown workflow → 'feat:'", () => {
+  assert.equal(makePrTitlePrefix("unknown"), "feat:");
 });
 
 // ---------------------------------------------------------------------------

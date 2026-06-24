@@ -32,6 +32,12 @@ export type NodeLaunchEnv = {
   DAGRUN_STORE_DIR: string;
   /** Format command to run before git commit; absent means no-op. */
   DAGRUN_FORMAT_CMD?: string;
+  /**
+   * Conventional Commits type prefix for the PR title: e.g. "feat:", "fix:".
+   * Set by run-engine (startRun/resumeRun/rerunNode) on process.env directly
+   * so all spawned node sessions inherit it. Not populated by buildNodeEnv.
+   */
+  DAGRUN_PR_TITLE_PREFIX?: string;
 };
 
 // ---------------------------------------------------------------------------
