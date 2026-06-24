@@ -46,8 +46,13 @@ type. The retry logic at line 72 has no backoff — add exponential backoff with
 EOF
 ```
 
-4. After writing, confirm to the human: "Gate decision recorded. Type `/exit` to return to dagrun."
-5. Do NOT call `/exit` yourself — the human exits when ready.
+4. After writing the file, output EXACTLY this line and nothing else:
+
+   **Gate decision recorded. Type `/exit` now to return to dagrun and start the next node.**
+
+5. Do NOT call `/exit` yourself — the human exits.
+6. Do NOT start implementing, writing code, or making file changes after recording the decision.
+   Your job ends when the file is written.
 
 ## Constraint
 
