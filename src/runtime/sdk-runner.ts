@@ -182,7 +182,10 @@ export function makeSDKRunner(
     // Inject work-profile MCP servers (e.g. camunda-knowledge) via SDK options.
     // CREV_REPO_DIR is set to the worktree so semgrep/bpmn_lint see the agent's
     // actual working tree. Settings.json carry the allow/deny permissions.
-    const workProfileMcp = readWorkProfileMcpServers(homedir(), worktreePath);
+    const workProfileMcp = readWorkProfileMcpServers(
+      config.claudeConfigDir ?? join(homedir(), ".claude"),
+      worktreePath,
+    );
     if (Object.keys(workProfileMcp).length > 0) {
       options.mcpServers = workProfileMcp as NonNullable<
         (typeof options)["mcpServers"]
@@ -190,7 +193,7 @@ export function makeSDKRunner(
     }
 
     // Set CLAUDE_CONFIG_DIR so the agent session uses the configured Claude
-    // profile (personal ~/.claude vs work ~/.claude-work). Must be set on
+    // profile (work ~/.claude vs personal ~/.claude-personal). Must be set on
     // process.env BEFORE query() spawns — SDK inherits the current env.
     if (config.claudeConfigDir !== undefined) {
       process.env["CLAUDE_CONFIG_DIR"] = config.claudeConfigDir;

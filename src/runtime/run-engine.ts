@@ -565,7 +565,10 @@ export async function startRun(opts: {
     ...(config.claudeConfigDir !== undefined
       ? { claudeConfigDir: config.claudeConfigDir }
       : {}),
-    workProfileMcpServers: readWorkProfileMcpServers(homedir(), worktreePath),
+    workProfileMcpServers: readWorkProfileMcpServers(
+      config.claudeConfigDir ?? join(homedir(), ".claude"),
+      worktreePath,
+    ),
     devharnessSrc: config.DEVHARNESS_SRC,
     dagrunnerHome: homeDir,
   });
@@ -1339,7 +1342,10 @@ export async function rerunNode(opts: {
     ...(config.claudeConfigDir !== undefined
       ? { claudeConfigDir: config.claudeConfigDir }
       : {}),
-    workProfileMcpServers: readWorkProfileMcpServers(homedir(), worktreePath),
+    workProfileMcpServers: readWorkProfileMcpServers(
+      config.claudeConfigDir ?? join(homedir(), ".claude"),
+      worktreePath,
+    ),
     devharnessSrc: config.DEVHARNESS_SRC,
     dagrunnerHome: homeDir,
   });
@@ -1537,7 +1543,10 @@ export async function scaffoldRun(opts: {
     ...(config.claudeConfigDir !== undefined
       ? { claudeConfigDir: config.claudeConfigDir }
       : {}),
-    workProfileMcpServers: readWorkProfileMcpServers(homedir(), worktreePath),
+    workProfileMcpServers: readWorkProfileMcpServers(
+      config.claudeConfigDir ?? join(homedir(), ".claude"),
+      worktreePath,
+    ),
     devharnessSrc: config.DEVHARNESS_SRC,
     dagrunnerHome: homeDir,
   });

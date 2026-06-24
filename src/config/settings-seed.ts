@@ -21,15 +21,15 @@ export interface SourcePassthrough {
 }
 
 /**
- * Read MCP server definitions from ~/.claude-work/.claude.json and return
+ * Read MCP server definitions from <claudeConfigDir>/.claude.json and return
  * them with CREV_REPO_DIR overridden to crevRepoDir.
  * Returns an empty object if the file is absent, unparseable, or has no servers.
  */
 export function readWorkProfileMcpServers(
-  homeDir: string,
+  claudeConfigDir: string,
   crevRepoDir: string,
 ): Record<string, unknown> {
-  const claudeJson = join(homeDir, ".claude-work", ".claude.json");
+  const claudeJson = join(claudeConfigDir, ".claude.json");
   if (!existsSync(claudeJson)) return {};
   try {
     const parsed = JSON.parse(readFileSync(claudeJson, "utf8")) as Record<
@@ -103,7 +103,7 @@ export function buildSeededSettings(opts: {
   homeDir: string;
   tmpDir: string;
   passthrough: SourcePassthrough;
-  /** Expanded path to the Claude config dir (e.g. /Users/x/.claude-work). */
+  /** Expanded path to the Claude config dir (e.g. /Users/x/.claude). */
   claudeConfigDir?: string;
   /** Work-profile MCP servers to include in settings (from readWorkProfileMcpServers). */
   workProfileMcpServers?: Record<string, unknown>;
@@ -160,7 +160,7 @@ export function buildSeededSettings(opts: {
         "Bash(mvn *)",
         "Bash(curl *)",
         "Bash(jq *)",
-        // camunda-knowledge MCP — allowed tools (mirrors ~/.claude-work/settings.json)
+        // camunda-knowledge MCP — allowed tools (mirrors ~/.claude/settings.json)
         "mcp__camunda-knowledge__docs_lookup",
         "mcp__camunda-knowledge__semgrep_scan",
         "mcp__camunda-knowledge__bpmn_lint",

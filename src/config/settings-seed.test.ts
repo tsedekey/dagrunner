@@ -318,7 +318,10 @@ test("readSourcePassthrough: malformed JSON returns empty defaults", () => {
 test("readWorkProfileMcpServers: missing .claude.json returns empty object", () => {
   const homeDir = mkdtempSync(join(tmpdir(), "dr-ss-home-"));
 
-  const result = readWorkProfileMcpServers(homeDir, "/fake/crev");
+  const result = readWorkProfileMcpServers(
+    join(homeDir, ".claude"),
+    "/fake/crev",
+  );
 
   assert.deepStrictEqual(result, {});
 });
@@ -329,8 +332,8 @@ test("readWorkProfileMcpServers: missing .claude.json returns empty object", () 
 
 test("readWorkProfileMcpServers: stdio server with CREV_REPO_DIR gets overridden to crevRepoDir", () => {
   const homeDir = mkdtempSync(join(tmpdir(), "dr-ss-home-"));
-  const claudeWorkDir = join(homeDir, ".claude-work");
-  mkdirSync(claudeWorkDir, { recursive: true });
+  const claudeDir = join(homeDir, ".claude");
+  mkdirSync(claudeDir, { recursive: true });
 
   const claudeJson = {
     mcpServers: {
@@ -343,12 +346,12 @@ test("readWorkProfileMcpServers: stdio server with CREV_REPO_DIR gets overridden
     },
   };
   writeFileSync(
-    join(claudeWorkDir, ".claude.json"),
+    join(claudeDir, ".claude.json"),
     JSON.stringify(claudeJson),
     "utf8",
   );
 
-  const result = readWorkProfileMcpServers(homeDir, "/new/crev/path");
+  const result = readWorkProfileMcpServers(claudeDir, "/new/crev/path");
 
   const server = result["crev-server"] as Record<
     string,
@@ -365,8 +368,8 @@ test("readWorkProfileMcpServers: stdio server with CREV_REPO_DIR gets overridden
 
 test("readWorkProfileMcpServers: http/sse server (type != stdio) is excluded", () => {
   const homeDir = mkdtempSync(join(tmpdir(), "dr-ss-home-"));
-  const claudeWorkDir = join(homeDir, ".claude-work");
-  mkdirSync(claudeWorkDir, { recursive: true });
+  const claudeDir = join(homeDir, ".claude");
+  mkdirSync(claudeDir, { recursive: true });
 
   const claudeJson = {
     mcpServers: {
@@ -388,12 +391,12 @@ test("readWorkProfileMcpServers: http/sse server (type != stdio) is excluded", (
     },
   };
   writeFileSync(
-    join(claudeWorkDir, ".claude.json"),
+    join(claudeDir, ".claude.json"),
     JSON.stringify(claudeJson),
     "utf8",
   );
 
-  const result = readWorkProfileMcpServers(homeDir, "/crev");
+  const result = readWorkProfileMcpServers(claudeDir, "/crev");
 
   assert.ok(!("http-server" in result), "http-server must be excluded");
   assert.ok(!("sse-server" in result), "sse-server must be excluded");
@@ -406,8 +409,8 @@ test("readWorkProfileMcpServers: http/sse server (type != stdio) is excluded", (
 
 test("readWorkProfileMcpServers: server without command field is excluded", () => {
   const homeDir = mkdtempSync(join(tmpdir(), "dr-ss-home-"));
-  const claudeWorkDir = join(homeDir, ".claude-work");
-  mkdirSync(claudeWorkDir, { recursive: true });
+  const claudeDir = join(homeDir, ".claude");
+  mkdirSync(claudeDir, { recursive: true });
 
   const claudeJson = {
     mcpServers: {
@@ -423,12 +426,12 @@ test("readWorkProfileMcpServers: server without command field is excluded", () =
     },
   };
   writeFileSync(
-    join(claudeWorkDir, ".claude.json"),
+    join(claudeDir, ".claude.json"),
     JSON.stringify(claudeJson),
     "utf8",
   );
 
-  const result = readWorkProfileMcpServers(homeDir, "/crev");
+  const result = readWorkProfileMcpServers(claudeDir, "/crev");
 
   assert.ok(
     !("no-command-server" in result),

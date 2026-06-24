@@ -21,7 +21,7 @@ export type DagrunnerConfig = {
   DEVHARNESS_SRC: string;
   /**
    * Which Claude config directory agent sessions use (CLAUDE_CONFIG_DIR).
-   * ~/.claude = personal, ~/.claude-work = work. Defaults to ~/.claude if unset.
+   * ~/.claude = work (default), ~/.claude-personal = personal.
    */
   claudeConfigDir?: string;
   maxBudgetUsd?: number;

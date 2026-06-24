@@ -214,7 +214,7 @@ test("resolveConfig: claudeConfigDir with ~/ is expanded", () => {
     join(homeDir, "config.json"),
     JSON.stringify({
       DEVHARNESS_SRC: "/some/src",
-      claudeConfigDir: "~/.claude-work",
+      claudeConfigDir: "~/.claude-personal",
     }),
     "utf8",
   );
@@ -226,8 +226,8 @@ test("resolveConfig: claudeConfigDir with ~/ is expanded", () => {
     `Expected expanded path, got: ${config.claudeConfigDir}`,
   );
   assert.ok(
-    config.claudeConfigDir?.endsWith("/.claude-work"),
-    `Expected to end with .claude-work, got: ${config.claudeConfigDir}`,
+    config.claudeConfigDir?.endsWith("/.claude-personal"),
+    `Expected to end with .claude-personal, got: ${config.claudeConfigDir}`,
   );
 });
 

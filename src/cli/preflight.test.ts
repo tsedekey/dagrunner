@@ -30,8 +30,11 @@ import {
   getAgentContext,
   formatAgentContext,
   runPreflight,
-  parseClaudeVersion,
-  checkClaudeCliVersion,
+  checkSdkBinary,
+  checkClaudeConfigDir,
+  checkNodeVersion,
+  checkStaleLock,
+  checkDevharnessNotInWorktreeRoot,
   type AgentContext,
 } from "./preflight.js";
 import type { DagrunnerConfig } from "../config/xdg.js";
@@ -166,7 +169,7 @@ const FIXED_CTX: AgentContext = {
 
 const FIXED_CONFIG: DagrunnerConfig = {
   DEVHARNESS_SRC: "/test/devharness/src",
-  claudeConfigDir: "/test/.claude-work",
+  claudeConfigDir: "/test/.claude",
   maxBudgetUsd: 10,
   maxParallel: 3,
 };
@@ -251,83 +254,6 @@ test("runPreflight: nonexistent DEVHARNESS_SRC produces a failure", () => {
 });
 
 // ---------------------------------------------------------------------------
-// parseClaudeVersion — pure parser
-// ---------------------------------------------------------------------------
-
-test("parseClaudeVersion: extracts semver from standard claude --version output", () => {
-  assert.equal(parseClaudeVersion("2.1.181 (Claude Code)"), "2.1.181");
-});
-
-test("parseClaudeVersion: extracts semver from bare version string", () => {
-  assert.equal(parseClaudeVersion("1.2.3"), "1.2.3");
-});
-
-test("parseClaudeVersion: extracts semver from output with trailing newline", () => {
-  assert.equal(parseClaudeVersion("2.1.181 (Claude Code)\n"), "2.1.181");
-});
-
-test("parseClaudeVersion: throws on unparseable output (fail-loud)", () => {
-  assert.throws(
-    () => parseClaudeVersion("not a version string"),
-    /Cannot parse claude version/,
-  );
-});
-
-test("parseClaudeVersion: throws on empty string (fail-loud, not silent pass)", () => {
-  assert.throws(() => parseClaudeVersion(""), /Cannot parse claude version/);
-});
-
-// ---------------------------------------------------------------------------
-// checkClaudeCliVersion — pure matcher
-// ---------------------------------------------------------------------------
-
-test("checkClaudeCliVersion: no failures when version matches", () => {
-  const result = checkClaudeCliVersion(
-    "2.1.181 (Claude Code)",
-    "2.1.181",
-    false,
-  );
-  assert.deepStrictEqual(result, []);
-});
-
-test("checkClaudeCliVersion: failure when version mismatches (contains both versions)", () => {
-  const result = checkClaudeCliVersion(
-    "2.1.999 (Claude Code)",
-    "2.1.181",
-    false,
-  );
-  assert.equal(result.length, 1);
-  assert.ok(
-    result[0]?.includes("2.1.181"),
-    `Expected pinned version in message, got: ${result[0]}`,
-  );
-  assert.ok(
-    result[0]?.includes("2.1.999"),
-    `Expected found version in message, got: ${result[0]}`,
-  );
-});
-
-test("checkClaudeCliVersion: failure when output is unparseable (fail-loud, not silent pass)", () => {
-  const result = checkClaudeCliVersion("not a version", "2.1.181", false);
-  assert.equal(result.length, 1);
-  assert.ok(
-    result[0]?.toLowerCase().includes("parse") ||
-      result[0]?.toLowerCase().includes("version"),
-    `Expected parse-error message, got: ${result[0]}`,
-  );
-});
-
-test("checkClaudeCliVersion: skip=true bypasses check regardless of output", () => {
-  const result = checkClaudeCliVersion("anything at all", "2.1.181", true);
-  assert.deepStrictEqual(result, []);
-});
-
-test("checkClaudeCliVersion: skip=true bypasses even unparseable output", () => {
-  const result = checkClaudeCliVersion("", "2.1.181", true);
-  assert.deepStrictEqual(result, []);
-});
-
-// ---------------------------------------------------------------------------
 // runPreflight: DEVHARNESS_SRC exists but is not a git repo produces a failure
 // ---------------------------------------------------------------------------
 
@@ -351,4 +277,181 @@ test("runPreflight: DEVHARNESS_SRC exists but is not a git repo produces a failu
       `Expected git-related failure, got: ${failureText}`,
     );
   }
+});
+
+// ---------------------------------------------------------------------------
+// checkSdkBinary — injectable resolver
+// ---------------------------------------------------------------------------
+
+test("checkSdkBinary: no failures when resolver finds the binary", () => {
+  assert.deepStrictEqual(
+    checkSdkBinary(() => "/some/path/claude"),
+    [],
+  );
+});
+
+test("checkSdkBinary: failure when resolver throws (package not installed)", () => {
+  const result = checkSdkBinary(() => {
+    throw new Error("MODULE_NOT_FOUND");
+  });
+  assert.equal(result.length, 1);
+  assert.ok(
+    result[0]!.includes("npm install"),
+    `Expected npm install hint, got: ${result[0]}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// checkClaudeConfigDir — pure, uses existsSync
+// ---------------------------------------------------------------------------
+
+test("checkClaudeConfigDir: no failures when claudeConfigDir is undefined", () => {
+  assert.deepStrictEqual(checkClaudeConfigDir(undefined), []);
+});
+
+test("checkClaudeConfigDir: no failures when claudeConfigDir exists", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dr-pf-ccd-"));
+  assert.deepStrictEqual(checkClaudeConfigDir(dir), []);
+});
+
+test("checkClaudeConfigDir: failure when claudeConfigDir does not exist", () => {
+  const result = checkClaudeConfigDir("/nonexistent/claude-config-dir-dr-pf");
+  assert.equal(result.length, 1);
+  assert.ok(
+    result[0]!.includes("/nonexistent/claude-config-dir-dr-pf"),
+    `Expected path in message, got: ${result[0]}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// checkNodeVersion — pure
+// ---------------------------------------------------------------------------
+
+test("checkNodeVersion: no failures on exact minimum version", () => {
+  assert.deepStrictEqual(checkNodeVersion("20.10.0"), []);
+});
+
+test("checkNodeVersion: no failures on a newer version", () => {
+  assert.deepStrictEqual(checkNodeVersion("22.3.1"), []);
+});
+
+test("checkNodeVersion: failure on Node 20.9.0 (minor below 10)", () => {
+  const result = checkNodeVersion("20.9.0");
+  assert.equal(result.length, 1);
+  assert.ok(
+    result[0]!.includes("20.9.0"),
+    `Expected version in message, got: ${result[0]}`,
+  );
+});
+
+test("checkNodeVersion: failure on Node 18.x", () => {
+  const result = checkNodeVersion("18.20.0");
+  assert.equal(result.length, 1);
+  assert.ok(
+    result[0]!.includes("18.20.0"),
+    `Expected version in message, got: ${result[0]}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// checkStaleLock — uses real temp dir with lock file
+// ---------------------------------------------------------------------------
+
+test("checkStaleLock: no failures when no lock file exists", () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "dr-pf-lock-"));
+  assert.deepStrictEqual(checkStaleLock(homeDir), []);
+});
+
+test("checkStaleLock: failure with stale lock (dead PID)", () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "dr-pf-lock-"));
+  // PID 1 exists but is owned by root; any non-root process gets EPERM.
+  // Use PID 2147483647 (max int32) which is guaranteed not to exist.
+  const deadPid = 2147483647;
+  writeFileSync(
+    join(homeDir, "active.lock"),
+    JSON.stringify({
+      runId: "test-run-001",
+      pid: deadPid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+    }),
+    "utf8",
+  );
+  const result = checkStaleLock(homeDir);
+  assert.equal(result.length, 1);
+  assert.ok(
+    result[0]!.toLowerCase().includes("stale"),
+    `Expected stale mention, got: ${result[0]}`,
+  );
+  assert.ok(
+    result[0]!.includes("test-run-001"),
+    `Expected run id in message, got: ${result[0]}`,
+  );
+});
+
+test("checkStaleLock: failure with active lock (current process PID)", () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "dr-pf-lock-"));
+  writeFileSync(
+    join(homeDir, "active.lock"),
+    JSON.stringify({
+      runId: "active-run-001",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+    }),
+    "utf8",
+  );
+  const result = checkStaleLock(homeDir);
+  assert.equal(result.length, 1);
+  assert.ok(
+    result[0]!.includes("active-run-001"),
+    `Expected run id in message, got: ${result[0]}`,
+  );
+  // Should NOT say "stale" — it's a live process
+  assert.ok(
+    !result[0]!.toLowerCase().includes("stale"),
+    `Should not say stale for live pid, got: ${result[0]}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// checkDevharnessNotInWorktreeRoot — pure path check
+// ---------------------------------------------------------------------------
+
+test("checkDevharnessNotInWorktreeRoot: no failures when DEVHARNESS_SRC is outside worktree root", () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "dr-pf-wt-"));
+  const srcDir = mkdtempSync(join(tmpdir(), "dr-pf-src-"));
+  const config: DagrunnerConfig = { DEVHARNESS_SRC: srcDir };
+  assert.deepStrictEqual(checkDevharnessNotInWorktreeRoot(config, homeDir), []);
+});
+
+test("checkDevharnessNotInWorktreeRoot: failure when DEVHARNESS_SRC is inside homeDir/worktrees", () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "dr-pf-wt-"));
+  const fakeSrc = join(homeDir, "worktrees", "my-run", "repo");
+  const config: DagrunnerConfig = { DEVHARNESS_SRC: fakeSrc };
+  const result = checkDevharnessNotInWorktreeRoot(config, homeDir);
+  assert.equal(result.length, 1);
+  assert.ok(
+    result[0]!.toLowerCase().includes("worktree"),
+    `Expected worktree mention, got: ${result[0]}`,
+  );
+});
+
+test("checkDevharnessNotInWorktreeRoot: failure when DEVHARNESS_SRC is the worktree root itself", () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "dr-pf-wt-"));
+  const config: DagrunnerConfig = {
+    DEVHARNESS_SRC: join(homeDir, "worktrees"),
+  };
+  const result = checkDevharnessNotInWorktreeRoot(config, homeDir);
+  assert.equal(result.length, 1);
+});
+
+test("checkDevharnessNotInWorktreeRoot: respects custom worktreeRoot from config", () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "dr-pf-wt-"));
+  const customWtRoot = mkdtempSync(join(tmpdir(), "dr-pf-custom-wt-"));
+  const fakeSrc = join(customWtRoot, "some-run", "repo");
+  const config: DagrunnerConfig = {
+    DEVHARNESS_SRC: fakeSrc,
+    worktreeRoot: customWtRoot,
+  };
+  const result = checkDevharnessNotInWorktreeRoot(config, homeDir);
+  assert.equal(result.length, 1);
 });

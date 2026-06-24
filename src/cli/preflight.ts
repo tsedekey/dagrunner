@@ -10,15 +10,18 @@
 
 import { execSync } from "node:child_process";
 import { existsSync, readdirSync, mkdirSync, writeFileSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, resolve as resolvePath, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import type { DagrunnerConfig } from "../config/xdg.js";
 import {
   readSourcePassthrough,
   buildSeededSettings,
   readWorkProfileMcpServers,
 } from "../config/settings-seed.js";
-import { EXPECTED_CLAUDE_CLI_VERSION } from "../config/versions.js";
+import { readLock } from "../core/lock.js";
+
+const _require = createRequire(import.meta.url);
 
 // ---------------------------------------------------------------------------
 // PreflightResult
@@ -27,47 +30,107 @@ import { EXPECTED_CLAUDE_CLI_VERSION } from "../config/versions.js";
 export type PreflightResult = { ok: true } | { ok: false; failures: string[] };
 
 // ---------------------------------------------------------------------------
-// parseClaudeVersion / checkClaudeCliVersion — pure, TDD-able seam
+// Pure check functions — injectable for unit tests
 // ---------------------------------------------------------------------------
 
-/**
- * Extract the semver from `claude --version` output.
- * Throws (fail-loud) if no semver is found — never silently passes.
- */
-export function parseClaudeVersion(output: string): string {
-  const match = output.match(/(\d+\.\d+\.\d+)/);
-  if (!match) {
-    throw new Error(
-      `Cannot parse claude version from output: "${output.trim()}"`,
-    );
+/** Check A: SDK bundled Claude binary is present (optional dep installed). */
+export function checkSdkBinary(
+  tryResolve: (s: string) => string = _require.resolve.bind(_require),
+): string[] {
+  const binSuffix = process.platform === "win32" ? ".exe" : "";
+  // Mirror sdk.mjs AT() resolution order: linux tries musl variant too.
+  const variants =
+    process.platform === "linux"
+      ? [
+          `@anthropic-ai/claude-agent-sdk-linux-${process.arch}`,
+          `@anthropic-ai/claude-agent-sdk-linux-${process.arch}-musl`,
+        ]
+      : [`@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`];
+
+  for (const pkgName of variants) {
+    try {
+      tryResolve(`${pkgName}/claude${binSuffix}`);
+      return [];
+    } catch {
+      // try next variant
+    }
   }
-  return match[1]!;
+  return [
+    `SDK bundled Claude binary not found (expected "${variants[0]!}"). ` +
+      `Run: npm install  (do not use --omit=optional).`,
+  ];
 }
 
-/**
- * Pure: compare the raw `claude --version` output against the expected pin.
- * Returns a list of failure messages (empty = ok).
- * skip=true bypasses the check (DAGRUN_SKIP_CLI_VERSION_CHECK=1).
- */
-export function checkClaudeCliVersion(
-  versionOutput: string,
-  expected: string,
-  skip: boolean,
-): string[] {
-  if (skip) return [];
-  let found: string;
-  try {
-    found = parseClaudeVersion(versionOutput);
-  } catch {
+/** Check B: claudeConfigDir exists when configured. */
+export function checkClaudeConfigDir(claudeConfigDir?: string): string[] {
+  if (claudeConfigDir === undefined) return [];
+  if (!existsSync(claudeConfigDir)) {
     return [
-      `Cannot parse claude CLI version from output: "${versionOutput.trim()}". ` +
-        `Set DAGRUN_SKIP_CLI_VERSION_CHECK=1 to bypass.`,
+      `claudeConfigDir "${claudeConfigDir}" does not exist. ` +
+        `Create it or remove the setting from config.json.`,
     ];
   }
-  if (found !== expected) {
+  return [];
+}
+
+/** Check C: Node.js version meets the >=20.10.0 requirement. */
+export function checkNodeVersion(
+  nodeVersion: string = process.versions.node,
+): string[] {
+  const [majorStr, minorStr] = nodeVersion.split(".");
+  const major = parseInt(majorStr ?? "0", 10);
+  const minor = parseInt(minorStr ?? "0", 10);
+  if (major < 20 || (major === 20 && minor < 10)) {
     return [
-      `claude CLI version mismatch: pinned ${expected}, found ${found}. ` +
-        `Install the pinned version, or set DAGRUN_SKIP_CLI_VERSION_CHECK=1 to bypass.`,
+      `Node.js ${nodeVersion} is below the required >=20.10.0. Upgrade Node.js.`,
+    ];
+  }
+  return [];
+}
+
+/** Check D: no stale or active lock from a prior run. */
+export function checkStaleLock(homeDir: string): string[] {
+  const lock = readLock(homeDir);
+  if (!lock) return [];
+
+  const lockFile = join(homeDir, "active.lock");
+  let pidAlive: boolean;
+  try {
+    process.kill(lock.pid, 0);
+    pidAlive = true;
+  } catch (e) {
+    // ESRCH = no such process (dead); EPERM = no permission but process exists
+    pidAlive = (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+
+  if (!pidAlive) {
+    return [
+      `Stale lock from crashed run "${lock.runId}" (pid ${lock.pid}). ` +
+        `Remove it: rm "${lockFile}"`,
+    ];
+  }
+  return [
+    `Run "${lock.runId}" is already active (pid ${lock.pid}, started ${lock.startedAt}). ` +
+      `Wait for it to complete or check with \`dagrun status\`.`,
+  ];
+}
+
+/** Check E: DEVHARNESS_SRC is not inside the dagrunner worktree root. */
+export function checkDevharnessNotInWorktreeRoot(
+  config: DagrunnerConfig,
+  homeDir: string,
+): string[] {
+  const worktreeRoot = resolvePath(
+    config.worktreeRoot ?? join(homeDir, "worktrees"),
+  );
+  const devharness = resolvePath(config.DEVHARNESS_SRC);
+  if (
+    devharness === worktreeRoot ||
+    devharness.startsWith(worktreeRoot + sep)
+  ) {
+    return [
+      `DEVHARNESS_SRC "${config.DEVHARNESS_SRC}" points inside the dagrunner worktree root "${worktreeRoot}". ` +
+        `Set DEVHARNESS_SRC to your main checkout, not a managed worktree.`,
     ];
   }
   return [];
@@ -152,6 +215,9 @@ export function runPreflight(
           `Could not check git status in DEVHARNESS_SRC: "${config.DEVHARNESS_SRC}"`,
         );
       }
+
+      // E. DEVHARNESS_SRC must not be inside the dagrunner worktree root
+      failures.push(...checkDevharnessNotInWorktreeRoot(config, homeDir));
     }
   }
 
@@ -165,6 +231,9 @@ export function runPreflight(
       );
     }
   }
+
+  // D. No stale or active lock
+  failures.push(...checkStaleLock(homeDir));
 
   // ------------------------------------------------------------------
   // 5. At least one auth credential is present
@@ -203,48 +272,14 @@ export function runPreflight(
     );
   }
 
-  // ------------------------------------------------------------------
-  // 6. macOS Seatbelt sandbox availability (advisory warning, not hard fail)
-  //    The sandbox key is darwin-only; we only check availability, not activation.
-  // ------------------------------------------------------------------
-  if (process.platform === "darwin") {
-    try {
-      execSync("which sandbox-exec", { stdio: "pipe" });
-      // sandbox-exec present — seatbelt available
-    } catch {
-      // Not a hard fail — sandbox.enabled in settings.json will still work
-      // via Claude Code's built-in sandbox wrapper on supported macOS versions.
-    }
-  }
+  // C. Node.js version
+  failures.push(...checkNodeVersion());
 
-  // ------------------------------------------------------------------
-  // 7. claude CLI is on PATH + version matches pin
-  // ------------------------------------------------------------------
-  try {
-    execSync("which claude", { stdio: "pipe" });
-    // Version check — fail loud on drift; bypass with DAGRUN_SKIP_CLI_VERSION_CHECK=1
-    try {
-      const versionOut = execSync("claude --version", {
-        encoding: "utf8",
-        timeout: 5000,
-        stdio: "pipe",
-      });
-      const skip = process.env["DAGRUN_SKIP_CLI_VERSION_CHECK"] === "1";
-      failures.push(
-        ...checkClaudeCliVersion(versionOut, EXPECTED_CLAUDE_CLI_VERSION, skip),
-      );
-    } catch {
-      if (process.env["DAGRUN_SKIP_CLI_VERSION_CHECK"] !== "1") {
-        failures.push(
-          `Cannot run "claude --version". Set DAGRUN_SKIP_CLI_VERSION_CHECK=1 to bypass.`,
-        );
-      }
-    }
-  } catch {
-    failures.push(
-      `"claude" CLI not found on PATH. Install Claude Code: https://claude.ai/code`,
-    );
-  }
+  // A. SDK bundled Claude binary
+  failures.push(...checkSdkBinary());
+
+  // B. claudeConfigDir exists when configured
+  failures.push(...checkClaudeConfigDir(config.claudeConfigDir));
 
   if (failures.length === 0) return { ok: true };
   return { ok: false, failures };
@@ -357,7 +392,10 @@ export function getAgentContext(
       ? Object.keys(passthrough.mcpServers as Record<string, unknown>)
       : [];
   const workProfileMcpKeys = Object.keys(
-    readWorkProfileMcpServers(homedir(), config.DEVHARNESS_SRC),
+    readWorkProfileMcpServers(
+      config.claudeConfigDir ?? join(homedir(), ".claude"),
+      config.DEVHARNESS_SRC,
+    ),
   );
   const mcpServers = [...devharnessMcp, ...workProfileMcpKeys];
 
@@ -479,7 +517,10 @@ export function writeAgentContextFile(
     lines.push(`_None configured._`);
   } else {
     const workProfileServers = Object.keys(
-      readWorkProfileMcpServers(homedir(), config.DEVHARNESS_SRC),
+      readWorkProfileMcpServers(
+        config.claudeConfigDir ?? join(homedir(), ".claude"),
+        config.DEVHARNESS_SRC,
+      ),
     );
     for (const s of ctx.mcpServers) {
       const via = workProfileServers.includes(s)
@@ -553,7 +594,9 @@ export function formatAgentContext(
 
   lines.push(`\n🤖 Agent context  (dagrunner + DEVHARNESS_SRC)`);
   lines.push(hr);
-  lines.push(`  Permission mode   acceptEdits`);
+  lines.push(
+    `  Permission mode   acceptEdits (attended) · bypassPermissions (--night)`,
+  );
   lines.push(`  Sandbox           enabled for all nodes`);
   lines.push(`  Hooks             ${ctx.hooks.join(" · ")}`);
 
