@@ -6,15 +6,30 @@ produce the artifacts.
 
 ## Step 0 — Confirm output directory
 
-Run this first so you know the exact path for every write in this session:
+Run each line separately and note the paths printed:
 
 ```bash
-echo "ARTIFACTS : $DAGRUN_ARTIFACTS"
-echo "RUN DIR   : $DAGRUN_RUN_DIR"
+echo "$DAGRUN_ARTIFACTS"
+```
+
+```bash
+echo "$DAGRUN_RUN_DIR"
+```
+
+```bash
 mkdir -p "$DAGRUN_ARTIFACTS"
 ```
 
-All output files go to `$DAGRUN_ARTIFACTS/` (the value printed above).
+The value of `$DAGRUN_ARTIFACTS` is the **only** directory you may write to.
+It ends with the node name (`pr/`), not `artifacts/`.
+
+**If you use the Write tool:** substitute the exact printed value of
+`$DAGRUN_ARTIFACTS` as the directory — the Write tool does not expand shell
+variables. For example, if `$DAGRUN_ARTIFACTS` printed
+`/home/user/.local/share/dagrunner/runs/53857-1/pr`, write to
+`/home/user/.local/share/dagrunner/runs/53857-1/pr/body.md`.
+
+All output files go to `$DAGRUN_ARTIFACTS/`.
 `$DAGRUN_RUN_DIR` is read-only in this session — never write there.
 
 ## Step 1 — Read all available artifacts
@@ -112,50 +127,6 @@ git commit -m "${DAGRUN_PR_TITLE_PREFIX:-feat} <short description> (dagrun: $DAG
 ```
 
 Under normal flow `implement.md` commits first — this is a no-op if that happened.
-
-## Step 4b — Write sibling launch commands
-
-Read the PR number from `pr-meta.json` if available, otherwise leave as a placeholder.
-
-Write `$DAGRUN_ARTIFACTS/sibling-commands.md`:
-
-```bash
-PR_NUMBER=$(jq -r '.prNumber // "<PR_NUMBER>"' "$DAGRUN_ARTIFACTS/pr-meta.json" 2>/dev/null || echo "<PR_NUMBER>")
-SPEC_PATH="$DAGRUN_RUN_DIR/verify-guide/seeding-spec.json"
-
-cat > "$DAGRUN_ARTIFACTS/sibling-commands.md" << SIBLINGS
-# Sibling Commands
-
-Open a Claude Code session in the worktree and run these commands:
-
-## 1. Seed the cluster for live demo
-
-\`\`\`
-/seed-data $SPEC_PATH
-\`\`\`
-
-Requires: local Orchestration Cluster running (\`c8ctl start c8-cluster\`).
-Artifacts will be written to: $DAGRUN_RUN_DIR/seed-data/
-
-## 2. Babysit CI (after PR is created)
-
-\`\`\`
-/ci-babysit --pr $PR_NUMBER
-\`\`\`
-
-## 3. Triage PR review comments (after reviewers comment)
-
-\`\`\`
-/pr-triage --pr $PR_NUMBER
-\`\`\`
-SIBLINGS
-```
-
-Confirm the file was written:
-
-```bash
-cat "$DAGRUN_ARTIFACTS/sibling-commands.md"
-```
 
 ## Step 5 — Reflections (optional, do this last)
 
