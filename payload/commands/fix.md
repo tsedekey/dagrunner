@@ -23,6 +23,9 @@ For each actionable finding in order:
 1. Read the cited file at the cited line to understand the context.
 2. Apply the minimal correct fix — only the code needed to address the finding. Do not refactor beyond the scope of the issue.
 3. After each fix, verify the file still compiles / parses (run `npx tsc --noEmit` for TypeScript files in the `ts/` directory; run `cd java && ./mvnw compile -q` for Java files if a `java/pom.xml` is present).
+4. If the fix added a new test file, run it immediately to confirm it passes before moving to the next finding:
+   - New `*Test.java`: `cd java && ./mvnw test -pl <module> -Dtest=<ClassName> -q`
+   - New `*IT.java`: `cd java && ./mvnw verify -pl <module> -Dit.test=<ClassName> -q`
 
 ---
 
@@ -50,7 +53,9 @@ Write the checklist to `$DAGRUN_ARTIFACTS/addressed-checklist.md`:
 Run the project's tests to confirm nothing is broken:
 
 - If a `ts/package.json` is present: `npm --prefix ts test`
-- If a `java/pom.xml` is present: `cd java && ./mvnw test -q` (this pattern is allow-listed)
+- If a `java/pom.xml` is present: check whether any `*IT.java` files were added or modified in this run.
+  - If yes: `cd java && ./mvnw verify -q` (runs both Surefire unit tests and Failsafe ITs)
+  - If no: `cd java && ./mvnw test -q` (Surefire only; this pattern is allow-listed)
 - If a root `package.json` is present with a `test` script: `npm test`
 - For any other project type: run the standard test command from the README
 
