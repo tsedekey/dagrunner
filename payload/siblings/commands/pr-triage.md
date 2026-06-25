@@ -174,10 +174,24 @@ Apply one classification from this taxonomy:
 | `already-addressed`            | Issue was fixed in a prior commit; reply points to it                 |
 | `defer-out-of-scope`           | Valid concern but out of scope; propose a follow-up issue             |
 
-Tone defaults:
+**Reply length rules (apply regardless of source type):**
 
-- **Bot (copilot, automation-bot):** terse + evidence-bearing (cite `file:line`)
-- **Human:** collaborative, acknowledge the concern first
+State only what will happen or what the evidence shows. No preamble, no restating
+the reviewer's concern, no explaining why the existing code is structured the way it is.
+
+- **Bot (copilot, automation-bot):** ≤1 sentence. No acknowledgment.
+  - `needs-code-change` → "Will apply [action]."
+  - `ungrounded-or-false-positive` → cite the evidence: "This was addressed in <sha8> / line N now reads X."
+  - `nit-or-style` → "Will apply." or "Keeping as-is — [one-word reason]."
+- **Human:** ≤2 sentences. Answer the question or state the action. No "Good catch", no "Great point".
+  - `needs-code-change` → "Will [action]." (Phase 4 appends the commit SHA automatically.)
+  - `question-back` → answer directly in 1–2 sentences.
+  - `defer-out-of-scope` → "Valid point — opened #<issue> to track."
+
+✓ "Will apply the rename."
+✗ "Good catch on the naming. The REST test layer can't observe the client-side timeout config (it
+only captures the serialized request body), so the assertion is intentionally limited to
+`priority`. Renaming to `shouldSend…` would make the intent clearer. Will apply the rename."
 
 ### 3.6 Write the draft
 
@@ -212,7 +226,9 @@ For `needs-code-change` drafts, open the proposed reply section with:
 ⚠ CODE CHANGE NEEDED — human decision required before posting this reply.
 ```
 
-Then draft the reply text acknowledging the concern and describing the intended change.
+Then draft the reply text as a single action statement per the reply length rules above.
+Do not acknowledge the concern, do not explain the current code, do not describe why the
+change is needed — Phase 4 will append the commit SHA. Example: "Will apply the rename."
 
 For `needs-code-change` drafts, also write an **Implementation plan** section after the proposed reply:
 
