@@ -2,7 +2,7 @@
 set -euo pipefail
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-RUN_ID="${DAGRUN_RUN_ID:-$(echo "$BRANCH" | sed -E 's|^(feature|feat)/||')}"
+RUN_ID="${DAGRUN_RUN_ID:-$(echo "$BRANCH" | sed -E 's/^feat(ure)?\///')}"
 ARTIFACTS_DIR="${DAGRUN_ARTIFACTS:-$HOME/.local/share/dagrunner/runs/${RUN_ID}/pr-triage}"
 STATE_FILE="$ARTIFACTS_DIR/pr-triage-state.json"
 TICK_FILE="$ARTIFACTS_DIR/pr-triage-tick.json"

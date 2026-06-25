@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Derive artifacts dir from git — same formula as phase-0, no inter-phase temp file needed
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-RUN_ID="${DAGRUN_RUN_ID:-$(echo "$BRANCH" | sed -E 's|^(feature|feat)/||')}"
+RUN_ID="${DAGRUN_RUN_ID:-$(echo "$BRANCH" | sed -E 's/^feat(ure)?\///')}"
 ARTIFACTS_DIR="${DAGRUN_ARTIFACTS:-$HOME/.local/share/dagrunner/runs/${RUN_ID}/pr-triage}"
 STATE_FILE="$ARTIFACTS_DIR/pr-triage-state.json"
 TICK_FILE="$ARTIFACTS_DIR/pr-triage-tick.json"
@@ -83,13 +83,25 @@ else
   echo "{}" > "$KNOWN_FILE"
 fi
 
+# Build set of IDs we already posted as replies — these must be excluded from new_or_edited
+# so the model never tries to triage its own outgoing comments.
+POSTED_IDS_FILE="$ARTIFACTS_DIR/posted-ids.json"
+if [ -f "$TRIAGE_STATE" ]; then
+  jq '[.comments // {} | to_entries[] | .value.posted_comment_id | select(. != null)] | map(tostring) | unique' \
+    "$TRIAGE_STATE" > "$POSTED_IDS_FILE"
+else
+  echo "[]" > "$POSTED_IDS_FILE"
+fi
+
 # Compute new_or_edited — use --slurpfile so jq reads from files, not shell variables
 jq -c \
-  --slurpfile known "$KNOWN_FILE" '
+  --slurpfile known "$KNOWN_FILE" \
+  --slurpfile posted_ids "$POSTED_IDS_FILE" '
   [.[] | . as $c |
     ($c.id | tostring) as $id |
     ($known[0][$id] // null) as $prior |
-    if $prior == null then
+    if ($posted_ids[0] | index($id)) != null then empty  # own reply — skip
+    elif $prior == null then
       {id: $c.id, source: "inline", updated_at: $c.updated_at, is_edit: false,
        login: $c.user.login, user_type: $c.user.type}
     elif $c.updated_at > ($prior.updated_at // "") then
@@ -100,11 +112,14 @@ jq -c \
   ]' "$INLINE_FILE" > "$INLINE_NEW_FILE"
 
 jq -c \
-  --slurpfile known "$KNOWN_FILE" '
+  --slurpfile known "$KNOWN_FILE" \
+  --slurpfile posted_ids "$POSTED_IDS_FILE" '
   [.[] | . as $c |
     ("issue_" + ($c.id | tostring)) as $id |
+    ($c.id | tostring) as $raw_id |
     ($known[0][$id] // null) as $prior |
-    if $prior == null then
+    if ($posted_ids[0] | index($raw_id)) != null then empty  # own reply — skip
+    elif $prior == null then
       {id: $c.id, source: "issue", updated_at: $c.updated_at, is_edit: false,
        login: $c.user.login, user_type: $c.user.type}
     elif $c.updated_at > ($prior.updated_at // "") then
@@ -115,11 +130,14 @@ jq -c \
   ]' "$ISSUE_FILE" > "$ISSUE_NEW_FILE"
 
 jq -c \
-  --slurpfile known "$KNOWN_FILE" '
+  --slurpfile known "$KNOWN_FILE" \
+  --slurpfile posted_ids "$POSTED_IDS_FILE" '
   [.[] | . as $c |
     ("review_" + ($c.id | tostring)) as $id |
+    ($c.id | tostring) as $raw_id |
     ($known[0][$id] // null) as $prior |
-    if $prior == null then
+    if ($posted_ids[0] | index($raw_id)) != null then empty  # own reply — skip
+    elif $prior == null then
       {id: $c.id, source: "review", updated_at: ($c.submitted_at // ""), is_edit: false,
        login: $c.user.login, user_type: $c.user.type}
     else empty
