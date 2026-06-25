@@ -316,7 +316,11 @@ Wait for the human's selection before proceeding.
    ```
    The commit message must follow CONTRIBUTIONS.md format: subject line only, present tense, imperative mood. Do NOT add a body, description, or Co-Authored-By trailer.
 4. Capture the commit SHA: `COMMIT_SHA=$(git rev-parse --short HEAD)`
-5. Update the proposed reply to reference the commit: append `\n\nFixed in commit ${COMMIT_SHA}.` to the reply body.
+5. Push immediately so the SHA is reachable on GitHub before the reply is posted:
+   ```bash
+   git push origin HEAD
+   ```
+6. Update the proposed reply to reference the commit: append `\n\nFixed in commit ${COMMIT_SHA}.` to the reply body.
 
 **Then post the reply** (for all classifications, including needs-code-change after the above):
 
@@ -382,7 +386,7 @@ presented on the next interactive session. Do not mark them skipped; do not post
 - [ ] No comment was posted without explicit per-comment human approval
 - [ ] Each disposition (approve/skip/defer) recorded in triage-state.json
 - [ ] triage-state.json is consistent after each action (no partial writes)
-- [ ] `needs-code-change` approvals: code change applied, committed (summary-only), reply references commit SHA
+- [ ] `needs-code-change` approvals: code change applied, committed (summary-only), pushed, reply references commit SHA
 
 ---
 
@@ -447,9 +451,10 @@ Each tick is independent and idempotent:
    without explicit per-comment approval.
 6. `dagrun cleanup` is forbidden until PR closes; pr-triage fails loud (exit 1) if it wakes and
    the worktree or `feature/<slug>` branch is missing.
-7. Coexistence with ci-babysit: pr-triage never writes to `ci-babysit/` artifacts, never calls
-   git push, never modifies source files.
-8. A `needs-code-change` comment approved by the human: code change applied to worktree, committed with summary-only conventional commit, reply posted referencing the commit SHA.
+7. Coexistence with ci-babysit: pr-triage never writes to `ci-babysit/` artifacts, never rebases
+   or force-pushes. It pushes only on an approved `needs-code-change` commit (fast-forward only).
+8. A `needs-code-change` comment approved by the human: code change applied to worktree, committed
+   with summary-only conventional commit, pushed to origin, reply posted referencing the commit SHA.
 
 ---
 
