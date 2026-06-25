@@ -41,7 +41,7 @@ fi
 
 RUN_ID="${RUN_ID_ARG:-${DAGRUN_RUN_ID:-}}"
 if [ -z "$RUN_ID" ]; then
-  RUN_ID=$(echo "$BRANCH" | sed -E 's|^(feature|feat)/||')
+  RUN_ID=$(echo "$BRANCH" | sed -E 's/^feat(ure)?\///')
 fi
 
 ARTIFACTS_DIR="${DAGRUN_ARTIFACTS:-$HOME/.local/share/dagrunner/runs/${RUN_ID}/pr-triage}"
