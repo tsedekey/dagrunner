@@ -1,3 +1,19 @@
+## Known environment constraints (read before starting)
+
+These facts are pre-verified — do not re-investigate them:
+
+- **Maven:** use `./mvnw <goal>` directly. The bare `./mvnw *` pattern is allow-listed.
+  Do NOT prefix with `JAVA_HOME=...` or any other env variable — that pattern is not
+  allow-listed and will be blocked. If Maven fails with a permission error, the cause is
+  the env prefix, not the command itself.
+- **Format hook:** the PostToolUse formatter covers frontend files only (TypeScript, JS, CSS).
+  Java and Kotlin files do not need a manual format call after editing.
+- **`.tool-versions` / Java version:** the worktree does not have its own `.tool-versions`.
+  Java is declared in the main repo root (`$DEVHARNESS_SRC/.tool-versions`). `asdf` resolves
+  it from the parent directory automatically — no action needed.
+
+---
+
 Read the implementation guide. Check these paths in order and use the first one that exists:
 
 1. `$DAGRUN_ARTIFACTS/../define/guide.md` (feature workflow)
