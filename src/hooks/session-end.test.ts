@@ -197,40 +197,11 @@ test("session-end hook: DAGRUN_RUN_ID absent → no run_id field in entry", () =
   }
 });
 
-test("session-end hook: friction.jsonl written alongside reflection capture", () => {
-  const { base, runDir, artifactsDir, storeDir } = makeTmpDirs();
-  try {
-    writeFileSync(
-      join(artifactsDir, "reflections.md"),
-      "Friction test reflection.",
-      "utf8",
-    );
-    runHook({
-      DAGRUN_RUN_DIR: runDir,
-      DAGRUN_NODE_ID: "fix",
-      DAGRUN_ARTIFACTS: artifactsDir,
-      DAGRUN_STORE_DIR: storeDir,
-    });
-    const frictionPath = join(runDir, "friction.jsonl");
-    assert.ok(existsSync(frictionPath), "friction.jsonl must be written");
-    const frictionEntry = JSON.parse(
-      readFileSync(frictionPath, "utf8").trim(),
-    ) as Record<string, unknown>;
-    assert.strictEqual(frictionEntry["event"], "session-end");
-    assert.strictEqual(frictionEntry["node"], "fix");
-    assert.ok(
-      typeof frictionEntry["costUsd"] === "number",
-      "costUsd must be a number",
-    );
-  } finally {
-    cleanup(base);
-  }
-});
-
-test("session-end hook: exit 0 with unset DAGRUN_RUN_DIR (silent no-op)", () => {
-  const result = runHook({
-    DAGRUN_RUN_DIR: "",
-    DAGRUN_NODE_ID: "",
-  });
-  assert.strictEqual(result.status, 0, "must exit 0 even with unset env vars");
+test("session-end hook: exit 0 with unset DAGRUN_NODE_ID (silent no-op)", () => {
+  const result = runHook({ DAGRUN_NODE_ID: "" });
+  assert.strictEqual(
+    result.status,
+    0,
+    "must exit 0 when DAGRUN_NODE_ID is unset",
+  );
 });

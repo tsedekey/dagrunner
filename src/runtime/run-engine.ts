@@ -20,12 +20,13 @@ import {
   readdirSync,
   existsSync,
   unlinkSync,
+  symlinkSync,
 } from "node:fs";
 
 // Mutable ref so the SIGINT handler in cli.ts can find the active run dir and
 // release the lock cleanly. Mutated (not reassigned) so the export stays stable.
 export const activeRun: { runDir?: string; homeDir?: string } = {};
-import { join, basename } from "node:path";
+import { join, basename, dirname } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import type { Workflow } from "../core/types.js";
 import type { DagrunnerConfig } from "../config/xdg.js";
@@ -463,6 +464,45 @@ function seedWorktreeToolVersions(worktreePath: string): void {
 }
 
 /**
+ * Symlink every node_modules directory found up to 3 levels deep in
+ * devharnessSrc into the corresponding worktree location, so the implement
+ * node can run frontend tests (e.g. `npx vitest`) from the worktree against
+ * the changed source without a full npm install.
+ *
+ * Why symlinks: the worktree shares git objects with the main checkout but has
+ * no node_modules. Running from DEVHARNESS_SRC would test the unmodified code.
+ * The shared npm/Vite/Jest caches are acceptable for sequential runs.
+ *
+ * node_modules is in .gitignore so symlinks are never staged or committed.
+ * Fail-soft: a missing directory or permission error is logged and ignored.
+ */
+function seedWorktreeNodeModules(
+  worktreePath: string,
+  devharnessSrc: string,
+): void {
+  try {
+    const out = execSync(
+      `find "${devharnessSrc}" -maxdepth 3 -name "node_modules" -prune -print`,
+      { encoding: "utf8", timeout: 15000 },
+    ).trim();
+    if (!out) return;
+    for (const nmPath of out.split("\n")) {
+      if (!nmPath) continue;
+      const rel = nmPath.slice(devharnessSrc.length).replace(/^\//, "");
+      const dest = join(worktreePath, rel);
+      if (!existsSync(dest)) {
+        mkdirSync(dirname(dest), { recursive: true });
+        symlinkSync(nmPath, dest);
+      }
+    }
+  } catch (err) {
+    process.stderr.write(
+      `dagrun: warning — could not seed node_modules symlinks: ${String(err)}\n`,
+    );
+  }
+}
+
+/**
  * Run `git status --ignored --porcelain` in the worktree, find leaked artifact
  * filenames, and emit an advisory warning to stdout + a scratch-warning.txt
  * file in the run dir. Never throws; never blocks the caller.
@@ -721,6 +761,11 @@ export async function startRun(opts: {
   // implement node's pre-commit format hook resolves both tools without the
   // node having to add them and accidentally committing them.
   seedWorktreeToolVersions(worktreePath);
+
+  // Symlink node_modules from the main DEVHARNESS_SRC checkout into the
+  // worktree so the implement node can run frontend tests against the changed
+  // source without a separate npm install.
+  seedWorktreeNodeModules(worktreePath, config.DEVHARNESS_SRC);
 
   // Seed the worktree's .claude/ with dagrunner's bundled commands + hooks + a
   // node-run settings.json. Without this, a source repo with no .claude/commands/

@@ -264,6 +264,27 @@ export function makeSDKRunner(
       }
     }
 
+    // Write friction entry with real cost. The Claude Code SessionEnd hook
+    // payload contains only {session_id, transcript_path, cwd, hook_event_name,
+    // reason} — no cost field — so the hook cannot record it. Write here
+    // instead, where the SDK result carries total_cost_usd. Placed before all
+    // early returns so every exit path (failed, awaiting-gate, done) is covered.
+    try {
+      appendFileSync(
+        join(runDir, "friction.jsonl"),
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          node: nodeId,
+          sessionId: finalSessionId,
+          event: "session-end",
+          costUsd: totalCost,
+        }) + "\n",
+        "utf8",
+      );
+    } catch {
+      // observability-only — never block a node result
+    }
+
     if (sdkError !== null) {
       return {
         status: "failed",
