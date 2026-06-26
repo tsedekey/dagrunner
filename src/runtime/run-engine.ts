@@ -412,6 +412,57 @@ function seedWorktreeExclude(worktreePath: string, patterns: string[]): void {
 }
 
 /**
+ * Append java and maven tool entries to the worktree's .tool-versions, then
+ * mark the file skip-worktree so the additions never appear as staged changes.
+ *
+ * Background: .tool-versions is a tracked file (contains "helm ...") so
+ * .git/info/exclude has no effect on it. skip-worktree is the correct
+ * per-worktree mechanism — git stops comparing the working-tree copy against
+ * the index, so `git add` and `git commit` cannot pick up the additions.
+ *
+ * ASDF_JAVA_VERSION env var does not work in this asdf setup (no upward
+ * resolution), so the file edit is the only path. Maven env var does work
+ * but both entries go here for consistency. Fail-soft: logs a warning on
+ * error and never throws.
+ */
+function seedWorktreeToolVersions(worktreePath: string): void {
+  const TOOL_ENTRIES = ["java temurin-25.0.3+9.0.LTS", "maven 3.9.9"];
+  try {
+    const tvPath = join(worktreePath, ".tool-versions");
+    let existing = "";
+    try {
+      existing = readFileSync(tvPath, "utf8");
+    } catch {
+      // absent — will create it
+    }
+
+    const toAdd = TOOL_ENTRIES.filter((entry) => {
+      const tool = (entry.split(" ")[0] ?? "").trim();
+      return !existing.split("\n").some((l) => l.trimStart().startsWith(tool));
+    });
+
+    if (toAdd.length > 0) {
+      const prefix =
+        existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+      writeFileSync(
+        tvPath,
+        existing + prefix + toAdd.join("\n") + "\n",
+        "utf8",
+      );
+    }
+
+    execSync("git update-index --skip-worktree .tool-versions", {
+      cwd: worktreePath,
+      stdio: "pipe",
+    });
+  } catch (err) {
+    process.stderr.write(
+      `dagrun: warning — could not seed .tool-versions: ${String(err)}\n`,
+    );
+  }
+}
+
+/**
  * Run `git status --ignored --porcelain` in the worktree, find leaked artifact
  * filenames, and emit an advisory warning to stdout + a scratch-warning.txt
  * file in the run dir. Never throws; never blocks the caller.
@@ -665,6 +716,11 @@ export async function startRun(opts: {
   // accidentally writes to cwd instead of $DAGRUN_ARTIFACTS. Uses the common
   // gitdir (not per-worktree) — see DECISIONS.md § worktree-exclude-location.
   seedWorktreeExclude(worktreePath, worktreeArtifactPatterns());
+
+  // Seed java + maven into .tool-versions and mark skip-worktree so the
+  // implement node's pre-commit format hook resolves both tools without the
+  // node having to add them and accidentally committing them.
+  seedWorktreeToolVersions(worktreePath);
 
   // Seed the worktree's .claude/ with dagrunner's bundled commands + hooks + a
   // node-run settings.json. Without this, a source repo with no .claude/commands/

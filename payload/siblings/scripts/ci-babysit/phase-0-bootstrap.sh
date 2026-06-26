@@ -35,15 +35,15 @@ if [ -z "$WORKTREE" ]; then
 fi
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-if ! echo "$BRANCH" | grep -qE "^feat/"; then
-  echo "ERROR: Current branch '$BRANCH' is not a feat branch (expected feat/<slug>)."
-  echo "ci-babysit runs inside a dagrunner worktree on the feat/<slug> branch."
+if ! echo "$BRANCH" | grep -qE "^(feat|fix|docs|chore|refactor|test|ci|build|perf|style|revert)/"; then
+  echo "ERROR: Current branch '$BRANCH' is not a dagrunner worktree branch."
+  echo "ci-babysit must run from a dagrunner worktree (expected feat/<slug>, fix/<slug>, etc.)."
   exit 1
 fi
 
 RUN_ID="${RUN_ID_ARG:-${DAGRUN_RUN_ID:-}}"
 if [ -z "$RUN_ID" ]; then
-  RUN_ID=$(echo "$BRANCH" | sed 's|^feat[a-z]*/||')
+  RUN_ID=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || echo "")")
 fi
 
 GH_FLAGS=()

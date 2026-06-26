@@ -33,15 +33,15 @@ if [ -z "$WORKTREE" ]; then
 fi
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-if ! echo "$BRANCH" | grep -qE "^(feature|feat)/"; then
-  echo "ERROR: Current branch '$BRANCH' is not a feature branch (expected feature/<slug> or feat/<slug>)."
-  echo "pr-triage runs inside a dagrunner worktree on the feature/<slug> branch."
+if ! echo "$BRANCH" | grep -qE "^(feat|fix|docs|chore|refactor|test|ci|build|perf|style|revert)/"; then
+  echo "ERROR: Current branch '$BRANCH' is not a dagrunner worktree branch."
+  echo "pr-triage must run from a dagrunner worktree (expected feat/<slug>, fix/<slug>, etc.)."
   exit 1
 fi
 
 RUN_ID="${RUN_ID_ARG:-${DAGRUN_RUN_ID:-}}"
 if [ -z "$RUN_ID" ]; then
-  RUN_ID=$(echo "$BRANCH" | sed -E 's/^feat(ure)?\///')
+  RUN_ID=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || echo "")")
 fi
 
 ARTIFACTS_DIR="${DAGRUN_ARTIFACTS:-$HOME/.local/share/dagrunner/runs/${RUN_ID}/pr-triage}"
