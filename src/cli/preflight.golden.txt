@@ -4,7 +4,7 @@
   Home              /test/dagrunner/home
   Config            /test/dagrunner/home/config.json
   DEVHARNESS_SRC    /test/devharness/src
-  Claude config     /test/.claude
+  Claude config     /test/.claude  [unknown]
   Max budget        $10
   Max parallel      3
 

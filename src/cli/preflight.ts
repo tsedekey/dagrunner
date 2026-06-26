@@ -244,24 +244,42 @@ export function runPreflight(
   const hasAuthToken =
     typeof process.env["ANTHROPIC_AUTH_TOKEN"] === "string" &&
     process.env["ANTHROPIC_AUTH_TOKEN"] !== "";
-  const hasClaudeAuth = (() => {
+
+  // Check subscription auth scoped to the configured Claude profile directory
+  // (same env-scoping as assertAuth in launcher.ts — must match to avoid
+  // preflight passing on a different profile than the one actually used).
+  const claudeAuthResult = (() => {
     try {
+      const env: NodeJS.ProcessEnv = { ...process.env };
+      if (
+        config.claudeConfigDir !== undefined &&
+        config.claudeConfigDir !== ""
+      ) {
+        env["CLAUDE_CONFIG_DIR"] = config.claudeConfigDir;
+      }
       const out = execSync("claude auth status 2>/dev/null", {
         encoding: "utf8",
         timeout: 5000,
         stdio: "pipe",
+        env,
       });
-      return (
-        out.includes('"loggedIn": true') || out.includes('"loggedIn":true')
-      );
+      const loggedIn =
+        out.includes('"loggedIn": true') || out.includes('"loggedIn":true');
+      const subMatch = /"subscriptionType":\s*"([^"]+)"/.exec(out);
+      const subscriptionType = subMatch?.[1];
+      return { loggedIn, subscriptionType };
     } catch {
-      return false;
+      return { loggedIn: false, subscriptionType: undefined };
     }
   })();
 
-  if (!hasApiKey && !hasAuthToken && !hasClaudeAuth) {
+  if (!hasApiKey && !hasAuthToken && !claudeAuthResult.loggedIn) {
+    const profileNote =
+      config.claudeConfigDir !== undefined
+        ? ` (profile: ${config.claudeConfigDir})`
+        : "";
     failures.push(
-      `No Anthropic auth found. Set ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or run \`claude login\`.`,
+      `No Anthropic auth found${profileNote}. Set ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or run \`claude login\`.`,
     );
   }
 
@@ -270,6 +288,19 @@ export function runPreflight(
     failures.push(
       `Enterprise managed-auth required but ANTHROPIC_API_KEY is set. Unset it and use managed credentials.`,
     );
+  }
+
+  // Surface subscription type so the operator can confirm the right account is active.
+  if (
+    claudeAuthResult.loggedIn &&
+    claudeAuthResult.subscriptionType !== undefined
+  ) {
+    if (claudeAuthResult.subscriptionType !== "enterprise") {
+      failures.push(
+        `Claude profile at "${config.claudeConfigDir ?? "~/.claude"}" has subscriptionType "${claudeAuthResult.subscriptionType}" (expected "enterprise"). ` +
+          `Check that claudeConfigDir in config.json points to your work profile.`,
+      );
+    }
   }
 
   // C. Node.js version
@@ -579,8 +610,25 @@ export function formatAgentContext(
   lines.push(`  Home              ${homeDir}`);
   lines.push(`  Config            ${join(homeDir, "config.json")}`);
   lines.push(`  DEVHARNESS_SRC    ${config.DEVHARNESS_SRC}`);
+  const subscriptionLabel = (() => {
+    try {
+      const env: NodeJS.ProcessEnv = { ...process.env };
+      const dir = config.claudeConfigDir;
+      if (dir !== undefined && dir !== "") env["CLAUDE_CONFIG_DIR"] = dir;
+      const out = execSync("claude auth status 2>/dev/null", {
+        encoding: "utf8",
+        timeout: 5000,
+        stdio: "pipe",
+        env,
+      });
+      const m = /"subscriptionType":\s*"([^"]+)"/.exec(out);
+      return m?.[1] ?? "unknown";
+    } catch {
+      return "unknown";
+    }
+  })();
   lines.push(
-    `  Claude config     ${config.claudeConfigDir ?? "~/.claude  (default)"}`,
+    `  Claude config     ${config.claudeConfigDir ?? "~/.claude  (default)"}  [${subscriptionLabel}]`,
   );
   if (config.maxBudgetUsd !== undefined) {
     lines.push(`  Max budget        $${config.maxBudgetUsd}`);
