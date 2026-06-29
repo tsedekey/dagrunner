@@ -427,7 +427,26 @@ function seedWorktreeExclude(worktreePath: string, patterns: string[]): void {
  * error and never throws.
  */
 function seedWorktreeToolVersions(worktreePath: string): void {
-  const TOOL_ENTRIES = ["java temurin-25.0.3+9.0.LTS", "maven 3.9.9"];
+  // Detect the latest installed temurin-21.* from asdf — Camunda main targets Java 21.
+  // Falls back to a known-good patch if asdf is unavailable.
+  const javaEntry = (() => {
+    try {
+      const out = execSync("asdf list java 2>/dev/null", {
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"],
+      }).trim();
+      const ver = out
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l.startsWith("temurin-21."))
+        .pop();
+      if (ver !== undefined) return `java ${ver}`;
+    } catch {
+      // asdf not on PATH
+    }
+    return "java temurin-21.0.6+7.0.LTS";
+  })();
+  const TOOL_ENTRIES = [javaEntry, "maven 3.9.9"];
   try {
     const tvPath = join(worktreePath, ".tool-versions");
     let existing = "";
@@ -593,7 +612,8 @@ function wrapWithPrScan(
   worktreePath: string,
   runDir: string,
 ): NodeExecutor {
-  const patterns = worktreeArtifactPatterns();
+  // Exclude **/target/ from the scan — Maven build output is legitimate, not leaked artifacts.
+  const patterns = worktreeArtifactPatterns().filter((p) => p !== "**/target/");
   return async (id, node, ctx) => {
     if (id === "pr") scanWorktreeForLeaks(worktreePath, runDir, patterns);
     return base(id, node, ctx);
@@ -932,6 +952,9 @@ export async function startRun(opts: {
       // Auto-approve: log to gateHistory with night-mode basis.
       const autoTs = new Date().toISOString();
       const basis = "no concerns flagged";
+      const nightArtifacts = (gateNode?.produces ?? [])
+        .map((f) => join(runDir, gateNodeId, f))
+        .filter((p) => existsSync(p));
       nightState = {
         ...nightState,
         nodes: {
@@ -939,6 +962,7 @@ export async function startRun(opts: {
           [gateNodeId]: {
             ...gateNodeState,
             status: "done",
+            artifacts: nightArtifacts,
             gateHistory: [
               ...gateNodeState.gateHistory,
               {
@@ -1164,7 +1188,10 @@ export async function resumeRun(opts: {
           `dagrun: rejected — node "${gateNodeId}" will revise (iteration ${n})\n`,
         );
       } else if (opts.approve === true) {
-        // Approve: mark done, continue.
+        // Approve: mark done, collect artifacts from disk, continue.
+        const approvedArtifacts = (gateNode?.produces ?? [])
+          .map((f) => join(artifactsDir, f))
+          .filter((p) => existsSync(p));
         state = {
           ...state,
           nodes: {
@@ -1172,6 +1199,7 @@ export async function resumeRun(opts: {
             [gateNodeId]: {
               ...gateNodeState,
               status: "done",
+              artifacts: approvedArtifacts,
               gateHistory: [
                 ...gateNodeState.gateHistory,
                 {

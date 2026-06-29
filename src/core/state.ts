@@ -21,12 +21,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 // ---------------------------------------------------------------------------
 
 export type NodeStatus =
-  | "pending"
-  | "running"
-  | "done"
-  | "skipped"
-  | "failed"
-  | "awaiting-gate";
+  "pending" | "running" | "done" | "skipped" | "failed" | "awaiting-gate";
 
 export type RunStatus = "running" | "paused" | "done" | "failed" | "aborted";
 
