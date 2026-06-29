@@ -33,21 +33,13 @@ For each actionable finding in order:
 
 After all fixes are applied, run this checklist:
 
-**a) Addressed-each-finding checklist:**
+**a) Addressed-each-finding check:**
 For each actionable finding you targeted, confirm:
 
 - The cited (file, line) has been changed
 - The specific issue described in `claim` is resolved
 
-Write the checklist to `$DAGRUN_ARTIFACTS/addressed-checklist.md`:
-
-```markdown
-# Addressed findings checklist
-
-| Finding              | File    | Line | Addressed? | Notes        |
-| -------------------- | ------- | ---- | ---------- | ------------ |
-| correctness: <claim> | file.ts | 42   | YES/NO     | <brief note> |
-```
+Record the result in the "Findings addressed" table in `summary.md` (Step 4) — do not write a separate file.
 
 **b) Build/test post-condition:**
 Run the project's tests to confirm nothing is broken:
@@ -120,5 +112,5 @@ The SessionEnd hook captures reflections.md automatically — you do not need to
 - Fix ONLY findings with `confidence: "high"` AND `severity` of `"blocker"` or `"major"`. Defer everything else.
 - Do not make speculative improvements beyond what the findings require.
 - Do not modify `$DAGRUN_ARTIFACTS/../review/findings.json` — it is the read-only input.
-- Write all artifacts to `$DAGRUN_ARTIFACTS/` (summary.md, addressed-checklist.md, reflections.md).
+- Write all artifacts to `$DAGRUN_ARTIFACTS/` (summary.md, reflections.md).
 - If a build or test step is unavailable (no build tool found), note it in the summary and continue.
