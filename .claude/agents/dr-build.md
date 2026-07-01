@@ -76,6 +76,21 @@ npm run verify-baseline
 This runs: `npm ci && typecheck && unit tests && smoke:mock`. It must exit 0. Fix failures
 before committing — never commit a broken baseline.
 
+### Version bump (mandatory, every self-change)
+
+Before committing, bump `package.json`'s version:
+
+```
+npm version patch --no-git-tag-version
+```
+
+Use `patch` unless the plan explicitly calls for a minor/major bump (a judgment call — log it in
+DECISIONS.md if you deviate). Run this via `npm version`, not a hand-edit — it keeps
+`package-lock.json`'s root version in sync, which a manual string edit would not, and `npm ci` in
+verify-baseline enforces that sync. Run it after your code edits and before `verify-baseline`, so
+the baseline check covers the bumped `package.json`/`package-lock.json` pair. Include both files in
+the commit.
+
 ## Anti-drift (same commit as the code)
 
 - Update `docs/dagrunner-master-architecture.md` to match what you built — explain WHY, not a
@@ -116,8 +131,10 @@ You are done when:
 1. Every deliverable in the plan meets its stated done criteria, proven by evidence (test
    output, diff, produced artifact) — not prose assertion.
 2. `npm run verify-baseline` exits 0.
-3. Master doc + DECISIONS.md reconciled in the same commit(s).
-4. Plan moved from `docs/changes/ready/` to `docs/changes/done/` (note if gitignored there).
+3. `package.json` version bumped (`npm version patch --no-git-tag-version` unless the plan says
+   otherwise) and included in the commit.
+4. Master doc + DECISIONS.md reconciled in the same commit(s).
+5. Plan moved from `docs/changes/ready/` to `docs/changes/done/` (note if gitignored there).
 
 ## Build report (return this when done)
 

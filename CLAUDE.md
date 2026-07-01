@@ -46,6 +46,7 @@ stop. The answer is almost always a native Claude Code mechanism.
 - **Artifacts are the only cross-node channel.** No hidden in-memory state passed between nodes.
 - **Show evidence, don't assert.** End every unit of work with a runnable check, not a prose claim.
 - **Minimal, not clever.** Over-engineering is a defect. The DAG core is ~25 lines — keep it that way.
+- Every change bumps `package.json`'s version — enforced by `dr-build`.
 
 ## The env-propagation gotcha (do not get this wrong)
 
