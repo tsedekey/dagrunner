@@ -1259,8 +1259,13 @@ export async function resumeRun(opts: {
         writeFileSync(contextFilePath, contextContent, "utf8");
 
         // Print guidance before spawning.
+        const isLastIteration =
+          gateNodeState.iteration + 1 >= maxIterations - 1;
         process.stdout.write(
           `\ndagrun: gate — node "${gateNodeId}" (iteration ${gateNodeState.iteration + 1}/${maxIterations})\n` +
+            (isLastIteration
+              ? `⚠  Last iteration — approving continues to the next node; rejecting will force a terminal choice.\n`
+              : ``) +
             `dagrun: opening Claude Code for review dialogue...\n` +
             `  → In the session: run /gate-review to start the review\n` +
             `  → When done:       run /gate-conclude to record your decision\n` +

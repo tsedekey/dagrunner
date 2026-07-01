@@ -1,5 +1,23 @@
 Read the feature plan at $DAGRUN_ARTIFACTS/../plan/plan.md.
 
+## Step 0 — Consult the reflection store
+
+Before writing anything, check whether a prior run has already learned something about this code area:
+
+```bash
+cat ~/.local/share/dagrunner/store/reflection-log.jsonl 2>/dev/null | \
+  python3 -c "
+import sys, json
+entries = [json.loads(l) for l in sys.stdin if l.strip()]
+for e in entries:
+    print(e.get('ts',''), e.get('source',''), e.get('body','')[:120])
+" 2>/dev/null || true
+```
+
+If any entries mention modules, classes, or patterns that overlap with the plan, copy the relevant `body` text into a **"Prior context"** section at the top of guide.md. This prevents known pitfalls from being rediscovered at fix time.
+
+---
+
 ## Step 1 — Understand the requirement
 
 Read plan.md carefully. Identify:
@@ -38,6 +56,7 @@ well-scoped:
 - Does it **over-specify** detail that belongs to the implementer?
 - Does it **diverge** from the source issue's prescribed approach (if any)?
 - Is the **requirement or acceptance** incomplete or unclear in ways that would block a good implementation? (Sparse implementation detail is expected and good — that is define's job, not the plan's.)
+- **Batch operation plans specifically:** does the guide include a check against `DefaultExporterResourceProvider` (the ES/OS exporter) to confirm whether a new handler is needed for the new operation type? The RDBMS exporter (`JobBatchOperationExportHandler` pattern) and the ES/OS exporter are independent registries — a missing ES/OS handler causes the `@MultiDbTest` IT to time out silently at the `COMPLETED` state assertion without any compile error.
 
 If you find genuine concerns, append a **"Concerns / plan challenges"** section to
 guide.md. State each concern concretely: what you observed, what the requirement or

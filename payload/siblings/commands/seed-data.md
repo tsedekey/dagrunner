@@ -120,19 +120,18 @@ To reset: cancel instances and delete process definitions in Operate UI, or recr
 
 ---
 
-## Learnings
+## Reflections
 
-If this run encountered anything unexpected that is **not already documented** in
-`~/.local/share/dagrunner/store/learnings/seed-data.md`, append a new entry now using this
-format — keep it brief, one or two lines per field:
+If this run encountered anything unexpected, append one JSON line to
+`~/.local/share/dagrunner/store/reflection-log.jsonl`:
 
-```markdown
-## YYYY-MM-DD
-
-**Symptom:** <what went wrong or behaved unexpectedly>
-**Root cause:** <why it happened>
-**Resolution:** <what fixed it>
-**Watch for:** <how to spot this early on the next run>
+```json
+{
+  "ts": "<ISO-8601-UTC>",
+  "source": "seed-data",
+  "run_id": "<run_id or empty string>",
+  "body": "## YYYY-MM-DD\n\n**Symptom:** ...\n**Root cause:** ...\n**Resolution:** ...\n**Watch for:** ..."
+}
 ```
 
 Only log something if it adds knowledge that would prevent wasted time on a future run.

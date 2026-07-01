@@ -140,7 +140,7 @@ export const featureWorkflow: Workflow = {
       command: "/fix",
       model: "sonnet",
       produces: ["summary.md"],
-      gate: { maxIterations: 5, onReject: "revise-self" },
+      gate: { maxIterations: 8, onReject: "revise-self" },
       revisionInstruction:
         "Review the feedback below and revise the code changes in the worktree accordingly. " +
         "Then update {artifactsDir}/summary.md to reflect all changes made (which findings were addressed, what files changed, what was deferred).",

@@ -1,12 +1,20 @@
 #!/bin/zsh
 set -euo pipefail
 
-LEARNINGS_FILE="$HOME/.local/share/dagrunner/store/learnings/pr-triage.md"
-mkdir -p "$(dirname "$LEARNINGS_FILE")"
-if [ -f "$LEARNINGS_FILE" ]; then
-  echo "=== Prior learnings for /pr-triage ==="
-  cat "$LEARNINGS_FILE"
-  echo "========================================"
+REFLECTION_LOG="$HOME/.local/share/dagrunner/store/reflection-log.jsonl"
+mkdir -p "$(dirname "$REFLECTION_LOG")"
+if [ -f "$REFLECTION_LOG" ]; then
+  echo "=== Prior reflections (pr-triage) ==="
+  grep '"source":"pr-triage"' "$REFLECTION_LOG" | python3 -c "
+import sys, json
+for line in sys.stdin:
+    try:
+        e = json.loads(line)
+        print(e.get('ts',''), e.get('body',''))
+    except Exception:
+        pass
+" 2>/dev/null || true
+  echo "======================================"
 fi
 
 ARGS="${1:-}"

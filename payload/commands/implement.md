@@ -17,6 +17,15 @@ These facts are pre-verified — do not re-investigate them:
   ```bash
   grep '^java ' "$DEVHARNESS_SRC/.tool-versions" >> "$DAGRUN_WORKTREE/.tool-versions"
   ```
+- **`qa/acceptance-tests` module isolation:** this module resolves `clients/java` from
+  `~/.m2`, NOT from the source tree. When writing or modifying ITs in `qa/acceptance-tests`
+  that depend on `clients/java`, install the client snapshot first before any compile or test
+  run in the acceptance module:
+  ```bash
+  ./mvnw install -pl clients/java -Dquickly
+  ```
+  Skipping this step causes compile failures that look like missing classes but are really
+  stale jars. Run this install step once per session before touching `qa/acceptance-tests`.
 
 ---
 
@@ -29,6 +38,11 @@ Also check for any reviewer feedback files at the same directory as the guide (`
 If any feedback files exist, incorporate those instructions into the implementation — they represent
 reviewer requests that were not fully addressed in the guide itself.
 
+**When the guide names a precedent implementation** (phrases like "modeled on X", "following X
+precedent", "similar to ExistingClass"): read that reference file before writing any new interface
+or class. Only then implement, matching the structural shape of the reference. Do not design a new
+interface without first reading the reference — interface shape mismatches require full rewrites.
+
 Write a brief implementation summary to $DAGRUN_ARTIFACTS/summary.md describing:
 
 1. What was implemented
@@ -40,9 +54,31 @@ Optionally, if you discover non-obvious facts about the Camunda code area while 
 (hidden coupling, module quirks, surprising invariants), write them to $DAGRUN_ARTIFACTS/reflections.md.
 Only write reflections.md if there is something genuinely useful for future runs. Absence is fine.
 
+## Pre-stage deliverables check (mandatory)
+
+Before running `git add`, re-read the guide and build a checklist of every required
+deliverable — new files, test classes, modules, and any explicit "must implement" items.
+For each deliverable, confirm it exists in the worktree:
+
+```bash
+# Example: check each expected file is present
+ls <expected-file-1> <expected-file-2> ...
+```
+
+Produce a table in summary.md under a "Deliverables check" heading:
+
+| Deliverable                      | Status    |
+| -------------------------------- | --------- |
+| `path/to/NewClass.java`          | ✓ created |
+| `qa/acceptance-tests/...IT.java` | ✓ created |
+
+**Do not stage until every deliverable is present.** If a deliverable is missing, implement it
+now. An item that appears in the guide but is absent from the worktree is an incomplete
+implementation, not a known omission.
+
 ## Final step — Stage implementation
 
-After writing all artifacts, stage your code changes so the review node can read them:
+After the deliverables check passes, stage your code changes:
 
 ```bash
 cd "$DAGRUN_WORKTREE"

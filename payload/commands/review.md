@@ -4,6 +4,43 @@ You are running the **review node** of a dagrunner pipeline. Your job is to orch
 
 ---
 
+## Step 0 — Deliverables cross-check
+
+Read:
+
+- `$DAGRUN_ARTIFACTS/../plan/plan.md`
+- `$DAGRUN_ARTIFACTS/../define/guide.md`
+
+Extract every explicitly required deliverable: new files, new test classes, new modules, and any
+item phrased as "must", "required", or listed under "Key implementation steps" or "Acceptance
+criteria".
+
+Get the full list of changed files from the staged diff:
+
+```bash
+git diff --cached --name-only origin/main
+```
+
+For each required deliverable that does NOT appear in the changed-files list, add a finding to
+your final findings.json:
+
+```json
+{
+  "reviewer_dimension": "test-adequacy",
+  "severity": "blocker",
+  "confidence": "high",
+  "file": "<expected file path from the guide>",
+  "line": 1,
+  "claim": "Required deliverable '<name>' is absent from the diff — it was specified in the guide but no matching file was staged.",
+  "grounded": true
+}
+```
+
+This step runs BEFORE the diff-based reviewers. Its findings are merged into the final
+findings.json alongside reviewer output in Step 4. Do not write a separate artifact.
+
+---
+
 ## Step 1 — Diff-triage (haiku, internal step)
 
 Get the diff of all changes introduced by this worktree branch relative to the base branch:
