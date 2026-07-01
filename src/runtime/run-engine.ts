@@ -661,7 +661,7 @@ function makeCtx(runDir: string) {
 
 const MODEL_IDS: Record<string, string> = {
   haiku: "claude-haiku-4-5-20251001",
-  sonnet: "claude-sonnet-4-6",
+  sonnet: "claude-sonnet-5",
   opus: "claude-opus-4-8",
 };
 
@@ -1270,7 +1270,7 @@ export async function resumeRun(opts: {
         // Spawn an interactive claude session. spawnSync blocks until the user exits.
         const spawnResult = spawnSync(
           "claude",
-          ["--model", "claude-sonnet-4-6"],
+          ["--model", "claude-sonnet-5"],
           {
             stdio: "inherit",
             cwd: state.worktreePath,
