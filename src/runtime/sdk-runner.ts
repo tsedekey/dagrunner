@@ -159,7 +159,9 @@ export function makeSDKRunner(
     if (node.model === "haiku") {
       options.model = "claude-haiku-4-5-20251001";
     } else if (node.model === "sonnet") {
-      options.model = "claude-sonnet-4-6";
+      options.model = "claude-sonnet-5";
+    } else if (node.model === "opus") {
+      options.model = "claude-opus-4-8";
     }
     // else: omit model → SDK default (unpinned)
 
