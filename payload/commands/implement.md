@@ -40,9 +40,9 @@ Optionally, if you discover non-obvious facts about the Camunda code area while 
 (hidden coupling, module quirks, surprising invariants), write them to $DAGRUN_ARTIFACTS/reflections.md.
 Only write reflections.md if there is something genuinely useful for future runs. Absence is fine.
 
-## Final step — Commit implementation
+## Final step — Stage implementation
 
-After writing all artifacts, commit your code changes to the worktree:
+After writing all artifacts, stage your code changes so the review node can read them:
 
 ```bash
 cd "$DAGRUN_WORKTREE"
@@ -50,19 +50,11 @@ git add -A
 git status --short
 ```
 
-If the working tree is already clean (nothing to commit), note it in summary.md and skip the commit.
-
-Otherwise commit with a title derived from the first heading in the guide.md you read in Step 1:
-
-```bash
-git commit -m "${DAGRUN_PR_TITLE_PREFIX:-feat} <concise title ≤70 chars from guide.md>"
-```
-
-Do not push — the pr node handles the push.
+If the working tree is already clean, note it in summary.md and skip.
 
 ## Reflections (optional, do this last)
 
-After all artifacts are written and the commit is made, write any high-signal tips
+After all artifacts are written, write any high-signal tips
 to $DAGRUN_ARTIFACTS/reflections.md — hidden couplings, build quirks, patterns worth
 flagging for future runs. The SessionEnd hook captures this automatically.
 Absence is fine — only write if you discovered something non-obvious.

@@ -34,7 +34,7 @@ test("loadWorkflow: valid fixture passes and returns the workflow", () => {
 // loadWorkflow — bad model string
 // ---------------------------------------------------------------------------
 
-test('loadWorkflow: FIXTURE_BAD_MODEL throws with node name "step-a" and value "opus"', () => {
+test('loadWorkflow: FIXTURE_BAD_MODEL throws with node name "step-a" and value "gemini"', () => {
   assert.throws(
     () => loadWorkflow(FIXTURE_BAD_MODEL),
     (err: unknown) => {
@@ -44,8 +44,8 @@ test('loadWorkflow: FIXTURE_BAD_MODEL throws with node name "step-a" and value "
         `Expected "step-a" in message: ${err.message}`,
       );
       assert.ok(
-        err.message.includes("opus") || err.message.includes("invalid model"),
-        `Expected "opus" or "invalid model" in message: ${err.message}`,
+        err.message.includes("gemini") || err.message.includes("invalid model"),
+        `Expected "gemini" or "invalid model" in message: ${err.message}`,
       );
       return true;
     },

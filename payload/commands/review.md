@@ -9,7 +9,7 @@ You are running the **review node** of a dagrunner pipeline. Your job is to orch
 Get the diff of all changes introduced by this worktree branch relative to the base branch:
 
 ```bash
-git diff origin/main...HEAD
+git diff --cached origin/main
 ```
 
 Read the diff and set these five booleans:

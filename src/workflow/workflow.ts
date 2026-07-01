@@ -7,7 +7,7 @@
  * Checks (in order):
  *   1. No duplicate node IDs
  *   2. All dependsOn references point to known node IDs
- *   3. All model values are in {'haiku','sonnet'} or undefined
+ *   3. All model values are in {'haiku','sonnet','opus'} or undefined
  *   4. All gate.onReject of form `rerun:<id>` reference known node IDs
  *   5. No cycles (Kahn's algorithm)
  *
@@ -46,16 +46,16 @@ export function loadWorkflow(def: Workflow): Workflow {
     }
   }
 
-  // 3. Model strings must be 'haiku' | 'sonnet' | undefined
+  // 3. Model strings must be 'haiku' | 'sonnet' | 'opus' | undefined
   //    Read through `unknown` so TS doesn't narrow `node.model` to `never`
   //    (the declared type already excludes bad values; this check defends
   //    against runtime data that bypasses the type system).
-  const validModels: ReadonlySet<string> = new Set(["haiku", "sonnet"]);
+  const validModels: ReadonlySet<string> = new Set(["haiku", "sonnet", "opus"]);
   for (const node of def.nodes) {
     const m: unknown = node.model;
     if (m !== undefined && (typeof m !== "string" || !validModels.has(m))) {
       throw new Error(
-        `loadWorkflow: node "${node.id}" has invalid model value "${String(m)}" — must be 'haiku' | 'sonnet' or omitted`,
+        `loadWorkflow: node "${node.id}" has invalid model value "${String(m)}" — must be 'haiku' | 'sonnet' | 'opus' or omitted`,
       );
     }
   }
@@ -152,7 +152,7 @@ export const FIXTURE_VALID: Workflow = {
 };
 
 /**
- * Invalid: node "step-a" declares model "opus" which is not a ModelTier.
+ * Invalid: node "step-a" declares model "gemini" which is not a ModelTier.
  * Cast through unknown to bypass compile-time narrowing — the runtime check
  * must catch what the type system cannot (e.g. data loaded from disk/JSON).
  */
@@ -162,7 +162,7 @@ export const FIXTURE_BAD_MODEL: Workflow = {
     {
       id: "step-a",
       command: "/step-a",
-      model: "opus" as unknown as "haiku",
+      model: "gemini" as unknown as "haiku",
     },
   ],
 };

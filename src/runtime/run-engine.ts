@@ -438,13 +438,13 @@ function seedWorktreeToolVersions(worktreePath: string): void {
       const ver = out
         .split("\n")
         .map((l) => l.trim())
-        .filter((l) => l.startsWith("temurin-21."))
+        .filter((l) => l.startsWith("temurin-25."))
         .pop();
       if (ver !== undefined) return `java ${ver}`;
     } catch {
       // asdf not on PATH
     }
-    return "java temurin-21.0.6+7.0.LTS";
+    return "java temurin-25.0.3+9.0.LTS";
   })();
   const TOOL_ENTRIES = [javaEntry, "maven 3.9.9"];
   try {
@@ -662,6 +662,7 @@ function makeCtx(runDir: string) {
 const MODEL_IDS: Record<string, string> = {
   haiku: "claude-haiku-4-5-20251001",
   sonnet: "claude-sonnet-4-6",
+  opus: "claude-opus-4-8",
 };
 
 function makeInitialNodeStates(workflow: Workflow): Record<string, NodeState> {
@@ -1267,16 +1268,20 @@ export async function resumeRun(opts: {
         );
 
         // Spawn an interactive claude session. spawnSync blocks until the user exits.
-        const spawnResult = spawnSync("claude", [], {
-          stdio: "inherit",
-          cwd: state.worktreePath,
-          env: {
-            ...process.env,
-            DAGRUN_GATE_NODE_ID: gateNodeId,
-            DAGRUN_GATE_CONTEXT_FILE: contextFilePath,
-            DAGRUN_GATE_DECISION_FILE: decisionFilePath,
+        const spawnResult = spawnSync(
+          "claude",
+          ["--model", "claude-sonnet-4-6"],
+          {
+            stdio: "inherit",
+            cwd: state.worktreePath,
+            env: {
+              ...process.env,
+              DAGRUN_GATE_NODE_ID: gateNodeId,
+              DAGRUN_GATE_CONTEXT_FILE: contextFilePath,
+              DAGRUN_GATE_DECISION_FILE: decisionFilePath,
+            },
           },
-        });
+        );
 
         // If claude couldn't launch (e.g. not on PATH), fail loud — never look like success.
         if (spawnResult.error !== undefined) {

@@ -9,7 +9,7 @@
 // Model tiers (validated at load time)
 // ---------------------------------------------------------------------------
 
-export type ModelTier = "haiku" | "sonnet";
+export type ModelTier = "haiku" | "sonnet" | "opus";
 
 // ---------------------------------------------------------------------------
 // Artifact accessor context (passed to `when` predicates)

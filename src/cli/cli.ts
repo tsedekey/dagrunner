@@ -38,6 +38,7 @@ import {
   scaffoldRun,
   listRuns,
   activeRun,
+  seedWorktreeSiblings,
 } from "../runtime/run-engine.js";
 import { readState, writeState } from "../core/state.js";
 import {
@@ -641,6 +642,27 @@ function writeDiagnostic(runDir: string): void {
   process.stderr.write(`\ndagrun: diagnostic → ${reportPath}\n`);
 }
 
+function cmdSeed(argv: string[]): void {
+  const repoPath = argv[0];
+  if (repoPath === undefined || repoPath.startsWith("--")) {
+    process.stderr.write(
+      `dagrun seed: missing <repo-path> argument.\n` +
+        `Usage: dagrun seed <repo-path>\n`,
+    );
+    process.exit(1);
+  }
+
+  if (!existsSync(repoPath)) {
+    process.stderr.write(`dagrun seed: repo path not found: "${repoPath}"\n`);
+    process.exit(1);
+  }
+
+  const dagrunnerRoot = new URL("../../", import.meta.url).pathname;
+  const destClaude = join(repoPath, ".claude");
+  seedWorktreeSiblings(dagrunnerRoot, destClaude);
+  process.stdout.write(`dagrun: seeded sibling commands into ${destClaude}\n`);
+}
+
 async function cmdScaffold(argv: string[]): Promise<void> {
   const nodeId = argv[0];
   const branch = flagValue(argv, "--branch");
@@ -687,6 +709,7 @@ function printHelp(): void {
       "  dagrun logs <run-id> <node>",
       "  dagrun rerun <run-id> <node-id>",
       "  dagrun scaffold <node-id> --branch <feature-branch> [--mocks <dir>]",
+      "  dagrun seed <repo-path>",
       '  dagrun reflect --source <node> --kind camunda-knowledge|dagrunner-harness --body "<text>" [--run-id <id>]',
       "",
     ].join("\n"),
@@ -765,6 +788,10 @@ async function main(argv: string[]): Promise<number> {
 
     case "scaffold":
       await cmdScaffold(rest);
+      return 0;
+
+    case "seed":
+      cmdSeed(rest);
       return 0;
 
     case "report":
