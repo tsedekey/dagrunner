@@ -38,6 +38,7 @@ import {
   type AgentContext,
 } from "./preflight.js";
 import type { DagrunnerConfig } from "../config/xdg.js";
+import type { VersionInfo } from "../config/version.js";
 
 const SNAPSHOT_PATH = fileURLToPath(
   new URL("./preflight.golden.txt", import.meta.url),
@@ -177,12 +178,21 @@ const FIXED_CONFIG: DagrunnerConfig = {
 const FIXED_HOME = "/test/dagrunner/home";
 const FIXED_CONTEXT_FILE = "/test/cache/preflight-context.md";
 
+// Synthetic version — deliberately NOT the real package.json version, so the
+// golden snapshot never breaks under the mandatory version-bump policy.
+const FIXED_VERSION: VersionInfo = {
+  version: "9.9.9",
+  buildTime: "2026-07-01 14:32:05 UTC",
+  isDev: false,
+};
+
 test("formatAgentContext: golden snapshot", () => {
   const actual = formatAgentContext(
     FIXED_CTX,
     FIXED_CONTEXT_FILE,
     FIXED_CONFIG,
     FIXED_HOME,
+    FIXED_VERSION,
   );
 
   if (process.env["UPDATE_SNAPSHOTS"] === "1") {
@@ -202,6 +212,41 @@ test("formatAgentContext: golden snapshot", () => {
     actual,
     expected,
     `formatAgentContext output differs from snapshot at ${SNAPSHOT_PATH}`,
+  );
+});
+
+test("formatAgentContext: version line reflects built mode", () => {
+  const actual = formatAgentContext(
+    FIXED_CTX,
+    FIXED_CONTEXT_FILE,
+    FIXED_CONFIG,
+    FIXED_HOME,
+    FIXED_VERSION,
+  );
+  assert.ok(
+    actual.includes("dagrun version") &&
+      actual.includes("9.9.9") &&
+      actual.includes("(built 2026-07-01 14:32:05 UTC)"),
+    `Expected built-mode version line, got:\n${actual}`,
+  );
+});
+
+test("formatAgentContext: version line reflects dev mode", () => {
+  const devVersion: VersionInfo = {
+    version: "9.9.9",
+    buildTime: "unbuilt (dev)",
+    isDev: true,
+  };
+  const actual = formatAgentContext(
+    FIXED_CTX,
+    FIXED_CONTEXT_FILE,
+    FIXED_CONFIG,
+    FIXED_HOME,
+    devVersion,
+  );
+  assert.ok(
+    actual.includes("dagrun version") && actual.includes("(dev, unbuilt)"),
+    `Expected dev-mode version line, got:\n${actual}`,
   );
 });
 

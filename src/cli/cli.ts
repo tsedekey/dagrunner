@@ -48,6 +48,7 @@ import {
   formatAgentContext,
   writeAgentContextFile,
 } from "./preflight.js";
+import { getVersionInfo, formatVersionBanner } from "../config/version.js";
 
 // ---------------------------------------------------------------------------
 // Arg-parsing helpers
@@ -97,7 +98,10 @@ async function cmdPreflight(argv: string[]): Promise<void> {
     dagrunnerRoot,
     cacheDir,
   );
-  process.stdout.write(formatAgentContext(ctx, contextFile, config, homeDir));
+  const versionInfo = getVersionInfo();
+  process.stdout.write(
+    formatAgentContext(ctx, contextFile, config, homeDir, versionInfo),
+  );
 
   if (!result.ok) process.exit(1);
 }
@@ -146,6 +150,9 @@ async function cmdStart(argv: string[]): Promise<void> {
     printPreflightResult(preflight);
     process.exit(1);
   }
+
+  // Visible before any node runs, even when the user skips standalone `dagrun preflight`.
+  process.stdout.write(`${formatVersionBanner(getVersionInfo())}\n`);
 
   // Resolve workflow by name.
   if (workflowName !== "feature" && workflowName !== "bugfix") {

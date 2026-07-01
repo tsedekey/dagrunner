@@ -1,6 +1,7 @@
 
 ⚙️  Configuration
 ────────────────────────────────────────────────────────────
+  dagrun version    9.9.9  (built 2026-07-01 14:32:05 UTC)
   Home              /test/dagrunner/home
   Config            /test/dagrunner/home/config.json
   DEVHARNESS_SRC    /test/devharness/src

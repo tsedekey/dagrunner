@@ -1,6 +1,6 @@
 {
   "name": "dagrunner",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A thin DAG runner that orchestrates Claude Code (Agent SDK) across git worktrees, with checkpoint-and-exit conversation-led gates. Owns only what has no native Claude Code primitive that survives across processes/worktrees; reuses Claude Code for everything else.",
   "type": "module",
   "engines": {
@@ -13,7 +13,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/write-build-meta.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "watch": "tsc -p tsconfig.json --watch",
     "test": "node --test --import tsx ./src/**/*.test.ts",

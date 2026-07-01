@@ -20,6 +20,7 @@ import {
   readWorkProfileMcpServers,
 } from "../config/settings-seed.js";
 import { readLock } from "../core/lock.js";
+import type { VersionInfo } from "../config/version.js";
 
 const _require = createRequire(import.meta.url);
 
@@ -600,6 +601,7 @@ export function formatAgentContext(
   contextFile: string,
   config: DagrunnerConfig,
   homeDir: string,
+  versionInfo: VersionInfo,
 ): string {
   const lbl = (s: string) => `  ${s.padEnd(20)}`;
   const lines: string[] = [];
@@ -607,6 +609,12 @@ export function formatAgentContext(
 
   lines.push(`\n⚙️  Configuration`);
   lines.push(hr);
+  const builtNote = versionInfo.isDev
+    ? "(dev, unbuilt)"
+    : `(built ${versionInfo.buildTime})`;
+  lines.push(
+    `${"  dagrun version".padEnd(20)}${versionInfo.version}  ${builtNote}`,
+  );
   lines.push(`  Home              ${homeDir}`);
   lines.push(`  Config            ${join(homeDir, "config.json")}`);
   lines.push(`  DEVHARNESS_SRC    ${config.DEVHARNESS_SRC}`);
