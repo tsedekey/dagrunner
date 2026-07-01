@@ -10,10 +10,12 @@ TICK_FILE="$ARTIFACTS_DIR/ci-babysit-tick.json"
 NOOP=$(jq -r '.noop // false' "$TICK_FILE")
 if [ "$NOOP" = "true" ]; then echo "No-op tick — skipping Phase 5d."; exit 0; fi
 
-CHANGES=$(git status --porcelain 2>/dev/null || echo "")
-if [ -n "$CHANGES" ]; then
-  echo "Uncommitted changes detected — please commit before pushing:"
-  git status --short
+# Check only tracked changes — untracked paths (IDE noise, test coverage dirs)
+# must not block the push. The fix commit is tracked; untracked is not our work.
+if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
+  echo "Staged or modified tracked files detected — please commit before pushing:"
+  git diff --stat
+  git diff --cached --stat
   echo ""
   echo "Stage and commit the fix, then this push block will run."
   exit 1
