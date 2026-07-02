@@ -49,7 +49,7 @@ else
         "${GH_FLAGS[@]}" 2>/dev/null || echo "")
       if [ -n "$JOB_IDS" ] && [ -n "$REPO_NWO" ]; then
         > "$LOG_FILE"
-        for JOB_ID in $JOB_IDS; do
+        for JOB_ID in ${(f)JOB_IDS}; do
           gh api "repos/$REPO_NWO/actions/jobs/$JOB_ID/logs" >> "$LOG_FILE" 2>&1 || true
         done
       else
