@@ -12,6 +12,7 @@
     ],
     "allow": [
       "Read",
+      "WebFetch",
       "Bash(git *)",
       "Bash(npm *)",
       "Bash(npx tsc *)",

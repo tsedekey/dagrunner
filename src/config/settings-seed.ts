@@ -151,6 +151,7 @@ export function buildSeededSettings(opts: {
       additionalDirectories: additionalDirs,
       allow: [
         "Read",
+        "WebFetch",
         "Bash(git *)",
         "Bash(npm *)",
         "Bash(npx tsc *)",
