@@ -30,21 +30,17 @@ fi
 
 WORKTREE=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
 if [ -z "$WORKTREE" ]; then
-  echo "ERROR: Not inside a git worktree. ci-babysit must run from a dagrunner worktree."
+  echo "ERROR: Not inside a git checkout."
   exit 1
 fi
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-if ! echo "$BRANCH" | grep -qE "^(feat|fix|docs|chore|refactor|test|ci|build|perf|style|revert)/"; then
-  echo "ERROR: Current branch '$BRANCH' is not a dagrunner worktree branch."
-  echo "ci-babysit must run from a dagrunner worktree (expected feat/<slug>, fix/<slug>, etc.)."
+if [ -z "$BRANCH" ] || [ "$BRANCH" = "HEAD" ]; then
+  echo "ERROR: Detached HEAD (or no current branch). ci-babysit needs a branch to discover a PR for."
   exit 1
 fi
 
-RUN_ID="${RUN_ID_ARG:-${DAGRUN_RUN_ID:-}}"
-if [ -z "$RUN_ID" ]; then
-  RUN_ID=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || echo "")")
-fi
+RUN_ID="${RUN_ID_ARG:-${DAGRUN_RUN_ID:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-')}}"
 
 GH_FLAGS=()
 [ -n "$REPO_ARG" ] && GH_FLAGS=(-R "$REPO_ARG")

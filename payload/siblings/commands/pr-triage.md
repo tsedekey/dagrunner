@@ -22,9 +22,11 @@ Run repeatedly to triage continuously:
 in the session. Drafts accumulate as artifacts if no human is present; they are presented on the
 next interactive session.
 
-**WORKTREE LIFETIME CONSTRAINT:** `dagrun cleanup` MUST NOT run while this command is active and
-the PR is open. Both the worktree and the feature branch must persist for the full PR lifetime.
-pr-triage fails loud if either is gone on the next tick.
+**WORKTREE LIFETIME CONSTRAINT (dagrunner-managed runs only):** when `DAGRUN_RUN_ID` is set (i.e.
+running inside a dagrunner-managed worktree), `dagrun cleanup` MUST NOT run while this command is
+active and the PR is open — the worktree and branch must persist for the full PR lifetime, and
+pr-triage fails loud if either is gone on the next tick. Outside a dagrunner-managed worktree (any
+other git checkout) this constraint does not apply — there is no `dagrun cleanup` to avoid.
 
 **Coexistence with ci-babysit:** both run on the same PR. pr-triage owns
 `~/.local/share/dagrunner/runs/<run-id>/pr-triage/` only. It never touches the branch, never
@@ -49,10 +51,11 @@ phases 3–4 are model work described inline.
 
 ## Phase 0 — Bootstrap
 
-Parse `$ARGUMENTS` (all optional). Validate that this is a dagrunner worktree on a `feature/<slug>`
-or `feat/<slug>` branch. Discover the open PR. Fail loud if the worktree or branch is missing, or
-if no open PR is found. All values (PR number, repo, run-id) are auto-discovered from git if not
-supplied as arguments.
+Parse `$ARGUMENTS` (all optional). Validate this is a git checkout on a real branch (any branch
+name — not detached HEAD). Discover the open PR for that branch via `gh`. Fail loud if the
+checkout or branch is missing, or if no open PR is found — PR discovery is the real gate, not the
+branch name. All values (PR number, repo, run-id) are auto-discovered from git if not supplied as
+arguments.
 
 ```bash
 SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/pr-triage"
@@ -61,8 +64,8 @@ zsh "$SCRIPT_DIR/phase-0-bootstrap.sh" "$ARGUMENTS"
 
 **PHASE_0_CHECKPOINT:**
 
-- [ ] Running on a `feature/<slug>` or `feat/<slug>` branch inside a worktree
-- [ ] PR number discovered (non-empty)
+- [ ] Running on a real branch (not detached HEAD) inside a git checkout
+- [ ] PR number discovered (non-empty) for that branch
 - [ ] `$ARTIFACTS_DIR/pr-triage-state.json` written with `{run_id, pr_number, branch, worktree, repo, artifacts}`
       where `ARTIFACTS_DIR = ~/.local/share/dagrunner/runs/<run-id>/pr-triage/`
 
@@ -110,8 +113,7 @@ If the script exits 0 with "tick is a no-op" output, skip to Phase 5. Otherwise 
 **MODEL WORK — no script.** Derive the artifacts path, then read the tick and triage state:
 
 ```bash
-BRANCH=$(git rev-parse --abbrev-ref HEAD)
-RUN_ID="${DAGRUN_RUN_ID:-$(echo "$BRANCH" | sed -E 's|^(feature|feat)/||')}"
+RUN_ID="${DAGRUN_RUN_ID:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-')}"
 ARTIFACTS_DIR="${DAGRUN_ARTIFACTS:-$HOME/.local/share/dagrunner/runs/${RUN_ID}/pr-triage}"
 TRIAGE_STATE="$ARTIFACTS_DIR/triage-state.json"
 TICK_FILE="$ARTIFACTS_DIR/pr-triage-tick.json"
@@ -449,8 +451,9 @@ Each tick is independent and idempotent:
 5. The human approve/post gate: approve posts to the correct thread (inline reply or issue comment)
    and records `posted_comment_id`; skip/defer records terminal state; nothing is ever posted
    without explicit per-comment approval.
-6. `dagrun cleanup` is forbidden until PR closes; pr-triage fails loud (exit 1) if it wakes and
-   the worktree or `feature/<slug>` branch is missing.
+6. In a dagrunner-managed worktree (`DAGRUN_RUN_ID` set): `dagrun cleanup` is forbidden until PR
+   closes; pr-triage fails loud (exit 1) if it wakes and the worktree or branch is missing. In
+   any other git checkout this constraint does not apply.
 7. Coexistence with ci-babysit: pr-triage never writes to `ci-babysit/` artifacts, never rebases
    or force-pushes. It pushes only on an approved `needs-code-change` commit (fast-forward only).
 8. A `needs-code-change` comment approved by the human: code change applied to worktree, committed

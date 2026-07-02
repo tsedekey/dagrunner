@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 
-RUN_ID="${DAGRUN_RUN_ID:-$(basename "$(git rev-parse --show-toplevel 2>/dev/null || echo "")")}"
+RUN_ID="${DAGRUN_RUN_ID:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-')}"
 ARTIFACTS_DIR="${DAGRUN_ARTIFACTS:-$HOME/.local/share/dagrunner/runs/${RUN_ID}/pr-triage}"
 STATE_FILE="$ARTIFACTS_DIR/pr-triage-state.json"
 TICK_FILE="$ARTIFACTS_DIR/pr-triage-tick.json"

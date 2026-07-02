@@ -239,7 +239,13 @@ Local: monitors CI on the open PR, rebases on base, fixes failing checks (scoped
 
 **Poll/trigger machinery (built here, reused by pr-triage):** ci-babysit owns the Claude Code Desktop scheduled-task / poll loop and the crev-style `--since <prior-run-id>` incremental pattern (act only on new commits/failures since the last tick; checkpoint-and-exit per tick, state on disk). pr-triage (§9.3) imports this loop rather than building a second one.
 
-Operates over the PR lifetime — the worktree must persist (don't `cleanup` until the PR is closed).
+Operates over the PR lifetime — in a dagrunner-managed worktree (`DAGRUN_RUN_ID` set) it must
+persist (don't `cleanup` until the PR is closed). Neither sibling requires a dagrunner worktree,
+though: Phase 0 gates only on PR discoverability (`gh pr list`/`gh pr view` for the current
+branch), not on branch naming or worktree origin — both run from any git checkout, on any branch,
+as long as a PR exists for it. `RUN_ID` falls back to the sanitized current branch name
+(`/` → `-`) when `DAGRUN_RUN_ID` is unset, so sequential runs on different branches out of the
+same checkout don't collide on one state directory.
 
 ### 10.3 pr-triage (Sibling 3)
 
@@ -299,7 +305,10 @@ Open items: confirm Agent SDK credit pool covers volume; some preflight checks (
 ## 12. Operating reminders
 
 - Every real-work `dagrun` runs with CLAUDE_CONFIG_DIR=~/.claude-work (alias `dagrun-work`); spawned sessions inherit config from the dagrun process. ANTHROPIC_API_KEY unset (subscription auth).
-- Siblings: canonical in Camunda private `.claude/`, run in worktree, edit in DEVHARNESS_SRC, persist worktree until PR done (esp. ci-babysit/pr-triage).
+- Siblings: canonical in Camunda private `.claude/`, edit in DEVHARNESS_SRC. ci-babysit/pr-triage
+  run from any git checkout on any branch with a discoverable PR — not restricted to a
+  dagrunner-managed worktree. When `DAGRUN_RUN_ID` IS set (dagrunner-managed worktree), persist
+  the worktree until the PR is done.
 - `gh`/network mutations must run un-sandboxed.
 - Unattended pipeline runs: never auto-approve a gate **unless `--night` is active and no concern is flagged** (see §3 night-mode). The one-rule policy: agent-decidable gates (Gate 1, Gate 2) auto-approve when `guide.md`/`summary.md` contains no "Concerns / plan challenges" heading; verify-election always pauses. Subagents never end a turn with a question.
 - Schema is single-source-of-truth, owned by dagrunner, never duplicated.

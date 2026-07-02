@@ -15,9 +15,11 @@ independent. Run repeatedly to babysit continuously:
 /loop 60s /ci-babysit
 ```
 
-**WORKTREE LIFETIME CONSTRAINT:** `dagrun cleanup` MUST NOT run while this command is active and
-the PR is open. Both the worktree and the feat branch must persist for the full PR lifetime.
-ci-babysit fails loud on the next tick if either is gone.
+**WORKTREE LIFETIME CONSTRAINT (dagrunner-managed runs only):** when `DAGRUN_RUN_ID` is set (i.e.
+running inside a dagrunner-managed worktree), `dagrun cleanup` MUST NOT run while this command is
+active and the PR is open — the worktree and branch must persist for the full PR lifetime, and
+ci-babysit fails loud on the next tick if either is gone. Outside a dagrunner-managed worktree
+(any other git checkout) this constraint does not apply — there is no `dagrun cleanup` to avoid.
 
 **Field names verified from `gh` v2.93.0 `--help` on this machine. JSON response shapes for live
 PRs are NOT confirmed end-to-end — no real PR was open at spike time. If a field comes back wrong,
@@ -36,8 +38,10 @@ scripts for logic changes.
 
 ## Phase 0 — Bootstrap
 
-Parse `$ARGUMENTS`. Validate that this is a dagrunner worktree on a feat branch. Discover the
-PR (draft or open). Fail loud if the worktree or branch is missing, or if no PR is found.
+Parse `$ARGUMENTS`. Validate this is a git checkout on a real branch (any branch name — not
+detached HEAD). Discover the PR (draft or open) for that branch via `gh`. Fail loud if the
+checkout or branch is missing, or if no PR is found — PR discovery is the real gate, not the
+branch name.
 
 ```bash
 SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/ci-babysit"
@@ -46,8 +50,8 @@ zsh "$SCRIPT_DIR/phase-0-bootstrap.sh" "$ARGUMENTS"
 
 **PHASE_0_CHECKPOINT:**
 
-- [ ] Running on a `feat/<slug>` branch inside a worktree
-- [ ] PR number discovered (non-empty)
+- [ ] Running on a real branch (not detached HEAD) inside a git checkout
+- [ ] PR number discovered (non-empty) for that branch
 - [ ] `~/.local/share/dagrunner/runs/{run_id}/ci-babysit/ci-babysit-state.json` written
 
 ---
@@ -260,8 +264,9 @@ Each tick is independent and idempotent:
 4. On an advanced base branch: rebases cleanly and pushes; a conflict STOPS and surfaces to human.
 5. When all checks pass: prints readiness summary and `gh pr ready` command; does NOT call it.
    Readiness is re-presented if new work arrives before the human flips.
-6. `dagrun cleanup` is forbidden until PR closes; ci-babysit fails loud (exit 1) if it wakes and
-   the worktree or `feat/<slug>` branch is missing.
+6. In a dagrunner-managed worktree (`DAGRUN_RUN_ID` set): `dagrun cleanup` is forbidden until PR
+   closes; ci-babysit fails loud (exit 1) if it wakes and the worktree or branch is missing. In
+   any other git checkout this constraint does not apply.
 
 ---
 
