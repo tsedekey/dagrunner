@@ -107,6 +107,15 @@
           <td>&mdash;</td>
           <td style="font-size:0.85em;color:#c62828;">&mdash;</td>
         </tr>
+        <tr>
+          <td><code>pr</code></td>
+          <td><span style="background:#bdbdbd;color:#333;padding:2px 8px;border-radius:3px;font-size:0.85em;font-weight:600;">pending</span></td>
+          <td style="font-size:0.85em;">&mdash;</td>
+          <td style="text-align:center;">0</td>
+          <td style="text-align:right;">$0.0000</td>
+          <td>&mdash;</td>
+          <td style="font-size:0.85em;color:#c62828;">&mdash;</td>
+        </tr>
         </tbody>
       </table>
     </section>
@@ -115,6 +124,63 @@
       <h2>Cost Totals</h2>
       <table>
         <tr><th>Total Cost</th><td><strong>$0.1234</strong></td></tr>
+      </table>
+    </section>
+  
+    <section>
+      <h2>Burn &amp; Hotspots</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Node</th>
+            <th>Cache-Creation</th>
+            <th>Cache-Read</th>
+            <th>Output</th>
+            <th>Tier Mix</th>
+            <th>Hotspots</th>
+          </tr>
+        </thead>
+        <tbody>
+          
+        <tr>
+          <td><code>define</code></td>
+          <td style="text-align:right;">95</td>
+          <td style="text-align:right;">15</td>
+          <td style="text-align:right;">60</td>
+          <td>opus: 40, sonnet: 250</td>
+          <td><span style="background:#ef6c00;color:#fff;padding:2px 8px;border-radius:3px;font-size:0.8em;font-weight:600;margin:0 4px 4px 0;display:inline-block;">cold-reload tax — 86% cold</span><span style="background:#c62828;color:#fff;padding:2px 8px;border-radius:3px;font-size:0.8em;font-weight:600;margin:0 4px 4px 0;display:inline-block;">tier leak — declared sonnet, leaked into opus</span></td>
+        </tr>
+        <tr>
+          <td><code>implement</code></td>
+          <td style="text-align:right;">2</td>
+          <td style="text-align:right;">300</td>
+          <td style="text-align:right;">5</td>
+          <td>&mdash;<br><span style="color:#c62828;font-size:0.85em;">unclassified: 407 tokens</span></td>
+          <td>&mdash;</td>
+        </tr>
+        <tr>
+          <td><code>review</code></td>
+          <td colspan="5" style="color:#757575;font-style:italic;">no burn data (modelUsage missing from SDK result)</td>
+        </tr>
+        <tr>
+          <td><code>pr</code></td>
+          <td colspan="5" style="color:#757575;font-style:italic;">no burn data</td>
+        </tr>
+        </tbody>
+      </table>
+    </section>
+  
+    <section>
+      <h2>Token Rollup</h2>
+      <table>
+        <tr><th>Cache-Creation Tokens</th><td style="text-align:right;">97</td></tr>
+        <tr><th>Cache-Read Tokens</th><td style="text-align:right;">315</td></tr>
+        <tr><th>Output Tokens</th><td style="text-align:right;">65</td></tr>
+        <tr><th>Cold-Reload Tax (run-wide)</th><td style="text-align:right;">23.5%</td></tr>
+        <tr><th>Opus Tokens</th><td style="text-align:right;">40</td></tr>
+        <tr><th>Sonnet Tokens</th><td style="text-align:right;">250</td></tr>
+        <tr><th>Haiku Tokens</th><td style="text-align:right;">0</td></tr>
+        <tr><th>Unclassified Tokens</th><td style="text-align:right;">407</td></tr>
       </table>
     </section>
   

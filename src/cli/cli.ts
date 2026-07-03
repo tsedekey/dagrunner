@@ -25,6 +25,7 @@ import {
 } from "node:fs";
 import { appendReflection } from "./reflect-append.js";
 import { generateReport } from "./report.js";
+import type { BurnDoc } from "../runtime/burn.js";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
@@ -521,7 +522,23 @@ function cmdReport(argv: string[]): void {
   const frictionLines = existsSync(frictionFile)
     ? readFileSync(frictionFile, "utf8").trim().split("\n").filter(Boolean)
     : [];
-  const html = generateReport(state, frictionLines);
+  // burn.json is instrumentation-only (never in `produces`, see
+  // DECISIONS.md § burn-monitor-d1-capture) — a node may have no burn.json
+  // (never ran, or predates this feature) or an unparseable one. Both
+  // degrade to "no burn data" for that node; the report must never throw.
+  const burnByNode: Record<string, BurnDoc | undefined> = {};
+  for (const nodeId of Object.keys(state.nodes)) {
+    const burnFile = join(runDir, nodeId, "burn.json");
+    if (!existsSync(burnFile)) continue;
+    try {
+      burnByNode[nodeId] = JSON.parse(
+        readFileSync(burnFile, "utf8"),
+      ) as BurnDoc;
+    } catch {
+      // Malformed burn.json — treat as absent, never crash the report.
+    }
+  }
+  const html = generateReport(state, frictionLines, burnByNode);
   const outPath = join(runDir, "report.html");
   writeFileSync(outPath, html, "utf8");
   process.stdout.write(`dagrun: report written to ${outPath}\n`);
