@@ -6,28 +6,21 @@
 > `testing-protocol` skill. This file is kept current under the same anti-drift discipline —
 > when state changes, update it.
 >
-> Last updated: 2026-06-19 (sibling ownership redesign + run-id collision guard shipped).
+> Last updated: 2026-07-03 (docs consolidation pass — retired the v1-build scaffold, docs/archive/,
+> and the chat-architect handoff apparatus; this refresh also caught this file up to the last
+> several shipped changes, which had drifted).
 
 ## Next session: start here
 
 > Read this block first. Everything else in this file is background.
 
-**Both this-session tasks are complete** (committed as of `95ea625` / `b8c37cf`):
+**Most recently shipped** (see `DECISIONS.md` for the full judgment-call trail):
+bugfix workflow (`dagrun start bugfix`, `reproduce` node, severity-aware night-mode) ·
+CLI/SDK version pin · siblings work from any git checkout/branch, not just dagrunner worktrees ·
+`ci-babysit`/`sdk-runner` model-id sync fixes · `define` command mandatory codebase verification.
 
-- **sibling-ownership** — `ci-babysit`, `pr-triage`, `seed-data` versioned in `payload/siblings/`;
-  seeded at run-start and re-applied at every node session-start via `session-start.sh`; `DAGRUNNER_ROOT` exported.
-- **run-id-collision-guard** — run-id is now `<slug>-<timestamp>-<6-hex>`; fail-loud existsSync backstop added.
-
-**Next task (no plan yet — needs drafting):**
-
-Pick one of the open items from the "Pending / next" section below. Good candidates:
-
-- **Pin the Claude Code CLI/SDK version** — the `-p` empty-result regression is still open.
-- **Wire siblings to `dagrun reflect`** — have `ci-babysit` / `pr-triage` append to the reflection store (separate plan, see STATUS "Pending").
-- **Build-queue credit cap** — per-build budget guard on `scripts/build-queue.sh`.
-
-**Working model (see memory):** always delegate implementation to the `dr-build` agent; this
-session is coordinator only. Start a fresh session after 1–2 tasks complete.
+**Next task:** no plan is currently drafted. Pick from "Pending / next" below, or a new ask from
+Eddie — don't infer one.
 
 ---
 
@@ -51,8 +44,8 @@ outside the pipeline: `ci-babysit`, `pr-triage`, `/seed-data`
 - `src/` in 5 cohesion folders: `core/` (dag, state, lock, types), `workflow/`, `runtime/`
   (run-engine, sdk-runner, mock-executor, launcher), `config/` (xdg, settings-seed), `cli/`
   (cli, preflight, report).
-- `.claude/` = **build-only** harness (author/researcher agents, build skills, `/dr-build`,
-  hooks, settings, CLAUDE.md) — auto-loaded for sessions editing dagrunner, never seeded.
+- `.claude/` = **build-only** harness (`dr-build` agent, build skills, hooks, settings,
+  CLAUDE.md) — auto-loaded for sessions editing dagrunner, never seeded.
 - `payload/` = **runtime-only** (pipeline commands, reviewer agents) — seeded into worktrees,
   never auto-loaded.
 - `scripts/` = dev helpers: `make-bundle.sh`, `build-queue.sh`, `zip-build-queue.sh`.
@@ -71,19 +64,10 @@ outside the pipeline: `ci-babysit`, `pr-triage`, `/seed-data`
 
 ## How we work
 
-- **Coordinator** (this Claude Code session, rooted in `~/dev/dagrunner` on personal) owns plan
-  design, sequencing, and architecture decisions. Has live repo access — no zip uploads needed.
-- **Implementation** is always delegated to the `dr-build` agent
-  (`Agent({ subagent_type: "dr-build", prompt: "docs/changes/ready/<plan>.md" })`). The agent
-  self-briefs, TDDs, runs `verify-baseline`, reconciles docs, commits, and returns a build report.
-  Independent plans can be fanned out in parallel.
-- **Plans** use `docs/changes/_TEMPLATE.md` (the lean delta). Built plans archive to
-  `docs/changes/done/`.
-- **Session cadence:** fresh session after 1–2 tasks. Each session boots from this file's
-  "Next session: start here" block — no re-orientation needed.
-- **Night queue:** `scripts/build-queue.sh <plans…>` for unattended batches — gates each on
-  `verify-baseline`, stop-on-fail, `caffeinate`. Night queue takes `smoke:mock`-only plans;
-  prompt-touching plans need `smoke:live` run by hand.
+Full role/process detail lives in `docs/dagrunner-architect-charter.md` — division of labor,
+build mode, anti-drift discipline, namespace rules. The one thing worth repeating here: fresh
+session after 1–2 tasks, booting from this file's "Next session: start here" block — no
+re-orientation needed.
 
 ## Done this session
 
@@ -97,18 +81,16 @@ hook reads `reflections.md` → store log; `notes.md` → `reflections.md` sweep
 `dagrun reflect`; smoke hard-asserts ≥1 store entry. **Night-mode permission posture**: attended nodes keep `acceptEdits`; `--night` nodes use
 `bypassPermissions` so no maven/bash hangs; sandbox + deny-guard boundary unchanged (proven by
 teeth-check unit tests). **`dr-build` agent**: slash command retired, single self-briefing agent
-now handles all plan execution. **Core hardening + reflection + night-mode prompt posture complete.** **Sibling ownership**: `ci-babysit`, `pr-triage`, `seed-data` moved to `payload/siblings/` (versioned); `seedWorktreeSiblings` seeds both run-start and resume; `session-start.sh` re-seeds after DEVHARNESS_SRC sync so dagrunner always wins; 4 TDD unit tests green.
+now handles all plan execution. **Core hardening + reflection + night-mode prompt posture complete.** **Sibling ownership**: `ci-babysit`, `pr-triage`, `seed-data` moved to `payload/siblings/` (versioned); `seedWorktreeSiblings` seeds both run-start and resume; `session-start.sh` re-seeds after DEVHARNESS_SRC sync so dagrunner always wins; 4 TDD unit tests green. **Gate dialogue UX**: terminal one-liner rejection replaced with a spawned interactive `claude` session (`/gate-review` + `/gate-conclude`, `gate-context.md`/`gate-decision.md` handshake) — SDK sessions aren't resumable from the CLI, so gate dialogue always spawns fresh. **CLI/SDK version pin**: `EXPECTED_CLAUDE_CLI_VERSION` checked at preflight, `DAGRUN_SKIP_CLI_VERSION_CHECK` escape hatch. **Bugfix workflow** (Phase 5): `dagrun start bugfix`, new `reproduce` node (Gate 1), `base_branch`/`severity`/`issueUrl` frontmatter, severity-aware night-mode. **Worktree hygiene**: `.git/info/exclude` scratch backstop + pre-`pr` advisory scan. **Siblings run on any branch/checkout**, not just dagrunner-managed worktrees; `RUN_ID` falls back to sanitized branch name.
 
 ## Pending / next
 
-- **Pin the Claude Code CLI/SDK version** (the `-p` empty-result regression — open from the
-  original STATUS).
 - Confirm the **Agent SDK credit pool** covers volume; set a per-build budget cap on the queue.
-- Doc: mention `build-queue.sh` in the README `scripts/` note + charter.
 - Follow-up: `build-queue.sh` could auto-run `smoke:live` once after a clean queue / when prompt
   files changed.
 - **Sibling capture** (companion Camunda private `.claude/` change): wire `ci-babysit` and
   `pr-triage` to call `dagrun reflect` — separate plan (out of scope for this change).
+- `DAGRUN_PR_TITLE_PREFIX` is wired but `pr.md` doesn't read it yet (see DECISIONS.md §run-id-format).
 
 ## Reflection-harvest notes (banked for the reflect work)
 

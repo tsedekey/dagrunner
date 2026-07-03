@@ -1,7 +1,7 @@
 # dagrunner — Master Architecture (Source of Truth)
 
-Status: Canonical, reconciled with the built code through Phase 3 (all three siblings built). Each sibling build also gets its own implementation plan. Cross-references cleaned up after the /verify-demo split into /seed-data.
-Last updated: 2026-06-21 (gate-dialogue-ux: replace one-line terminal gate prompt with interactive claude session spawn; /gate-review + /gate-conclude slash commands; parseGateDecision pure function; SDK session IDs not resumable via CLI — fresh session approach documented)
+Status: Canonical, reconciled with the built code through Phase 5 (bugfix workflow shipped; siblings run on any branch). Each sibling build also gets its own implementation plan.
+Last updated: 2026-07-03 (docs consolidation: retired the v1-build scaffold, docs/archive/, and the chat-architect handoff apparatus — see CLAUDE.md, STATUS.md, README.md, docs/dagrunner-architect-charter.md)
 Owner: Eddie Tsedeke
 
 ---
@@ -292,11 +292,10 @@ this becomes team-scale, multi-repo, no-single-human-gate infra.
 | **2a** | (1) Preflight + runtime permission/sandbox/network model [FIRST]; (2) review node (diff-triage self-select + fan-out + finding-count-gated verifier -> findings schema); (3) fix node (gated, self-verifying). Built, fixture-passed, post-fixture restructure (classify removal etc.) applied.                               | ✅ DONE            | —           |
 | **2b** | verify-election + verify (doc-only; cluster automation REMOVED, see §9) + Gate 3; pr node (terminal); pure-capture reflection via dagrun reflect-append; rerun command; PR post-process outside sandbox.                                                                                                                      | ✅ DONE            | 2a complete |
 | **3**  | Three interactive siblings, in order: (1) /seed-data [c8ctl, assumes human-started OC], (2) ci-babysit, (3) pr-triage. All local, human-driven.                                                                                                                                                                               | ✅ DONE            | —           |
-| **4**  | Live `dagrun ui` (Node-http + SSE + vanilla HTML, localhost-only, scrubbed)                                                                                                                                                                                                                                                   | someday            | —           |
 | **5**  | Bug fix workflow (`dagrun start bugfix`). New `reproduce` node (Gate 1: confirms bug is real, validates root cause); shorter pipeline — no verify node (regression test runs in implement/fix). `base_branch` from plan YAML frontmatter (hotfix branch support). Severity-aware night-mode (critical/blocker always pauses). | ✅ DONE            | —           |
 | **6**  | Live `dagrun ui` (Node-http + SSE + vanilla HTML, localhost-only, scrubbed)                                                                                                                                                                                                                                                   | someday            | —           |
 
-Key insight: Phases 2, 3, and 5 are complete. Phases 6+ remain future work.
+Key insight: Phases 1, 2, 3, and 5 are complete. Phase 6 remains future work.
 
 Open items: confirm Agent SDK credit pool covers volume; some preflight checks (network allowlist, additionalDirectories) + content-addressed cache may be partial in code. CLI/SDK versions now pinned (see §7 toolchain pin — CLI 2.1.181, SDK 0.3.170); the `-p` intermittent regression remains upstream/out-of-scope.
 

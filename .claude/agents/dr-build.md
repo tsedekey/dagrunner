@@ -20,7 +20,7 @@ coordinator does not repeat context to you.
 2. Read the plan at the path you were given. It is self-contained and was written for a fresh
    session.
 3. Read `docs/dagrunner-master-architecture.md` — at minimum the sections the plan references.
-   Also load the `architecture-spec` skill slice the plan touches (don't load all of it).
+   This is the single source of design truth.
 4. Read only the source files the plan mentions. Do NOT read the whole codebase.
 5. Ground-check: **code is truth for what exists; the master doc is truth for why.** If reality
    contradicts the plan, the plan is stale — proceed with what the code shows, note the

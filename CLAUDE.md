@@ -64,6 +64,6 @@ One question at a time, surfaced via the tool.
 
 ## Where design decisions live
 
-The full locked design is the `architecture-spec` skill, chunked by theme. Load only the slice a
-block needs. Borrowed patterns are the `crev-patterns` skill. Test protocol is the
+The full locked design (WHY) is `docs/dagrunner-master-architecture.md`. Judgment calls made
+during builds are `DECISIONS.md`. Live project state is `docs/STATUS.md`. Test protocol is the
 `testing-protocol` skill.

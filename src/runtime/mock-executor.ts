@@ -1,5 +1,5 @@
 /**
- * Mock node executor — Block 3 test-author deliverable.
+ * Mock node executor.
  *
  * A drop-in replacement for the real SDK node runner. It never calls the
  * Anthropic SDK and never costs tokens. Per-node scenarios are configured

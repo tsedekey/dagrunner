@@ -9,7 +9,7 @@
 # Required env var (optional — if unset, this hook is a no-op):
 #   DAGRUN_VERIFIER_SCRIPT — absolute path to an executable verifier script.
 #
-# Failure policy (from architecture-spec Theme 8):
+# Failure policy:
 #   - DAGRUN_VERIFIER_SCRIPT not set       → no-op, exit 0.
 #   - Verifier script not executable       → block (broken verifier ≠ success).
 #   - Verifier exits non-zero              → block (not converged yet).

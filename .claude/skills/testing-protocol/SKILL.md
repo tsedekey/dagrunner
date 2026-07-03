@@ -157,6 +157,6 @@ unit-test `run-engine`, `sdk-runner`, or `launcher` in Tier A — smoke owns the
 
 ## Reuse
 
-Mirror crev's ajv-style schema-validation test pattern for `classify.json` and synthesized findings
-(see the crev-patterns skill). Do not invent a validation harness — hand-roll or reuse the loader's
-validator.
+Schema-contract tests (`CLASSIFY_SCHEMA`/`FINDINGS_SCHEMA` well-formedness, conforming/nonconforming
+fixtures) use the hand-rolled minimal validator in `feature-workflow.test.ts` — no ajv or other
+dependency. Do not invent a second validation harness; reuse the loader's validator.

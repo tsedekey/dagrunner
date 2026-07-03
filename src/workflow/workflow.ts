@@ -129,7 +129,7 @@ export function loadWorkflow(def: Workflow): Workflow {
 }
 
 // ---------------------------------------------------------------------------
-// Fixture workflows (consumed by the test-author)
+// Fixture workflows (consumed by tests)
 // ---------------------------------------------------------------------------
 
 /**
