@@ -335,6 +335,25 @@ test("generateReport: hotspot badges render for a node whose flags fired (tier l
   );
 });
 
+test("generateReport: per-model breakdown from models[] renders alongside the tier-mix aggregate", () => {
+  const html = generateReport(FIXED_STATE, [], FIXED_BURN);
+  // define's two distinct models[] entries — this is the D1 empirical
+  // motivation (opus-tier parent + sonnet-tier subagent fan-out) — must
+  // both be individually visible, not just aggregated into tierMix.
+  assert.ok(
+    html.includes("claude-sonnet-5: 250 tok"),
+    "define's claude-sonnet-5 per-model line must render",
+  );
+  assert.ok(
+    html.includes("claude-opus-4-8: 40 tok"),
+    "define's claude-opus-4-8 per-model line must render",
+  );
+  assert.ok(
+    html.includes("claude-mystery-model: 407 tok"),
+    "implement's single-model breakdown must render",
+  );
+});
+
 test("generateReport: run-level Token Rollup section shows totals by bucket and by tier", () => {
   const html = generateReport(FIXED_STATE, [], FIXED_BURN);
   assert.ok(html.includes("Token Rollup"));

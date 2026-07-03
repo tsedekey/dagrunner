@@ -9,18 +9,23 @@
  * DEVHARNESS_SRC is never emitted.
  *
  * Burn Monitor Deliverable 2: renders each node's already-captured
- * burn.json (D1) — cache-creation/read split, output tokens, per-tier mix,
- * and hotspot badges (cold-reload-tax / tier-leak / fat-fixed-prefix /
- * output-heavy) computed by the pure functions in runtime/burn.ts. This
- * module stays pure (no fs) — cli.ts reads burn.json per node and passes
- * the resulting map in. intraNode stays null / phase stays "rollup" for
- * the lifetime of this deliverable — no transcript-level rendering here.
+ * burn.json (D1) — cache-creation/read split, output tokens, per-tier mix
+ * (derived.tierMix) AND the raw per-model breakdown (models[] — the D1
+ * empirical motivation: a node's modelUsage can carry multiple distinct
+ * model ids, e.g. the review node's opus-tier parent + sonnet-tier
+ * reviewer-subagent fan-out), plus hotspot badges (cold-reload-tax /
+ * tier-leak / fat-fixed-prefix / output-heavy) computed by the pure
+ * functions in runtime/burn.ts. This module stays pure (no fs) — cli.ts
+ * reads burn.json per node and passes the resulting map in. intraNode
+ * stays null / phase stays "rollup" for the lifetime of this deliverable
+ * — no transcript-level rendering here.
  */
 
 import type { RunState, NodeState, GateHistoryEntry } from "../core/state.js";
 import {
   type BurnDoc,
   type BurnDocOk,
+  type BurnModelEntry,
   type HotspotFlag,
   type Tier,
   type TierMix,
@@ -208,6 +213,27 @@ function renderTierMix(mix: TierMix): string {
   return knownHtml;
 }
 
+/** Renders one line per model in `models[]` — the raw per-model breakdown
+ * the SDK's `modelUsage` result carries (D1's whole empirical motivation:
+ * the `review` node's `modelUsage` had two distinct keys, the opus-tier
+ * parent and the sonnet-tier reviewer-subagent fan-out — tierMix alone
+ * aggregates that away, so this renders `models[]` directly per node,
+ * alongside the tier-mix aggregate). One line per model: its total
+ * tokens (input+output+cacheRead+cacheCreation, matching computeTierMix's
+ * definition) and its own costUSD. */
+function renderModelBreakdown(models: BurnModelEntry[]): string {
+  if (models.length === 0) return "&mdash;";
+  const lines = models.map((m) => {
+    const total =
+      m.inputTokens +
+      m.outputTokens +
+      m.cacheReadInputTokens +
+      m.cacheCreationInputTokens;
+    return `${m.model}: ${formatInt(total)} tok ($${m.costUSD.toFixed(4)})`;
+  });
+  return esc(lines.join(" | "));
+}
+
 function renderBurnSection(
   nodes: Record<string, NodeState>,
   burnByNode: Record<string, BurnDoc | undefined>,
@@ -225,7 +251,7 @@ function renderBurnSection(
       return `
         <tr>
           <td><code>${esc(id)}</code></td>
-          <td colspan="5" style="color:#757575;font-style:italic;">no burn data</td>
+          <td colspan="6" style="color:#757575;font-style:italic;">no burn data</td>
         </tr>`;
     }
 
@@ -233,7 +259,7 @@ function renderBurnSection(
       return `
         <tr>
           <td><code>${esc(id)}</code></td>
-          <td colspan="5" style="color:#757575;font-style:italic;">no burn data (${esc(doc.error)})</td>
+          <td colspan="6" style="color:#757575;font-style:italic;">no burn data (${esc(doc.error)})</td>
         </tr>`;
     }
 
@@ -253,6 +279,7 @@ function renderBurnSection(
           <td style="text-align:right;">${formatInt(doc.derived.cacheReadTokens)}</td>
           <td style="text-align:right;">${formatInt(doc.derived.outputTokens)}</td>
           <td>${renderTierMix(doc.derived.tierMix)}</td>
+          <td style="font-size:0.85em;">${renderModelBreakdown(doc.models)}</td>
           <td>${badges}</td>
         </tr>`;
   });
@@ -268,6 +295,7 @@ function renderBurnSection(
             <th>Cache-Read</th>
             <th>Output</th>
             <th>Tier Mix</th>
+            <th>Per-Model</th>
             <th>Hotspots</th>
           </tr>
         </thead>

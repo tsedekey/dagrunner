@@ -137,6 +137,7 @@
             <th>Cache-Read</th>
             <th>Output</th>
             <th>Tier Mix</th>
+            <th>Per-Model</th>
             <th>Hotspots</th>
           </tr>
         </thead>
@@ -148,6 +149,7 @@
           <td style="text-align:right;">15</td>
           <td style="text-align:right;">60</td>
           <td>opus: 40, sonnet: 250</td>
+          <td style="font-size:0.85em;">claude-sonnet-5: 250 tok ($0.3000) | claude-opus-4-8: 40 tok ($0.2000)</td>
           <td><span style="background:#ef6c00;color:#fff;padding:2px 8px;border-radius:3px;font-size:0.8em;font-weight:600;margin:0 4px 4px 0;display:inline-block;">cold-reload tax — 86% cold</span><span style="background:#c62828;color:#fff;padding:2px 8px;border-radius:3px;font-size:0.8em;font-weight:600;margin:0 4px 4px 0;display:inline-block;">tier leak — declared sonnet, leaked into opus</span></td>
         </tr>
         <tr>
@@ -156,15 +158,16 @@
           <td style="text-align:right;">300</td>
           <td style="text-align:right;">5</td>
           <td>&mdash;<br><span style="color:#c62828;font-size:0.85em;">unclassified: 407 tokens</span></td>
+          <td style="font-size:0.85em;">claude-mystery-model: 407 tok ($0.0500)</td>
           <td>&mdash;</td>
         </tr>
         <tr>
           <td><code>review</code></td>
-          <td colspan="5" style="color:#757575;font-style:italic;">no burn data (modelUsage missing from SDK result)</td>
+          <td colspan="6" style="color:#757575;font-style:italic;">no burn data (modelUsage missing from SDK result)</td>
         </tr>
         <tr>
           <td><code>pr</code></td>
-          <td colspan="5" style="color:#757575;font-style:italic;">no burn data</td>
+          <td colspan="6" style="color:#757575;font-style:italic;">no burn data</td>
         </tr>
         </tbody>
       </table>
