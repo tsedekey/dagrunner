@@ -31,6 +31,7 @@ import type { Node } from "../core/types.js";
 import type { DagrunnerConfig } from "../config/xdg.js";
 import { applyNodeEnv, buildNodeEnv } from "./launcher.js";
 import { readWorkProfileMcpServers } from "../config/settings-seed.js";
+import { buildBurn } from "./burn.js";
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -211,6 +212,7 @@ export function makeSDKRunner(
     let totalCost = 0;
     let structuredOutput: unknown = undefined;
     let sdkError: string | null = null;
+    let modelUsage: unknown = undefined;
 
     for await (const msg of q) {
       // Append every SDK message to the transcript (compact JSON, one per line).
@@ -257,6 +259,7 @@ export function makeSDKRunner(
       if (msg.type === "result") {
         finalSessionId = msg.session_id;
         totalCost = msg.total_cost_usd;
+        modelUsage = msg.modelUsage;
         if (msg.subtype === "success" && "structured_output" in msg) {
           structuredOutput = msg.structured_output;
         }
@@ -280,7 +283,33 @@ export function makeSDKRunner(
           sessionId: finalSessionId,
           event: "session-end",
           costUsd: totalCost,
+          // Additive field: the per-model breakdown the SDK result carries.
+          // Existing consumers (cli.ts, report.ts) read friction.jsonl lines
+          // as opaque strings and are unaffected by this addition.
+          modelUsage,
         }) + "\n",
+        "utf8",
+      );
+    } catch {
+      // observability-only — never block a node result
+    }
+
+    // Write burn.json — per-node model/cache/tier breakdown. Same write-site
+    // as friction.jsonl (same reason: this is the only place the SDK result's
+    // modelUsage is available), but in an independent try/catch so a failure
+    // writing one artifact never suppresses the other. buildBurn() is total
+    // (never throws): missing/malformed modelUsage yields an explicit error
+    // marker doc, never a silently-zeroed "ok" shape — write it unchanged.
+    try {
+      const burnDoc = buildBurn({
+        node: nodeId,
+        sessionId: finalSessionId,
+        costUsd: totalCost,
+        modelUsage,
+      });
+      writeFileSync(
+        join(ctx.artifactsDir, "burn.json"),
+        JSON.stringify(burnDoc, null, 2),
         "utf8",
       );
     } catch {
