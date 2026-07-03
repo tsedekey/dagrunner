@@ -30,6 +30,3 @@ BUILD-REPORT.md
 # Smoke test: toy-repo is provisioned at runtime, not committed
 test/smoke/fixtures/toy-repo/
 /~/.claude-work
-
-docs/archive/*
-docs/changes/*

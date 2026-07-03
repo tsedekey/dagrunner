@@ -108,7 +108,7 @@ Format: `<block> · <decision> · <why>`
 
 ## Phase 2b — verify-election + verify-guide + Gate 3
 
-- phase2b-verify-guide · verify-seed REMOVED, replaced by verify-guide (information-only, haiku) · cluster bring-up (Maven, Docker, ES, AIO JVM) conflicts with the runtime sandbox — it requires Docker, broad network, host ports, and out-of-tree writes that the sandbox forbids. Lifting the sandbox for that one node breaks the security model for all other nodes. Automation is also negative-ROI: manual cluster bring-up is faster. verify-guide produces seeding-spec.json + tour-spec.json + manual-test.md from the diff alone — no cluster, no network. Phase 3 will consume these specs in /verify-demo (interactive, outside dagrunner). See: docs/phase2b-change-order-verify.md.
+- phase2b-verify-guide · verify-seed REMOVED, replaced by verify-guide (information-only, haiku) · cluster bring-up (Maven, Docker, ES, AIO JVM) conflicts with the runtime sandbox — it requires Docker, broad network, host ports, and out-of-tree writes that the sandbox forbids. Lifting the sandbox for that one node breaks the security model for all other nodes. Automation is also negative-ROI: manual cluster bring-up is faster. verify-guide produces seeding-spec.json + tour-spec.json + manual-test.md from the diff alone — no cluster, no network. Phase 3 will consume these specs in /verify-demo (interactive, outside dagrunner).
 
 - phase2b-verify-seed-model-reverted · verify-seed was upgraded to sonnet; that decision is void — verify-seed is removed · verify-guide runs on haiku (information-only; no retry loops, no build diagnosis, no Glean queries needed)
 
@@ -242,7 +242,7 @@ Format: `<block> · <decision> · <why>`
 
 ## reflect-rearchitecture (pure capture — 2026-06-18)
 
-- reflect-rearchitecture · auto-apply subsystem removed; capture is now pure, distributed, and durable · the old reflect+apply-reflection pipeline synthesized proposals on the critical path (one reflect node, Gate 4, apply-reflection with 4 guardrails, dagrun revert-reflection). Judgment on the critical path adds complexity and risk; synthesis belongs in the periodic human+architect harvest. See plan: docs/changes/reflect-rearchitecture-pure-capture.md.
+- reflect-rearchitecture · auto-apply subsystem removed; capture is now pure, distributed, and durable · the old reflect+apply-reflection pipeline synthesized proposals on the critical path (one reflect node, Gate 4, apply-reflection with 4 guardrails, dagrun revert-reflection). Judgment on the critical path adds complexity and risk; synthesis belongs in the periodic human+architect harvest.
 
 - reflect-append-fail-soft · appendReflection() is fail-soft (empty body → no-op, not throw); the CLI exits 0 even when args are missing · this is the single deliberate exception to dagrunner's fail-loud invariant. Rationale: capture must never block shipping. The module validates at call time (guards against calling with a blank body) but the CLI and all prompts are safe to call unconditionally. Node prompts also add `|| true` as belt-and-suspenders. Logged here so "fail-soft here" doesn't read as a violation.
 

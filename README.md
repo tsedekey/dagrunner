@@ -27,12 +27,9 @@ its own git worktree. Three human-driven sibling commands (`ci-babysit`, `pr-tri
 │   ├── agents/dr-build.md              # executes a self-change plan end-to-end
 │   └── skills/testing-protocol/        # mock executor + test tiers + smoke:mock/live
 ├── docs/
-│   ├── dagrunner-master-architecture.md  # the canonical design (WHAT + WHY)
-│   ├── dagrunner-architect-charter.md    # role / working-model / anti-drift discipline
-│   ├── STATUS.md                         # live "where we are / what's next"
-│   └── changes/                          # self-change plans (ready/ → done/)
+│   └── dagrunner-master-architecture.md  # the canonical design (WHAT + WHY)
 ├── DECISIONS.md                        # build-time judgment-call journal
-└── scripts/                            # build-queue.sh, make-bundle.sh, etc.
+└── scripts/write-build-meta.mjs        # build-time version/timestamp stamping
 ```
 
 ## Building and running
@@ -49,11 +46,16 @@ gate — run it before any commit. `npm run smoke:live` runs the real 8-step SDK
 
 Machine setup (XDG home, `DEVHARNESS_SRC`, secrets) is documented in `CLAUDE.md`.
 
+## How self-changes get made
+
+Agree the change in conversation with a Claude Code session rooted in this repo, then either
+implement inline or dispatch the `dr-build` agent with a self-contained change brief. No separate
+plan files or status tracking doc — git log is the history. See `CLAUDE.md` § "How self-changes
+happen".
+
 ## Where to look next
 
 - **What dagrunner is and why it's built this way:** `docs/dagrunner-master-architecture.md`.
-- **Where the project is right now / what's next:** `docs/STATUS.md`.
-- **How a build session should behave:** `docs/dagrunner-architect-charter.md`.
 - **Every build-time judgment call:** `DECISIONS.md` (grep it, it's long by design).
 - **How "done" is proven:** the `testing-protocol` skill.
 

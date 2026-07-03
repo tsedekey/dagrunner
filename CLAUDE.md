@@ -65,5 +65,13 @@ One question at a time, surfaced via the tool.
 ## Where design decisions live
 
 The full locked design (WHY) is `docs/dagrunner-master-architecture.md`. Judgment calls made
-during builds are `DECISIONS.md`. Live project state is `docs/STATUS.md`. Test protocol is the
-`testing-protocol` skill.
+during builds are `DECISIONS.md`. Test protocol is the `testing-protocol` skill. Process/change
+history is git log — there is no separate status or plan-file tracking doc.
+
+## How self-changes happen
+
+Agree the change with Eddie in conversation first. Implementation is then either done inline or
+delegated to the `dr-build` agent (`Agent({ subagent_type: "dr-build", prompt: "<self-contained
+change brief>" })`) — pass the brief directly as the prompt, not a file path; `dr-build` self-
+briefs from this file and the master doc. Either way, `docs/dagrunner-master-architecture.md` and
+`DECISIONS.md` are reconciled in the same commit when the change affects WHAT exists or WHY.
