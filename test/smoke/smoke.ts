@@ -3,9 +3,12 @@
  * Block 9 — 7-step smoke test for dagrunner v1 (Phase 2a + 2b).
  *
  * Drives the real thin slice end-to-end using non-interactive flags.
- * Makes REAL SDK calls for steps 2-5 and step 6 (pr — terminal node).
+ * Makes REAL SDK calls for steps 2-6 (verify — now autonomous, no election).
  * Step 7 uses a synthetic state (no API call) to test reconcile plumbing only.
- * Phase 2b: step 6 uses --verify n (election skip) + DAGRUN_NO_PR=1 (no real PR).
+ * verify-autonomy change: step 6 approves Gate 2 and lets verify run for
+ * real; see the step-6 comment block for the toy-repo coverage gap this
+ * leaves (verify's build/test/AT stages need a Maven+Docker-shaped worktree
+ * that the toy repo fixture does not provide).
  *
  * Run: node --import tsx ./test/smoke/smoke.ts
  *
@@ -270,38 +273,54 @@ let RUN_ID = "";
 }
 
 // ---------------------------------------------------------------------------
-// Step 6 — dagrun resume --approve --verify n (Gate 2)
-//          election=n -> verify skipped -> pr -> done (pr is terminal)
+// Step 6 — dagrun resume --approve (Gate 2) -> verify runs autonomously
+//
+// verify-autonomy change: there is no more election/--verify flag. Gate 2
+// approval now runs verify directly (required, blocking, no human gate).
+//
+// KNOWN SMOKE:LIVE GAP (see DECISIONS.md § verify-autonomy-smoke-live-gap):
+// the toy repo fixture (test/smoke/fixtures/toy-repo) is a bare git init with
+// only README.md — no pom.xml, no Maven wrapper, no qa/acceptance-tests
+// module, no Docker/testcontainers scaffolding. verify's D4 (independent
+// build+test rerun) and D5 (run the authored @MultiDbTest) CANNOT pass
+// against this fixture — that is verify doing its job correctly (fail loud
+// on a broken/absent build), not a smoke-test bug. This step therefore does
+// NOT assert a PASS outcome or that pr ran; it asserts that verify's real SDK
+// session starts, completes (any terminal status), and that the SessionEnd
+// hook fires during that session — the same deterministic-hook-wiring proof
+// step 6 has always carried, just re-anchored to verify's session instead of
+// pr's now that pr no longer unconditionally runs. A full green verify run
+// requires smoke:live against a real Camunda-shaped worktree (Maven+Docker+
+// qa/acceptance-tests) — out of scope for this build; deferred to Eddie.
 //
 // Reflection wiring check (option b — deterministic):
-//   Seed a known reflections.md into the pr artifact dir BEFORE resume so the
-//   SessionEnd hook has a file to capture regardless of what the model writes.
-//   This proves hook wiring + env propagation in a real session end-to-end,
-//   without gating on spontaneous model output (which is nondeterministic).
+//   Seed a known reflections.md into the verify artifact dir BEFORE resume so
+//   the SessionEnd hook has a file to capture regardless of what the model
+//   writes, and regardless of whether verify's own outcome is PASS or not.
 // ---------------------------------------------------------------------------
 
 {
-  // Seed pr/reflections.md BEFORE the resume call so the SessionEnd hook
+  // Seed verify/reflections.md BEFORE the resume call so the SessionEnd hook
   // captures it deterministically. The sdk-runner uses mkdir -p (not rm+mkdir)
   // so the file survives into the session.
-  const prArtifactsDir = join(HOME, "runs", RUN_ID, "pr");
-  mkdirSync(prArtifactsDir, { recursive: true });
+  const verifyArtifactsDir = join(HOME, "runs", RUN_ID, "verify");
+  mkdirSync(verifyArtifactsDir, { recursive: true });
   writeFileSync(
-    join(prArtifactsDir, "reflections.md"),
+    join(verifyArtifactsDir, "reflections.md"),
     "smoke:live seeded reflection — deterministic hook wiring check",
     "utf8",
   );
 
   const result = runCli(
-    ["resume", RUN_ID, "--approve", "--verify", "n"],
-    // DAGRUN_NO_PR prevents real gh pr create; pr still writes body.md
+    ["resume", RUN_ID, "--approve"],
+    // DAGRUN_NO_PR prevents real gh pr create if pr does end up running.
     { ...HOME_ENV, DAGRUN_NO_PR: "1" },
-    600_000, // 10 minutes: election + pr (haiku)
+    600_000, // 10 minutes: verify (build/test rerun + AT authoring/execution attempt)
   );
   assert.strictEqual(
     result.status,
     0,
-    `Gate 2 approve + election failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
+    `Gate 2 approve failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
   );
 
   const runDir = join(HOME, "runs", RUN_ID);
@@ -309,36 +328,19 @@ let RUN_ID = "";
     readFileSync(join(runDir, "state.json"), "utf8"),
   ) as {
     status: string;
-    verifyElection?: string;
     nodes: Record<string, { status: string }>;
   };
 
-  // Election must be recorded as "n".
-  assert.strictEqual(
-    stateRaw.verifyElection,
-    "n",
-    `verifyElection must be "n", got: ${String(stateRaw.verifyElection)}`,
-  );
-  // verify must be skipped.
-  assert.strictEqual(
+  // verify must have run (no longer "pending") — its own session decides the
+  // terminal status; a toy repo with no build tooling cannot legitimately PASS.
+  assert.notStrictEqual(
     stateRaw.nodes["verify"]?.status,
-    "skipped",
-    `verify must be skipped, got: ${String(stateRaw.nodes["verify"]?.status)}`,
-  );
-  // pr must have run and the run must be done (pr is terminal).
-  assert.strictEqual(
-    stateRaw.nodes["pr"]?.status,
-    "done",
-    `pr must be done, got: ${String(stateRaw.nodes["pr"]?.status)}`,
+    "pending",
+    `verify must have run, got: ${String(stateRaw.nodes["verify"]?.status)}`,
   );
   assert.ok(
-    existsSync(join(runDir, "pr", "body.md")),
-    "pr/body.md must exist after pr node",
-  );
-  assert.strictEqual(
-    stateRaw.status,
-    "done",
-    `run must be done after pr (pr is terminal), got status: ${stateRaw.status}`,
+    ["done", "failed"].includes(stateRaw.status),
+    `run must reach a terminal status after verify's session ends, got: ${stateRaw.status}`,
   );
   // Assert the seeded reflections.md was captured by the SessionEnd hook.
   // Deterministic: this entry was pre-written by smoke, not by the model.
@@ -375,7 +377,7 @@ let RUN_ID = "";
     `  reflection-log has ${lines.length} entries — hook-driven capture verified (seeded entry found)`,
   );
   console.log(
-    "step 6 passed: Gate 2 approve --verify n -> verify skipped -> pr -> done",
+    "step 6 passed: Gate 2 approve -> verify ran autonomously (real SDK session, hook wiring proven)",
   );
 }
 

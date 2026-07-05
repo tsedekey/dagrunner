@@ -810,3 +810,229 @@ test("interrupt-retry: at cap — runDag ends failed without looping (terminates
   const written = readState(stateFile);
   assert.equal(written.status, "failed");
 });
+
+// ---------------------------------------------------------------------------
+// outcomeGate — content-level pass/fail check on a produced JSON artifact
+// (D6 of the verify-node autonomy change: dag.ts's own produces-check gets a
+// sibling check for artifact CONTENT, not just existence).
+// ---------------------------------------------------------------------------
+
+/** Build a one-node workflow + executor that writes `content` to `file` and returns 'done'. */
+function makeOutcomeGateHarness(
+  tmpDir: string,
+  node: Node,
+  content: string,
+): { workflow: Workflow; executor: NodeExecutor; stateFile: string } {
+  const stateFile = join(tmpDir, "state.json");
+  const executor: NodeExecutor = async (_id, n, ctx) => {
+    const { mkdirSync, writeFileSync } = await import("node:fs");
+    mkdirSync(ctx.artifactsDir, { recursive: true });
+    for (const f of n.produces ?? []) {
+      writeFileSync(join(ctx.artifactsDir, f), content, "utf8");
+    }
+    return {
+      status: "done",
+      artifacts: [],
+      cost: 0,
+      sessionId: "mock-session-abc123",
+    };
+  };
+  return {
+    workflow: { name: "outcome-gate-fixture", nodes: [node] },
+    executor,
+    stateFile,
+  };
+}
+
+function makeOutcomeGateState(tmpDir: string, runId: string): RunState {
+  return {
+    runId,
+    workflow: "outcome-gate-fixture",
+    createdAt: "2026-07-05T00:00:00.000Z",
+    updatedAt: "2026-07-05T00:00:00.000Z",
+    status: "running",
+    worktreePath: tmpDir,
+    branch: `feature/${runId}`,
+    sourcePlanPath: "/tmp/plan.md",
+    nodes: { verify: makeNodeState({ status: "pending" }) },
+  };
+}
+
+test("outcomeGate: PASS value passes the node through to done", async () => {
+  const { runDag } = (await import(DAG_MODULE)) as {
+    runDag: (
+      workflow: Workflow,
+      executor: NodeExecutor,
+      state: RunState,
+      opts: { ctx: Ctx; stateFile: string },
+    ) => Promise<RunState>;
+  };
+
+  const tmpDir = mkdtempSync(join(tmpdir(), "dr-outcome-gate-pass-"));
+  const node: Node = {
+    id: "verify",
+    command: "/verify",
+    produces: ["verify-report.json"],
+    outcomeGate: {
+      file: "verify-report.json",
+      field: "outcome",
+      passValues: ["PASS"],
+    },
+  };
+  const { workflow, executor, stateFile } = makeOutcomeGateHarness(
+    tmpDir,
+    node,
+    JSON.stringify({ outcome: "PASS" }),
+  );
+  const state = makeOutcomeGateState(tmpDir, "outcome-gate-pass");
+  const ctx: Ctx = {
+    json: () => ({}),
+    read: () => "",
+    dir: (id) => join(tmpDir, id),
+  };
+
+  const result = await runDag(workflow, executor, state, { ctx, stateFile });
+
+  assert.equal(result.status, "done");
+  assert.equal(result.nodes["verify"]?.status, "done");
+});
+
+test("outcomeGate: a non-pass value fails the node with the outcome value in the error", async () => {
+  const { runDag } = (await import(DAG_MODULE)) as {
+    runDag: (
+      workflow: Workflow,
+      executor: NodeExecutor,
+      state: RunState,
+      opts: { ctx: Ctx; stateFile: string },
+    ) => Promise<RunState>;
+  };
+
+  const tmpDir = mkdtempSync(join(tmpdir(), "dr-outcome-gate-fail-"));
+  const node: Node = {
+    id: "verify",
+    command: "/verify",
+    produces: ["verify-report.json"],
+    outcomeGate: {
+      file: "verify-report.json",
+      field: "outcome",
+      passValues: ["PASS"],
+    },
+  };
+  const { workflow, executor, stateFile } = makeOutcomeGateHarness(
+    tmpDir,
+    node,
+    JSON.stringify({ outcome: "FAIL_ASSERTION" }),
+  );
+  const state = makeOutcomeGateState(tmpDir, "outcome-gate-fail");
+  const ctx: Ctx = {
+    json: () => ({}),
+    read: () => "",
+    dir: (id) => join(tmpDir, id),
+  };
+
+  const result = await runDag(workflow, executor, state, { ctx, stateFile });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.nodes["verify"]?.status, "failed");
+  const err = result.nodes["verify"]?.error ?? "";
+  assert.ok(
+    err.includes("FAIL_ASSERTION"),
+    `expected outcome value in error message, got: ${err}`,
+  );
+  assert.ok(
+    err.includes("PASS"),
+    `expected expected-passValues list in error message, got: ${err}`,
+  );
+});
+
+test("outcomeGate: missing field in an otherwise-valid JSON artifact fails loud (never a silent pass)", async () => {
+  const { runDag } = (await import(DAG_MODULE)) as {
+    runDag: (
+      workflow: Workflow,
+      executor: NodeExecutor,
+      state: RunState,
+      opts: { ctx: Ctx; stateFile: string },
+    ) => Promise<RunState>;
+  };
+
+  const tmpDir = mkdtempSync(join(tmpdir(), "dr-outcome-gate-missing-field-"));
+  const node: Node = {
+    id: "verify",
+    command: "/verify",
+    produces: ["verify-report.json"],
+    outcomeGate: {
+      file: "verify-report.json",
+      field: "outcome",
+      passValues: ["PASS"],
+    },
+  };
+  const { workflow, executor, stateFile } = makeOutcomeGateHarness(
+    tmpDir,
+    node,
+    JSON.stringify({ stages: { build: "PASS" } }), // no "outcome" field at all
+  );
+  const state = makeOutcomeGateState(tmpDir, "outcome-gate-missing-field");
+  const ctx: Ctx = {
+    json: () => ({}),
+    read: () => "",
+    dir: (id) => join(tmpDir, id),
+  };
+
+  const result = await runDag(workflow, executor, state, { ctx, stateFile });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.nodes["verify"]?.status, "failed");
+  assert.ok(
+    (result.nodes["verify"]?.error ?? "").length > 0,
+    "missing outcomeGate field must produce a non-empty error, not a silent pass",
+  );
+});
+
+test("outcomeGate: missing declared file degrades to failed via the existing produces check (not a separate silent path)", async () => {
+  const { runDag } = (await import(DAG_MODULE)) as {
+    runDag: (
+      workflow: Workflow,
+      executor: NodeExecutor,
+      state: RunState,
+      opts: { ctx: Ctx; stateFile: string },
+    ) => Promise<RunState>;
+  };
+
+  const tmpDir = mkdtempSync(join(tmpdir(), "dr-outcome-gate-missing-file-"));
+  // node declares outcomeGate over a file that is NOT in `produces` — the
+  // produces-check never verifies it exists, so checkOutcomeGate must itself
+  // fail loud when the file is absent (rather than crashing or passing).
+  const node: Node = {
+    id: "verify",
+    command: "/verify",
+    produces: [],
+    outcomeGate: {
+      file: "verify-report.json",
+      field: "outcome",
+      passValues: ["PASS"],
+    },
+  };
+  const executor: NodeExecutor = async () => ({
+    status: "done",
+    artifacts: [],
+    cost: 0,
+    sessionId: "mock-session-abc123",
+  });
+  const workflow: Workflow = { name: "outcome-gate-fixture", nodes: [node] };
+  const state = makeOutcomeGateState(tmpDir, "outcome-gate-missing-file");
+  const stateFile = join(tmpDir, "state.json");
+  const ctx: Ctx = {
+    json: () => ({}),
+    read: () => "",
+    dir: (id) => join(tmpDir, id),
+  };
+
+  const result = await runDag(workflow, executor, state, { ctx, stateFile });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.nodes["verify"]?.status, "failed");
+  assert.ok(
+    (result.nodes["verify"]?.error ?? "").length > 0,
+    "missing outcomeGate file must produce a non-empty error, not a silent pass",
+  );
+});

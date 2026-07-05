@@ -73,7 +73,7 @@ Determine which reviewers to run:
 - `reviewer-migration-safety` — if `touches_schema_or_proto`
 - `reviewer-performance` — if `performance_sensitive`
 
-Save all five triage booleans in memory — you will write them into findings.json in Step 4, including `manual_test_recommendation` (computed from `touches_public_api` and `touches_ui`).
+Save all five triage booleans in memory — you will write them into findings.json in Step 4.
 
 ---
 
@@ -124,11 +124,6 @@ Write the following JSON object to `$DAGRUN_ARTIFACTS/findings.json`:
   "reviewers_run": ["<names of reviewers that completed successfully>"],
   "reviewers_skipped": [{ "name": "...", "reason": "..." }],
   "adversarial_verifier_run": true/false,
-  "manual_test_recommendation": {
-    "recommended": "<true if touches_public_api OR touches_ui, else false>",
-    "surface": "<'ui' if touches_ui; 'api' if touches_public_api and not touches_ui; 'none' otherwise>",
-    "rationale": "<one sentence: why a manual test is or is not worthwhile for this change>"
-  },
   "findings": [
     {
       "reviewer_dimension": "correctness|test-adequacy|api-stability|distributed-systems|performance|migration-safety",

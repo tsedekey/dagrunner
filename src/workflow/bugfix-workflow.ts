@@ -1,11 +1,21 @@
 /**
  * bugfix-workflow.ts — bug fix pipeline workflow definition.
  *
- * Pipeline shape (shorter than feature — no verify node):
- *   reproduce (Gate 1) -> implement -> review -> fix (Gate 2) -> pr
+ * Pipeline shape:
+ *   reproduce (Gate 1) -> implement -> review -> fix (Gate 2) -> verify -> pr
  *
- * Regression testing is automated (runs during implement/fix), so no manual
- * verify step is needed. The PR node reuses the feature command unchanged.
+ * verify (added by the verify-autonomy change — see DECISIONS.md
+ * § verify-autonomy-bugfix-conditional): the unit/integration regression test
+ * written in reproduce/guide.md and exercised during implement/fix does NOT
+ * prove the fix holds at the @MultiDbTest acceptance-test layer. verify's
+ * first step (unique to bugfix) searches the worktree's qa/acceptance-tests
+ * for an EXISTING @MultiDbTest that already covers the user-facing flow the
+ * bug touches (grounded from reproduce/guide.md); if found, it is reused
+ * as-is (no new AT authored) and recorded in verify-plan.md. If none covers
+ * it, verify authors one exactly as the feature workflow does. From there
+ * (independent build+test rerun, run+classify, verify-report.json +
+ * outcomeGate) the logic is identical to the feature workflow — see
+ * payload/commands/verify.md, which is shared by both workflows.
  *
  * base_branch is read from plan frontmatter and stored in state.json;
  * run-engine wires it into the worktree start-point and the gh pr create call.
@@ -51,8 +61,21 @@ export const bugfixWorkflow: Workflow = {
       formatCommand: "./mvnw spotless:apply --no-transfer-progress",
     },
     {
-      id: "pr",
+      id: "verify",
       dependsOn: ["fix"],
+      command: "/verify",
+      model: "sonnet",
+      produces: ["verify-plan.md", "verify-report.json"],
+      formatCommand: "./mvnw spotless:apply --no-transfer-progress",
+      outcomeGate: {
+        file: "verify-report.json",
+        field: "outcome",
+        passValues: ["PASS"],
+      },
+    },
+    {
+      id: "pr",
+      dependsOn: ["fix", "verify"],
       command: "/pr",
       model: "haiku",
       produces: ["body.md"],

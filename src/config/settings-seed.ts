@@ -161,6 +161,12 @@ export function buildSeededSettings(opts: {
         "Bash(mvn *)",
         "Bash(curl *)",
         "Bash(jq *)",
+        // Docker daemon reachability check + testcontainer inspection — verify's
+        // preflight (D2/D4 of the verify-autonomy change). Testcontainers itself
+        // talks to the daemon directly from the JVM, not via this Bash allowlist;
+        // this entry covers the `docker info`/`docker ps` preflight/diagnostic
+        // commands verify.md runs from the shell.
+        "Bash(docker *)",
         // camunda-knowledge MCP — allowed tools (mirrors ~/.claude/settings.json)
         "mcp__camunda-knowledge__docs_lookup",
         "mcp__camunda-knowledge__semgrep_scan",

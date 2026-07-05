@@ -80,8 +80,6 @@ export type RunState = {
   sourcePlanPath: string;
   /** Keyed by node id. */
   nodes: Record<string, NodeState>;
-  /** verify-election decision captured after Gate 2 (fix) approval. */
-  verifyElection?: "y" | "n";
   /** Base branch from plan frontmatter (e.g. "release/1.x"). Defaults to "main" if absent. */
   baseBranch?: string;
   /** Bug severity from plan frontmatter (e.g. "critical", "blocker", "major", "minor"). */

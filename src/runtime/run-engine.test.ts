@@ -20,7 +20,6 @@ import {
   makeRunId,
   makeBranchName,
   makePrTitlePrefix,
-  formatVerifyRecommendation,
   findWorktreeScratch,
   worktreeArtifactPatterns,
   agentDecidable,
@@ -129,108 +128,6 @@ test("makePrTitlePrefix: unknown workflow → 'feat:'", () => {
 });
 
 // ---------------------------------------------------------------------------
-// formatVerifyRecommendation
-// ---------------------------------------------------------------------------
-
-const makeFindings = (
-  recommended: boolean,
-  surface: string,
-  rationale: string,
-) => ({
-  run_id: "r",
-  timestamp: "t",
-  triage: {
-    touches_public_api: false,
-    touches_runtime: false,
-    touches_schema_or_proto: false,
-    performance_sensitive: false,
-    touches_ui: false,
-  },
-  reviewers_run: [],
-  reviewers_skipped: [],
-  adversarial_verifier_run: false,
-  manual_test_recommendation: { recommended, surface, rationale },
-  findings: [],
-});
-
-test("formatVerifyRecommendation: api surface → recommended advisory with 'api'", () => {
-  const result = formatVerifyRecommendation(
-    makeFindings(true, "api", "adds a new REST endpoint"),
-  );
-  assert.ok(
-    result.includes("recommended"),
-    `expected 'recommended' in: ${result}`,
-  );
-  assert.ok(result.includes("api"), `expected 'api' in: ${result}`);
-  assert.ok(
-    result.includes("adds a new REST endpoint"),
-    `expected rationale in: ${result}`,
-  );
-});
-
-test("formatVerifyRecommendation: ui surface → recommended advisory with 'ui'", () => {
-  const result = formatVerifyRecommendation(
-    makeFindings(true, "ui", "modifies a user-facing component"),
-  );
-  assert.ok(
-    result.includes("recommended"),
-    `expected 'recommended' in: ${result}`,
-  );
-  assert.ok(result.includes("ui"), `expected 'ui' in: ${result}`);
-});
-
-test("formatVerifyRecommendation: none surface → not-recommended advisory", () => {
-  const result = formatVerifyRecommendation(
-    makeFindings(false, "none", "internal change only"),
-  );
-  assert.ok(
-    result.includes("not recommended"),
-    `expected 'not recommended' in: ${result}`,
-  );
-  assert.ok(
-    result.includes("internal change only"),
-    `expected rationale in: ${result}`,
-  );
-});
-
-test("formatVerifyRecommendation: api and ui produce distinct strings (teeth)", () => {
-  const api = formatVerifyRecommendation(makeFindings(true, "api", "endpoint"));
-  const ui = formatVerifyRecommendation(makeFindings(true, "ui", "component"));
-  assert.notEqual(
-    api,
-    ui,
-    "api and ui paths must produce distinct advisory text",
-  );
-});
-
-test("formatVerifyRecommendation: null input degrades to empty string", () => {
-  assert.equal(formatVerifyRecommendation(null), "");
-});
-
-test("formatVerifyRecommendation: missing manual_test_recommendation degrades to empty string", () => {
-  assert.equal(formatVerifyRecommendation({ run_id: "x" }), "");
-});
-
-test("formatVerifyRecommendation: malformed rec object (no recommended) degrades to empty string", () => {
-  assert.equal(
-    formatVerifyRecommendation({
-      manual_test_recommendation: { surface: "api" },
-    }),
-    "",
-  );
-});
-
-test("formatVerifyRecommendation: plain-text findings.json (mock executor output) degrades to empty string", () => {
-  // The mock executor writes plain text, not JSON — simulate what happens after JSON.parse fails.
-  // formatVerifyRecommendation receives a string (the result of parsing a non-JSON file would throw
-  // before reaching this function; here we test the string-input degrade path directly).
-  assert.equal(
-    formatVerifyRecommendation("# Mock artifact: findings.json\n"),
-    "",
-  );
-});
-
-// ---------------------------------------------------------------------------
 // findWorktreeScratch
 // ---------------------------------------------------------------------------
 
@@ -330,8 +227,8 @@ test("worktreeArtifactPatterns: includes all featureWorkflow produces filenames"
     "guide.md",
     "summary.md",
     "findings.json",
-    "seeding-spec.json",
-    "manual-test.md",
+    "verify-plan.md",
+    "verify-report.json",
     "body.md",
   ];
   for (const name of expected) {
@@ -442,13 +339,18 @@ test("hasConcerns: mock artifact content (no heading) → false", () => {
  */
 const dagrunnerRoot = new URL("../../", import.meta.url).pathname;
 
-test("seedWorktreeSiblings: all 3 sibling .md files seeded into .claude/commands/", () => {
+test("seedWorktreeSiblings: sibling .md files (including manual-smoke, D7) seeded into .claude/commands/", () => {
   const destClaude = mkdtempSync(join(tmpdir(), "dr-seed-sib-"));
   mkdirSync(join(destClaude, "commands"), { recursive: true });
 
   seedWorktreeSiblings(dagrunnerRoot, destClaude);
 
-  for (const name of ["ci-babysit.md", "pr-triage.md", "seed-data.md"]) {
+  for (const name of [
+    "ci-babysit.md",
+    "pr-triage.md",
+    "seed-data.md",
+    "manual-smoke.md",
+  ]) {
     assert.ok(
       existsSync(join(destClaude, "commands", name)),
       `expected sibling command ${name} to exist after seeding`,
@@ -456,13 +358,13 @@ test("seedWorktreeSiblings: all 3 sibling .md files seeded into .claude/commands
   }
 });
 
-test("seedWorktreeSiblings: all 3 sibling script subdirs seeded into .claude/scripts/", () => {
+test("seedWorktreeSiblings: sibling script subdirs (including manual-smoke, D7) seeded into .claude/scripts/", () => {
   const destClaude = mkdtempSync(join(tmpdir(), "dr-seed-sib-scripts-"));
   mkdirSync(join(destClaude, "commands"), { recursive: true });
 
   seedWorktreeSiblings(dagrunnerRoot, destClaude);
 
-  for (const name of ["ci-babysit", "pr-triage", "seed-data"]) {
+  for (const name of ["ci-babysit", "pr-triage", "seed-data", "manual-smoke"]) {
     assert.ok(
       existsSync(join(destClaude, "scripts", name)),
       `expected sibling scripts/${name}/ to exist after seeding`,

@@ -4,7 +4,12 @@
  * Phase 2a pipeline:
  *   define (Gate 1) -> implement -> review -> fix (Gate 2)
  *
- * Phase 2b adds: verify-election -> verify (Gate 3) -> pr (terminal)
+ * Phase 2b (autonomous verify — see the verify-autonomy change, DECISIONS.md
+ * § verify-autonomy-remove-election) adds: verify -> pr (terminal). verify is
+ * a required, blocking, fully autonomous node — it authors and runs its own
+ * @MultiDbTest acceptance test, independently reruns build+tests, and gates
+ * pr via outcomeGate on verify-report.json's `outcome` field. No human
+ * election, no manual-test gate — see payload/commands/verify.md.
  *
  * This is the ONLY workflow in v1. Additional workflows are config additions
  * on the proven engine.
@@ -53,16 +58,6 @@ export const FINDINGS_SCHEMA = {
       },
     },
     adversarial_verifier_run: { type: "boolean" },
-    manual_test_recommendation: {
-      type: "object",
-      properties: {
-        recommended: { type: "boolean" },
-        surface: { type: "string", enum: ["ui", "api", "none"] },
-        rationale: { type: "string" },
-      },
-      required: ["recommended", "surface", "rationale"],
-      additionalProperties: false,
-    },
     findings: {
       type: "array",
       items: {
@@ -99,7 +94,6 @@ export const FINDINGS_SCHEMA = {
     "reviewers_run",
     "reviewers_skipped",
     "adversarial_verifier_run",
-    "manual_test_recommendation",
     "findings",
   ],
   additionalProperties: false,
@@ -146,20 +140,27 @@ export const featureWorkflow: Workflow = {
         "Then update {artifactsDir}/summary.md to reflect all changes made (which findings were addressed, what files changed, what was deferred).",
       formatCommand: "./mvnw spotless:apply --no-transfer-progress",
     },
-    // Phase 2b nodes — added after Gate 2 (fix).
-    // verify-election (micro-gate in run-engine, not a node) routes here.
+    // Autonomous acceptance-test author/runner/judge/gate — no human election,
+    // no Gate 3. Required and blocking: a non-PASS outcome fails this node via
+    // outcomeGate, which halts the run and blocks pr (same as a produces
+    // violation). See payload/commands/verify.md for the full flow (D2-D6 of
+    // the verify-autonomy change).
     {
       id: "verify",
       dependsOn: ["fix"],
       command: "/verify",
-      model: "haiku",
-      produces: ["seeding-spec.json", "manual-test.md"],
-      optional: true, // election=n pre-marks this skipped; optional prevents cascade-block on pr
-      gate: { maxIterations: 5, onReject: "revise-self" }, // Gate 3: human reviews manual-test.md
+      model: "sonnet",
+      produces: ["verify-plan.md", "verify-report.json"],
+      formatCommand: "./mvnw spotless:apply --no-transfer-progress",
+      outcomeGate: {
+        file: "verify-report.json",
+        field: "outcome",
+        passValues: ["PASS"],
+      },
     },
     {
       id: "pr",
-      dependsOn: ["fix", "verify"], // fix ensures worktree is ready; verify optional
+      dependsOn: ["fix", "verify"], // fix ensures worktree is ready; verify is required (non-optional) and gates pr
       command: "/pr",
       model: "haiku",
       produces: ["body.md"],

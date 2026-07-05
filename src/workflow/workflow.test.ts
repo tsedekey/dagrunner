@@ -18,6 +18,7 @@ import {
   FIXTURE_BAD_MODEL,
   FIXTURE_BAD_DEPENDS,
   FIXTURE_DUPLICATE_ID,
+  FIXTURE_BAD_OUTCOME_GATE,
   FIXTURE_CYCLE,
 } from "./workflow.js";
 
@@ -94,6 +95,47 @@ test('loadWorkflow: FIXTURE_DUPLICATE_ID throws with id "step-a" and word "dupli
       return true;
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// loadWorkflow — outcomeGate shape validation
+// ---------------------------------------------------------------------------
+
+test('loadWorkflow: FIXTURE_BAD_OUTCOME_GATE throws with node name "step-a" and "passValues"', () => {
+  assert.throws(
+    () => loadWorkflow(FIXTURE_BAD_OUTCOME_GATE),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.ok(
+        err.message.includes("step-a"),
+        `Expected "step-a" in message: ${err.message}`,
+      );
+      assert.ok(
+        err.message.includes("passValues"),
+        `Expected "passValues" in message: ${err.message}`,
+      );
+      return true;
+    },
+  );
+});
+
+test("loadWorkflow: a valid outcomeGate does not throw", () => {
+  const withGate: import("../core/types.js").Workflow = {
+    name: "fixture-valid-outcome-gate",
+    nodes: [
+      {
+        id: "step-a",
+        command: "/step-a",
+        produces: ["report.json"],
+        outcomeGate: {
+          file: "report.json",
+          field: "outcome",
+          passValues: ["PASS"],
+        },
+      },
+    ],
+  };
+  assert.doesNotThrow(() => loadWorkflow(withGate));
 });
 
 // ---------------------------------------------------------------------------

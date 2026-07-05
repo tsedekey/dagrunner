@@ -73,6 +73,42 @@ export function loadWorkflow(def: Workflow): Workflow {
     }
   }
 
+  // 4b. outcomeGate shape: file/field non-empty strings, passValues non-empty
+  //     array of non-empty strings. A typo here (empty passValues → every
+  //     outcome fails; empty file → nothing to read) is a load error, not a
+  //     runtime surprise (CLAUDE.md "Typed at load").
+  for (const node of def.nodes) {
+    const gate: unknown = node.outcomeGate;
+    if (gate === undefined) continue;
+    if (typeof gate !== "object" || gate === null) {
+      throw new Error(
+        `loadWorkflow: node "${node.id}" outcomeGate must be an object`,
+      );
+    }
+    const g = gate as Record<string, unknown>;
+    if (typeof g["file"] !== "string" || g["file"] === "") {
+      throw new Error(
+        `loadWorkflow: node "${node.id}" outcomeGate.file must be a non-empty string`,
+      );
+    }
+    if (typeof g["field"] !== "string" || g["field"] === "") {
+      throw new Error(
+        `loadWorkflow: node "${node.id}" outcomeGate.field must be a non-empty string`,
+      );
+    }
+    if (
+      !Array.isArray(g["passValues"]) ||
+      (g["passValues"] as unknown[]).length === 0 ||
+      !(g["passValues"] as unknown[]).every(
+        (v) => typeof v === "string" && v !== "",
+      )
+    ) {
+      throw new Error(
+        `loadWorkflow: node "${node.id}" outcomeGate.passValues must be a non-empty array of non-empty strings`,
+      );
+    }
+  }
+
   // 5. Cycle detection via Kahn's algorithm
   //    Build adjacency list (dep → dependents) and in-degree map.
   const inDegree = new Map<string, number>();
@@ -200,6 +236,22 @@ export const FIXTURE_DUPLICATE_ID: Workflow = {
     {
       id: "step-a",
       command: "/step-b",
+    },
+  ],
+};
+
+/**
+ * Invalid: "step-a" declares outcomeGate.passValues as an empty array —
+ * every outcome would fail the gate, which is never intentional.
+ */
+export const FIXTURE_BAD_OUTCOME_GATE: Workflow = {
+  name: "fixture-bad-outcome-gate",
+  nodes: [
+    {
+      id: "step-a",
+      command: "/step-a",
+      produces: ["report.json"],
+      outcomeGate: { file: "report.json", field: "outcome", passValues: [] },
     },
   ],
 };

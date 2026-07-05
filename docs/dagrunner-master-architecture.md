@@ -49,11 +49,12 @@ Phase 3 is three LOCAL siblings (/seed-data + ci-babysit + pr-triage) — one su
      - adversarial verifier ONLY if findings count > N (default 3)
         |  -> review/findings.json
   fix (consumes findings, mutates worktree, self-verifies)  ★ GATE 2: accept/reject fixes
-   [VERIFY-ELECTION] surfaces manual_test_recommendation from findings.json (advisory); human: "run runtime verification? [y/n]"
-        |  n -> verify skipped -> pr
-        |  y ↓
-  verify (haiku, INFO-ONLY: writes seeding-spec.json + manual-test.md)
-        |  ★ GATE 3: human runs the manual test (or invokes /seed-data)
+  verify (sonnet, AUTONOMOUS: authors/reuses a @MultiDbTest acceptance test from
+          guide.md, isolated-context self-check that the AT exercises the diff,
+          independently reruns build+tests, runs+classifies the AT, writes
+          verify-report.json) -> outcomeGate on verify-report.json's `outcome`
+        |  field: non-PASS fails this node (halts the run) exactly like a produces
+        |  violation — no human gate, no election. See §3d.
   pr (haiku)               -> opens the PR (git push / gh run OUTSIDE the sandbox — see §5)
                               [TERMINAL — run ends here]
                               Each node may write reflections.md; the SessionEnd hook captures it to store
@@ -70,7 +71,6 @@ Phase 3 is three LOCAL siblings (/seed-data + ci-babysit + pr-triage) — one su
   triage: { touches_public_api, touches_runtime, touches_schema_or_proto, performance_sensitive, touches_ui },
   reviewers_run: [string], reviewers_skipped: [{name,reason}],
   adversarial_verifier_run: bool,
-  manual_test_recommendation: { recommended: bool, surface: "ui"|"api"|"none", rationale: string },
   findings: [{ reviewer_dimension, severity, confidence, file, line, claim, grounded }] }
 ```
 
@@ -78,7 +78,7 @@ Reviewer selection (from diff-triage): correctness + test-adequacy always; api-s
 
 **Gates:** all checkpoint-and-exit, single-awaiting-gate invariant. Human review via a fresh interactive `claude` session (SDK session IDs are not resumable from the CLI — two stores don't share state); `/gate-review` + `/gate-conclude` write a `gate-decision.md` handshake file. Author-agent revision still resumes the same SDK session (via `options.resume` + `feedback-N.md`) so it revises with memory. Gates live ONLY on static nodes.
 
-**Night-mode (`dagrun start feature --night`):** unattended overnight execution. One rule — agent-decidable gates (Gate 1 = expand, Gate 2 = fix) are auto-approved when no "Concerns / plan challenges" heading is present in the gate artifact; the verify-election always pauses (human-only). A flagged concern or an unreadable/missing artifact also pauses (fail toward the human). Every auto-decision is logged to `gateHistory` with `mode: "night"` and `basis: "no concerns flagged"` for morning audit. `agentDecidable(nodeId)` is the exported predicate; `hasConcerns(content)` is the exported concern check (both pure, unit-tested).
+**Night-mode (`dagrun start feature --night`):** unattended overnight execution. One rule — agent-decidable gates (Gate 1 = expand, Gate 2 = fix) are auto-approved when no "Concerns / plan challenges" heading is present in the gate artifact. A flagged concern or an unreadable/missing artifact also pauses (fail toward the human). Every auto-decision is logged to `gateHistory` with `mode: "night"` and `basis: "no concerns flagged"` for morning audit. `agentDecidable(nodeId)` is the exported predicate; `hasConcerns(content)` is the exported concern check (both pure, unit-tested). Since the verify-autonomy change (§3d), `verify` has no gate at all (agent-decidable or otherwise) — a clean night-mode run now proceeds through `verify` and `pr` fully unattended with no park; the old "verify-election always pauses (human-only)" carve-out is gone because the election itself is gone.
 
 ---
 
@@ -96,11 +96,23 @@ Reviewer selection (from diff-triage): correctness + test-adequacy always; api-s
   implement (unpinned)   — reuses /implement command (reads guide.md from reproduce/)
   review    (same as feature — reuses /review + FINDINGS_SCHEMA)
   fix       (unpinned)  ★ GATE 2: accept/reject fixes
+  verify    (sonnet, AUTONOMOUS — reuses /verify, see §3d) — required, blocking,
+                            outcomeGate-gated exactly as on the feature workflow
   pr        (haiku)       — reuses /pr command
                             [TERMINAL — run ends here]
 ```
 
-**Why no verify node:** Bug fix verification is automated — the regression test written in reproduce/guide.md runs during implement and fix. No human manual-test step is needed.
+**verify on the bugfix workflow (added by the verify-autonomy change — see DECISIONS.md §
+verify-autonomy-bugfix-conditional):** the regression test written in reproduce/guide.md and
+exercised during implement/fix proves the fix at the unit/integration layer — it does NOT prove
+the user-facing flow is covered at the `@MultiDbTest` acceptance-test layer. verify's first step on
+this workflow (unique to bugfix, not present on feature) searches the worktree's
+`qa/acceptance-tests` for an EXISTING `@MultiDbTest` that already covers the flow the bug touches,
+grounded from `reproduce/guide.md`. If one is found, it is reused as-is (recorded in
+`verify-plan.md`, no new AT authored); if not, verify authors one exactly as on the feature
+workflow. From there — isolated self-check, independent build+test rerun, run+classify,
+verify-report.json + outcomeGate — the logic is identical to the feature workflow (§3d); both
+workflows share the same `payload/commands/verify.md`.
 
 **base_branch from frontmatter:** Bug fixes often target release branches (hotfixes). The plan file may carry a YAML frontmatter block (`---` delimiters) with `base_branch: release/1.x`. Run-engine parses this with `parseFrontmatter()` (pure, exported, unit-tested) before creating the worktree. The worktree branches from `base_branch` as start-point. `runPrPostProcess` uses `state.baseBranch ?? "main"` for `gh pr create --base`. When absent, defaults to `"main"`.
 
@@ -112,11 +124,92 @@ Reviewer selection (from diff-triage): correctness + test-adequacy always; api-s
 
 ---
 
+## 3d. verify — autonomous acceptance-test author/runner/judge/gate
+
+**Why this changed:** verify was originally read-only/INFO-ONLY (haiku, no cluster) because
+cluster bring-up was believed to conflict with the runtime sandbox (Seatbelt kernel enforcement).
+That rationale is stale: `sandbox.enabled` has been `false` since commit `3015634` — the
+structural boundary today is the Bash allow/deny list (`src/config/settings-seed.ts`) + PreToolUse
+deny-guard hook, not a kernel sandbox (see §6's footnote). `./mvnw *`/`mvn *` are already
+allow-listed and already used by `implement`/`fix`; Testcontainers talks to the Docker daemon
+directly from the JVM (not via the Bash tool), so it isn't gated by the allowlist either — the only
+real precondition is Docker being reachable on the host, which verify checks as a fail-loud
+preflight (Step 0 of `payload/commands/verify.md`), never an assumed-working dependency. With the
+sandbox rationale gone, verify was redesigned to be fully autonomous — it authors and runs its own
+proof, rather than handing a human a manual-test document and pausing (see DECISIONS.md §
+verify-autonomy-remove-election for the full judgment-call log).
+
+**What verify does now (both workflows, same `payload/commands/verify.md`):**
+
+1. **Docker preflight** — `docker info`; fails loud with an actionable message (never a raw
+   testcontainer stack trace) if unreachable.
+2. **Read the promised user flow** — `define/guide.md` (feature) or `reproduce/guide.md` (bugfix)
+   is the authoring source. The diff is explicitly NOT an authoring input, only a self-check input
+   (step 4 below) — this mirrors the pipeline's existing "guide is the contract, diff is what
+   actually happened" split.
+3. **Author (or, bugfix-only, reuse) one `@MultiDbTest` acceptance test** proving the whole
+   promised user journey — not a re-run of `implement`'s unit/integration coverage. Written into
+   the worktree's `qa/acceptance-tests` module (real, committed test code — not a dagrunner
+   artifact), mirroring that module's existing conventions rather than inventing new structure.
+   Bugfix workflow only: first searches for an existing AT that already covers the flow; if found,
+   reuses it and skips authoring.
+4. **Isolated diff-grounding self-check** — a `verify-diff-grounding-checker` subagent (isolated
+   context, same pattern as `reviewer-adversarial-verifier`) confirms the AT's assertions/exercised
+   paths actually tie back to the diff's changed surfaces, independently of verify's own
+   self-assessment. This guards against a vacuous AT that would pass without touching the feature —
+   the same self-grading-bias problem the plan flags for why `implement` shouldn't author its own
+   acceptance test. A failed self-check halts before the (expensive) build/test/acceptance stages.
+5. **Independent build + test rerun** — verify does not trust `implement`/`fix`'s self-reported
+   status; it reruns the build and the touched module's test suite itself. Fail-fast ladder:
+   build → test suite → acceptance test. A broken build or failing suite stops before the
+   acceptance run.
+6. **Run + classify** — executes the AT via the existing `@MultiDbTest` framework (starts
+   `TestStandaloneBroker`/`TestSimpleCamundaApplication` in-process, provisions its own ES
+   testcontainer, injects `CamundaClient` — dagrunner reimplements none of this) and classifies the
+   result into exactly one of `PASS` / `FAIL_ASSERTION` / `FAIL_BUILD` / `FAIL_TEST` /
+   `ERROR_INFRA`.
+7. **Evidence + gate** — writes `$DAGRUN_ARTIFACTS/verify-report.json` (per-stage status +
+   the single outcome classification + truncated logs) and, when authoring happened,
+   `verify-plan.md` (which flow it covers, why, and the self-check verdict).
+
+**The new engine mechanism — `outcomeGate`:** node status in dagrunner was previously derived only
+from SDK success/failure + `produces` file-existence — nothing read the CONTENT of a produced
+artifact. A new optional `Node` field, `outcomeGate: { file, field, passValues }` (`src/core/types.ts`),
+closes this gap. Checked in `src/core/dag.ts`'s `checkOutcomeGate` (a small pure function, shared —
+not duplicated — with `src/runtime/run-engine.ts`'s `rerunNode`) immediately after the existing
+produces-file-existence check passes: it reads `field` out of the named JSON artifact and, if the
+value isn't in `passValues`, marks the node `"failed"` with a clear message instead of `"done"`.
+`verify` is wired with `outcomeGate: { file: "verify-report.json", field: "outcome", passValues:
+["PASS"] }` on both workflows. This gives every non-PASS classification a uniform engine-level
+effect — node fails, run halts, `pr` (which depends on `verify`, no longer `optional`) never runs —
+identical to today's produces-violation halt semantics. No separate `ERROR_INFRA`-specific engine
+code path was added: the distinction between "this feature is broken" and "the environment is
+broken" lives in the artifact's `outcome` field for the human to read on resume, not in different
+control flow.
+
+**What was removed:** the verify-election micro-gate (the "run runtime verification? [y/n]"
+pause after Gate 2, and night-mode's mandatory park at it — verify-election was the ONE thing
+night-mode could never auto-decide) is gone entirely, along with `RunState.verifyElection`, the
+`--verify y|n` CLI flag, and `manual_test_recommendation` in `FINDINGS_SCHEMA` (it existed solely
+to feed the election prompt). `verify` is no longer `optional` — it is required and blocking on
+both workflows, and Gate 3 (the old "human runs the manual test") no longer exists. Night-mode now
+completes a clean run fully unattended, start to `pr`, with no manual-test pause anywhere.
+
+**The old manual-test-guide value didn't disappear — it moved out of the pipeline.** A new
+sibling, `/manual-smoke` (§10), reuses the old verify.md's content generation almost verbatim,
+relocated to run on demand against a completed (or past-Gate-1) run's existing artifacts. It gates
+nothing and is not part of the autonomous run.
+
+**Scope boundary — what verify explicitly does NOT do:** CI's dist/packaging/cross-storage matrix.
+verify is acceptance-level verification of THIS change, not a CI re-run.
+
+---
+
 ## 3b. Validation — smoke:mock (per-plan gate) and smoke:live (occasional)
 
 `npm run verify-baseline` = `npm ci && typecheck && unit tests && smoke:mock`. The standing gate: run on every plan change.
 
-**smoke:mock** (`test/smoke/smoke-mock.ts`) drives the full gated featureWorkflow in-process using the mock executor — zero API calls, ~150 ms, deterministic. Asserts: gate pauses, produces-contract at every gate node, state transitions (awaiting-gate → paused → done), routing (verify skipped when election=n, runs when election=y), verifyElection stored in state.json, night-mode auto-approvals (Run C: clean plan → Gate 1 + Gate 2 auto-approved → parked at verify-election; Run D: seeded concern → parked at Gate 1). Does NOT assert model output quality or exact session IDs.
+**smoke:mock** (`test/smoke/smoke-mock.ts`) drives both gated workflows in-process using the mock executor — zero API calls, deterministic. Asserts: gate pauses, produces-contract (and, since the verify-autonomy change, `outcomeGate`) at every relevant node, state transitions (awaiting-gate → paused → done), night-mode auto-approvals. Six runs: **A** (feature workflow, full happy path — define/fix gates approved, `verify` runs autonomously to a `PASS` outcome, `pr` runs, run done — no election anywhere); **B** (bugfix workflow, same shape, proving the amendment's conditional-but-required `verify` on that workflow too); **C** (night-mode, clean plan — Gate 1 + Gate 2 auto-approved AND `verify` runs autonomously to `done`, the run completes fully unattended with no park, unlike the old verify-election design which always parked here); **D** (night-mode, seeded concern → parked at Gate 1, unchanged); **E** (stale gate from a prior workflow version auto-skipped on resume); **F** (a non-`PASS` `verify-report.json` outcome fails `verify` via `outcomeGate` and blocks `pr` — proven end-to-end through the real `startRun`/`resumeRun`/`runDag` path, with `resumeRun`'s intentional `process.exit(1)` on a failed run temporarily intercepted so the in-process smoke script can inspect the resulting `state.json` instead of dying with it). Does NOT assert model output quality or exact session IDs.
 
 **smoke:live** (`test/smoke/smoke.ts`) runs the real 8-step pipeline with the SDK — requires `ANTHROPIC_API_KEY`, ~35 min. Proves API auth, real session-resume, structured output from live model, worktree diff. Run when node prompts change (`payload/commands/*.md`) or when `sdk-runner.ts` changes. A bad prompt that passes mock but breaks model behaviour won't surface until the next smoke:live — that is the accepted tradeoff. **Reflection wiring (step 6):** smoke seeds a known `reflections.md` into `pr/` before the resume call so the SessionEnd hook has a deterministic file to capture — this proves hook wiring + env propagation in a real session without gating on spontaneous model output. The hook logic is separately proven by the unit test (`src/hooks/session-end.test.ts`).
 

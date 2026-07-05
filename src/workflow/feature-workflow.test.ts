@@ -173,33 +173,15 @@ test("FINDINGS_SCHEMA: triage includes touches_ui as required boolean", () => {
   );
 });
 
-test("FINDINGS_SCHEMA: manual_test_recommendation is a required top-level field", () => {
+test("FINDINGS_SCHEMA: manual_test_recommendation is gone (verify-autonomy change — no longer fed to any election)", () => {
+  const required: readonly string[] = FINDINGS_SCHEMA.required;
   assert.ok(
-    FINDINGS_SCHEMA.required.includes("manual_test_recommendation"),
-    "manual_test_recommendation must be in top-level required",
+    !required.includes("manual_test_recommendation"),
+    "manual_test_recommendation must not be in top-level required",
   );
-  const rec = FINDINGS_SCHEMA.properties.manual_test_recommendation as Record<
-    string,
-    unknown
-  >;
-  assert.equal(rec["type"], "object");
-  const recRequired = rec["required"] as string[];
-  assert.ok(recRequired.includes("recommended"), "recommended required");
-  assert.ok(recRequired.includes("surface"), "surface required");
-  assert.ok(recRequired.includes("rationale"), "rationale required");
-});
-
-test("FINDINGS_SCHEMA: manual_test_recommendation surface enum is ui|api|none", () => {
-  const rec = FINDINGS_SCHEMA.properties.manual_test_recommendation as Record<
-    string,
-    unknown
-  >;
-  const props = rec["properties"] as Record<string, Record<string, unknown>>;
-  const surfaceEnum = props["surface"]?.["enum"] as unknown[];
-  assert.deepEqual(
-    [...surfaceEnum].sort(),
-    ["api", "none", "ui"],
-    "surface enum must be exactly ui|api|none",
+  assert.ok(
+    !("manual_test_recommendation" in FINDINGS_SCHEMA.properties),
+    "manual_test_recommendation must not be a defined property",
   );
 });
 
@@ -234,11 +216,6 @@ const VALID_FINDINGS = {
   reviewers_run: ["correctness", "test-adequacy"],
   reviewers_skipped: [{ name: "performance", reason: "not perf-sensitive" }],
   adversarial_verifier_run: true,
-  manual_test_recommendation: {
-    recommended: false,
-    surface: "none",
-    rationale: "change is internal — no observable UI or API surface",
-  },
   findings: [
     {
       reviewer_dimension: "correctness",
@@ -330,62 +307,19 @@ test("FINDINGS_SCHEMA: missing touches_ui in triage fails (teeth)", () => {
   );
 });
 
-test("FINDINGS_SCHEMA: missing manual_test_recommendation fails (teeth)", () => {
-  const { manual_test_recommendation: _, ...missing } = VALID_FINDINGS;
-  assertInvalid(
-    missing,
-    FINDINGS_SCHEMA as unknown as Schema,
-    "FINDINGS_SCHEMA missing manual_test_recommendation",
-  );
-});
-
-test("FINDINGS_SCHEMA: invalid manual_test_recommendation surface enum fails (teeth)", () => {
+test("FINDINGS_SCHEMA: a stray manual_test_recommendation field now fails (additionalProperties:false, teeth)", () => {
   const bad = {
     ...VALID_FINDINGS,
     manual_test_recommendation: {
       recommended: false,
-      surface: "logs", // not in enum
-      rationale: "test",
+      surface: "none",
+      rationale: "stale field from before the verify-autonomy change",
     },
   };
   assertInvalid(
     bad,
     FINDINGS_SCHEMA as unknown as Schema,
-    "FINDINGS_SCHEMA bad surface enum",
-  );
-});
-
-test("FINDINGS_SCHEMA: manual_test_recommendation with api surface conforms", () => {
-  const good = {
-    ...VALID_FINDINGS,
-    triage: { ...VALID_FINDINGS.triage, touches_public_api: true },
-    manual_test_recommendation: {
-      recommended: true,
-      surface: "api",
-      rationale: "adds a new public REST endpoint",
-    },
-  };
-  assertValid(
-    good,
-    FINDINGS_SCHEMA as unknown as Schema,
-    "FINDINGS_SCHEMA api surface",
-  );
-});
-
-test("FINDINGS_SCHEMA: manual_test_recommendation with ui surface conforms", () => {
-  const good = {
-    ...VALID_FINDINGS,
-    triage: { ...VALID_FINDINGS.triage, touches_ui: true },
-    manual_test_recommendation: {
-      recommended: true,
-      surface: "ui",
-      rationale: "modifies a user-facing component",
-    },
-  };
-  assertValid(
-    good,
-    FINDINGS_SCHEMA as unknown as Schema,
-    "FINDINGS_SCHEMA ui surface",
+    "FINDINGS_SCHEMA stray manual_test_recommendation",
   );
 });
 
@@ -415,4 +349,47 @@ test("featureWorkflow: all dependsOn references point to known nodes", () => {
       );
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// verify node — autonomous, required, outcomeGate-gated (verify-autonomy change)
+// ---------------------------------------------------------------------------
+
+test("featureWorkflow: verify depends on fix, is required (non-optional), has no human gate", () => {
+  const node = featureWorkflow.nodes.find((n) => n.id === "verify");
+  assert.ok(node !== undefined, "verify node must exist");
+  assert.ok(node.dependsOn?.includes("fix"), "verify must depend on fix");
+  assert.notEqual(
+    node.optional,
+    true,
+    "verify must be required — a non-PASS outcome must block pr",
+  );
+  assert.equal(
+    node.gate,
+    undefined,
+    "verify must have no human gate — it runs autonomously",
+  );
+});
+
+test("featureWorkflow: verify uses sonnet (raised from haiku for authoring reasoning)", () => {
+  const node = featureWorkflow.nodes.find((n) => n.id === "verify");
+  assert.ok(node !== undefined);
+  assert.equal(node.model, "sonnet");
+});
+
+test("featureWorkflow: verify declares outcomeGate on verify-report.json's outcome field", () => {
+  const node = featureWorkflow.nodes.find((n) => n.id === "verify");
+  assert.ok(node !== undefined);
+  assert.deepEqual(node.outcomeGate, {
+    file: "verify-report.json",
+    field: "outcome",
+    passValues: ["PASS"],
+  });
+});
+
+test("featureWorkflow: pr depends on both fix and verify", () => {
+  const node = featureWorkflow.nodes.find((n) => n.id === "pr");
+  assert.ok(node !== undefined);
+  assert.ok(node.dependsOn?.includes("fix"));
+  assert.ok(node.dependsOn?.includes("verify"));
 });

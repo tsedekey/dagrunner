@@ -31,13 +31,20 @@ test("bugfixWorkflow: name is 'bugfix'", () => {
 // Node shape
 // ---------------------------------------------------------------------------
 
-test("bugfixWorkflow: has exactly 5 nodes", () => {
-  assert.equal(bugfixWorkflow.nodes.length, 5);
+test("bugfixWorkflow: has exactly 6 nodes", () => {
+  assert.equal(bugfixWorkflow.nodes.length, 6);
 });
 
-test("bugfixWorkflow: node ids are reproduce, implement, review, fix, pr", () => {
+test("bugfixWorkflow: node ids are reproduce, implement, review, fix, verify, pr", () => {
   const ids = bugfixWorkflow.nodes.map((n) => n.id);
-  assert.deepEqual(ids, ["reproduce", "implement", "review", "fix", "pr"]);
+  assert.deepEqual(ids, [
+    "reproduce",
+    "implement",
+    "review",
+    "fix",
+    "verify",
+    "pr",
+  ]);
 });
 
 test("bugfixWorkflow: reproduce produces guide.md and has a gate", () => {
@@ -72,19 +79,28 @@ test("bugfixWorkflow: fix depends on review and has a gate", () => {
   assert.ok(node.gate !== undefined, "fix must have a gate");
 });
 
-test("bugfixWorkflow: pr depends on fix", () => {
+test("bugfixWorkflow: verify depends on fix, is required (non-optional), and has an outcomeGate", () => {
+  const node = bugfixWorkflow.nodes.find((n) => n.id === "verify");
+  assert.ok(node !== undefined, "verify node must exist");
+  assert.ok(node.dependsOn?.includes("fix"), "verify must depend on fix");
+  assert.notEqual(
+    node.optional,
+    true,
+    "verify must be required (non-optional) — it blocks pr on a bad outcome",
+  );
+  assert.equal(node.gate, undefined, "verify must have no human gate");
+  assert.deepEqual(node.outcomeGate, {
+    file: "verify-report.json",
+    field: "outcome",
+    passValues: ["PASS"],
+  });
+});
+
+test("bugfixWorkflow: pr depends on fix and verify", () => {
   const node = bugfixWorkflow.nodes.find((n) => n.id === "pr");
   assert.ok(node !== undefined);
   assert.ok(node.dependsOn?.includes("fix"), "pr must depend on fix");
-});
-
-test("bugfixWorkflow: no verify node (regression testing is automated)", () => {
-  const verify = bugfixWorkflow.nodes.find((n) => n.id === "verify");
-  assert.equal(
-    verify,
-    undefined,
-    "bugfix workflow must not have a verify node",
-  );
+  assert.ok(node.dependsOn?.includes("verify"), "pr must depend on verify");
 });
 
 test("bugfixWorkflow: pr uses haiku model", () => {

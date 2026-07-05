@@ -43,31 +43,6 @@ type ExecutorFactory = (
 ) => NodeExecutor;
 
 /**
- * Format the advisory text shown at the verify-election from a parsed findings
- * object. Returns "" on any degrade path (missing file, bad JSON, missing field)
- * so the caller always degrades to the bare prompt rather than crashing.
- * Exported for unit testing.
- */
-export function formatVerifyRecommendation(findings: unknown): string {
-  if (typeof findings !== "object" || findings === null) return "";
-  const f = findings as Record<string, unknown>;
-  if (
-    typeof f["manual_test_recommendation"] !== "object" ||
-    f["manual_test_recommendation"] === null
-  )
-    return "";
-  const rec = f["manual_test_recommendation"] as Record<string, unknown>;
-  if (typeof rec["recommended"] !== "boolean") return "";
-  const surface = typeof rec["surface"] === "string" ? rec["surface"] : "none";
-  const rationale =
-    typeof rec["rationale"] === "string" ? rec["rationale"] : "";
-  if (rec["recommended"] === true) {
-    return `Observability advisory: manual test recommended — surface: ${surface}. ${rationale}`;
-  }
-  return `Observability advisory: manual test not recommended — ${rationale || "change has no observable UI or API surface"}`;
-}
-
-/**
  * Parse the content of a `gate-decision.md` file written by the /gate-conclude
  * slash command inside an interactive Claude Code dialogue session.
  *
@@ -625,6 +600,7 @@ import {
   resetInterruptedNodes,
   MAX_INTERRUPT_RETRIES,
   runDag,
+  checkOutcomeGate,
 } from "../core/dag.js";
 import { acquireLock, releaseLock } from "../core/lock.js";
 import { makeSDKRunner } from "./sdk-runner.js";
@@ -983,29 +959,9 @@ export async function startRun(opts: {
         `dagrun: [night] auto-approved "${gateNodeId}" — ${basis}\n`,
       );
 
-      // Verify-election is human-only: always park after fix is auto-approved.
-      if (nightState.verifyElection === undefined) {
-        const hasVerifyNode = workflow.nodes.some((n) => n.id === "verify");
-        const fixDone = nightState.nodes["fix"]?.status === "done";
-        if (hasVerifyNode && fixDone) {
-          const parkState = {
-            ...nightState,
-            status: "paused" as const,
-            updatedAt: new Date().toISOString(),
-          };
-          writeState(stateFile, parkState);
-          releaseLock(homeDir);
-          process.stdout.write(
-            `dagrun: [night] paused at verify-election (human decision required)\n`,
-          );
-          process.stdout.write(
-            `dagrun: resume with: dagrun resume ${runId} --verify y|n\n`,
-          );
-          return;
-        }
-      }
-
-      // Re-run the DAG from the newly approved gate.
+      // Re-run the DAG from the newly approved gate. verify (when present) now
+      // runs fully autonomously — no verify-election park here (see D1 of the
+      // verify-autonomy change; DECISIONS.md § verify-autonomy-remove-election).
       const nightResult = await runDag(workflow, executor, nightState, {
         ctx,
         stateFile,
@@ -1060,8 +1016,6 @@ export async function resumeRun(opts: {
   config: DagrunnerConfig;
   approve?: boolean;
   rejectComment?: string;
-  /** Non-interactive election answer: 'y' = run verify, 'n' = skip. */
-  verify?: "y" | "n";
   executorFactory?: ExecutorFactory;
 }): Promise<void> {
   const { runId, homeDir, config } = opts;
@@ -1331,76 +1285,11 @@ export async function resumeRun(opts: {
     } // closes else (gateNode !== undefined)
   }
 
-  // verify-election: conducted once, after fix (Gate 2) is approved.
-  // Only applies when the workflow has a verify node and election is not yet recorded.
-  if (state.verifyElection === undefined) {
-    const hasVerifySeed = workflow.nodes.some((n) => n.id === "verify");
-    const fixDone = state.nodes["fix"]?.status === "done";
-    if (hasVerifySeed && fixDone) {
-      // Surface the observability recommendation from review/findings.json (fail-soft).
-      // Printed on both the interactive and --verify paths so it is always recorded.
-      let verifyAdvisory = "";
-      try {
-        const findingsPath = join(runDir, "review", "findings.json");
-        if (existsSync(findingsPath)) {
-          const findings = JSON.parse(
-            readFileSync(findingsPath, "utf8"),
-          ) as unknown;
-          verifyAdvisory = formatVerifyRecommendation(findings);
-        }
-      } catch {
-        // Degrade silently — recommendation is advisory, not load-bearing.
-      }
-      if (verifyAdvisory !== "") {
-        process.stdout.write(`\n${verifyAdvisory}\n`);
-      }
-
-      let electionAnswer: "y" | "n";
-      if (opts.verify !== undefined) {
-        electionAnswer = opts.verify;
-        process.stdout.write(
-          `dagrun: verify-election = ${electionAnswer} (from --verify flag)\n`,
-        );
-      } else {
-        process.stdout.write(
-          "\nRun verify (produces seeding spec + manual-test guide, no cluster)? [y/n] > ",
-        );
-        const answer = await readOneLine();
-        electionAnswer = answer.trim() === "y" ? "y" : "n";
-      }
-
-      state = {
-        ...state,
-        verifyElection: electionAnswer,
-        updatedAt: new Date().toISOString(),
-      };
-
-      if (electionAnswer === "n") {
-        // Pre-mark verify as skipped so the DAG routes directly to pr.
-        const verifySeedNodeState = state.nodes["verify"];
-        if (verifySeedNodeState !== undefined) {
-          state = {
-            ...state,
-            nodes: {
-              ...state.nodes,
-              verify: {
-                ...verifySeedNodeState,
-                status: "skipped",
-                endedAt: new Date().toISOString(),
-              },
-            },
-          };
-        }
-        process.stdout.write(
-          "dagrun: skipping runtime verification — proceeding to pr\n",
-        );
-      } else {
-        process.stdout.write("dagrun: will run verify + Gate 3\n");
-      }
-
-      writeState(stateFile, state);
-    }
-  }
+  // verify (when present in the workflow) now runs fully autonomously after
+  // fix — no human election, no Gate 3. See D1 of the verify-autonomy change
+  // (DECISIONS.md § verify-autonomy-remove-election). It is a required,
+  // blocking node; its own outcomeGate (checked in dag.ts/rerunNode) is what
+  // halts the run on a bad result, not a human decision made here.
 
   // Re-seed siblings into the worktree and export DAGRUNNER_ROOT so session-start.sh
   // can re-apply them at every node session start. resumeRun is a fresh process —
@@ -1528,27 +1417,6 @@ function runPrPostProcess(state: RunState, runDir: string): void {
       `  Manual: cd "${worktreePath}" && gh pr create --draft --title ${JSON.stringify(title)} --body-file "${bodyPath}" --base ${JSON.stringify(baseBranch)}\n`,
     );
   }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function readOneLine(): Promise<string> {
-  return new Promise<string>((resolve) => {
-    let buf = "";
-    process.stdin.setEncoding("utf8");
-    process.stdin.resume();
-    process.stdin.on("data", function onData(chunk: string) {
-      buf += chunk;
-      const nl = buf.indexOf("\n");
-      if (nl !== -1) {
-        process.stdin.pause();
-        process.stdin.removeListener("data", onData);
-        resolve(buf.slice(0, nl).trim());
-      }
-    });
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1717,14 +1585,24 @@ export async function rerunNode(opts: {
         endedAt: now,
       };
     } else {
-      newStatus = "done";
-      updates = {
-        status: newStatus,
-        artifacts: result.artifacts,
-        cost: result.cost,
-        sessionId: result.sessionId,
-        endedAt: now,
-      };
+      const gateCheck = checkOutcomeGate(runDir, nodeId, node);
+      if (!gateCheck.ok) {
+        newStatus = "failed";
+        updates = {
+          status: newStatus,
+          error: gateCheck.error,
+          endedAt: now,
+        };
+      } else {
+        newStatus = "done";
+        updates = {
+          status: newStatus,
+          artifacts: result.artifacts,
+          cost: result.cost,
+          sessionId: result.sessionId,
+          endedAt: now,
+        };
+      }
     }
   } else if (result.status === "awaiting-gate") {
     newStatus = "awaiting-gate";

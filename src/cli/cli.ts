@@ -181,7 +181,7 @@ async function cmdResume(argv: string[]): Promise<void> {
   if (runId === undefined || runId.startsWith("--")) {
     process.stderr.write(
       `dagrun resume: missing <run-id> argument.\n` +
-        `Usage: dagrun resume <run-id> [--approve] [--reject "<comment>"] [--verify y|n]\n`,
+        `Usage: dagrun resume <run-id> [--approve] [--reject "<comment>"]\n`,
     );
     process.exit(1);
   }
@@ -189,8 +189,6 @@ async function cmdResume(argv: string[]): Promise<void> {
   const approve = hasFlag(argv, "--approve");
   const rejectComment = flagValue(argv, "--reject");
   const configFlag = flagValue(argv, "--config");
-  const verifyRaw = flagValue(argv, "--verify");
-  const verify = verifyRaw === "y" ? "y" : verifyRaw === "n" ? "n" : undefined;
 
   const homeDir = resolveHome();
   const config = resolveConfig(homeDir, configFlag);
@@ -202,7 +200,6 @@ async function cmdResume(argv: string[]): Promise<void> {
     config,
     ...(approve ? { approve: true } : {}),
     ...(rejectComment !== undefined ? { rejectComment } : {}),
-    ...(verify !== undefined ? { verify } : {}),
   });
 }
 
@@ -721,7 +718,7 @@ function printHelp(): void {
       "  dagrun init [--home <path>]",
       "  dagrun preflight [--base-branch <branch>] [--config <file>]",
       "  dagrun start <workflow> --plan <file> [--max-budget-usd <n>] [--force] [--night]",
-      '  dagrun resume <run-id> [--approve] [--reject "<comment>"] [--verify y|n]',
+      '  dagrun resume <run-id> [--approve] [--reject "<comment>"]',
       "  dagrun status [<run-id>]",
       "  dagrun list",
       "  dagrun abort <run-id>",

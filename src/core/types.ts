@@ -70,6 +70,26 @@ export type LoopConfig = {
 export type JoinRule = "none-failed-min-one-success";
 
 // ---------------------------------------------------------------------------
+// Outcome gate — content-level pass/fail check on a produced JSON artifact
+// ---------------------------------------------------------------------------
+
+/**
+ * Declarative content check applied AFTER the produces-file-existence check
+ * passes. Reads `field` out of the JSON artifact at `file` (relative to the
+ * node's artifact directory); if its value is not one of `passValues`, the
+ * node is marked 'failed' instead of 'done' (same halt semantics as a
+ * produces-contract violation — see dag.ts `checkOutcomeGate`).
+ */
+export type OutcomeGateConfig = {
+  /** Artifact filename (relative to the node's artifact dir), e.g. "verify-report.json". */
+  file: string;
+  /** Top-level JSON field to read, e.g. "outcome". */
+  field: string;
+  /** Values of `field` that count as a pass, e.g. ["PASS"]. */
+  passValues: string[];
+};
+
+// ---------------------------------------------------------------------------
 // Node definition
 // ---------------------------------------------------------------------------
 
@@ -94,6 +114,11 @@ export type Node = {
   produces?: string[];
   /** When true the node must emit valid JSON; runner verifies. */
   producesJson?: boolean;
+  /**
+   * Content-level pass/fail gate on a produced JSON artifact, checked after
+   * the produces-existence check passes. See OutcomeGateConfig.
+   */
+  outcomeGate?: OutcomeGateConfig;
   /** Human-review gate config. */
   gate?: GateConfig;
   /** Autonomous loop config (stop-hook driven). */

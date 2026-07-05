@@ -7,7 +7,7 @@
  *   runDag — full orchestrator (Promise.all bounded by maxParallel)
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Node, Workflow, Ctx } from "./types.js";
 import type { NodeStatus, RunState } from "./state.js";
@@ -91,6 +91,64 @@ export function computeReadyNodes(
   }
 
   return ready;
+}
+
+// ---------------------------------------------------------------------------
+// outcomeGate — content-level pass/fail check on a produced JSON artifact
+// ---------------------------------------------------------------------------
+
+/**
+ * Checked AFTER the produces-file-existence check passes. When `node.outcomeGate`
+ * is absent, always ok (no expectation to violate). When present, reads
+ * `outcomeGate.field` out of the JSON artifact at `runDir/nodeId/outcomeGate.file`;
+ * any failure to locate/parse the file, or a value not in `passValues`, fails
+ * loud with a clear message — never a silent pass. Shared by dag.ts's runDag
+ * and run-engine.ts's rerunNode so the two produces/outcome checks never drift.
+ */
+export function checkOutcomeGate(
+  runDir: string,
+  nodeId: string,
+  node: Node,
+): { ok: true } | { ok: false; error: string } {
+  const gate = node.outcomeGate;
+  if (gate === undefined) return { ok: true };
+
+  const fullPath = join(runDir, nodeId, gate.file);
+  if (!existsSync(fullPath)) {
+    return {
+      ok: false,
+      error: `outcome gate failed — ${gate.file} not found (expected field "${gate.field}")`,
+    };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(fullPath, "utf8"));
+  } catch {
+    return {
+      ok: false,
+      error: `outcome gate failed — ${gate.file} is not valid JSON`,
+    };
+  }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return {
+      ok: false,
+      error: `outcome gate failed — ${gate.file} is not a JSON object`,
+    };
+  }
+
+  const value = (parsed as Record<string, unknown>)[gate.field];
+
+  if (typeof value !== "string" || !gate.passValues.includes(value)) {
+    const shown = value === undefined ? "undefined" : JSON.stringify(value);
+    return {
+      ok: false,
+      error: `outcome gate failed — ${gate.field} = ${shown}, expected one of: ${gate.passValues.join(", ")}`,
+    };
+  }
+
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -316,13 +374,22 @@ export async function runDag(
             endedAt: now,
           });
         } else {
-          updateNode(id, {
-            status: "done",
-            artifacts: result.artifacts,
-            cost: result.cost,
-            sessionId: result.sessionId,
-            endedAt: now,
-          });
+          const gateCheck = checkOutcomeGate(runDir, id, node);
+          if (!gateCheck.ok) {
+            updateNode(id, {
+              status: "failed",
+              error: gateCheck.error,
+              endedAt: now,
+            });
+          } else {
+            updateNode(id, {
+              status: "done",
+              artifacts: result.artifacts,
+              cost: result.cost,
+              sessionId: result.sessionId,
+              endedAt: now,
+            });
+          }
         }
       } else {
         // result.status === 'failed'

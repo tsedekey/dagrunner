@@ -22,6 +22,7 @@
       "Bash(mvn *)",
       "Bash(curl *)",
       "Bash(jq *)",
+      "Bash(docker *)",
       "mcp__camunda-knowledge__docs_lookup",
       "mcp__camunda-knowledge__semgrep_scan",
       "mcp__camunda-knowledge__bpmn_lint",
