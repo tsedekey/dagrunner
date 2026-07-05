@@ -65,12 +65,16 @@ function trunc(s: string, maxLen = 80): string {
  * Attended runs keep prompts on (acceptEdits) so the human can answer.
  * Night-mode runs bypass prompts (bypassPermissions) so they don't hang
  * at 3am waiting for a maven/bash approval — but the safety boundary
- * (sandbox + deny-guard hook) is set independently in the seeded
- * settings.json and is unaffected by this selection.
+ * (Bash allow/deny list + deny-guard hook) is set independently in the
+ * seeded settings.json and is unaffected by this selection.
  *
  * Two distinct concepts that must NOT be conflated:
  *   - permissionMode: controls whether Claude Code shows prompt dialogs.
- *   - sandbox + deny-guard: kernel-enforced + hook-enforced mutation boundary.
+ *   - Bash allow/deny list + deny-guard hook: the hook-enforced mutation
+ *     boundary (there is no filesystem sandbox — sandbox.enabled has been
+ *     false since commit 3015634 and the key was removed from
+ *     buildSeededSettings entirely; see DECISIONS.md
+ *     § verify-autonomy-remove-election).
  * Bypassing prompts (night) leaves the boundary intact.
  */
 export function selectPermissionMode(
@@ -148,8 +152,8 @@ export function makeSDKRunner(
     // Two-posture rule (see selectPermissionMode above):
     //   attended = acceptEdits: human is present, prompts are answered.
     //   night    = bypassPermissions: unattended; prompts would hang forever.
-    // The safety boundary (sandbox.enabled + deny-guard hook) is enforced by
-    // the seeded settings.json written at run-start — it is independent of
+    // The safety boundary (Bash allow/deny list + deny-guard hook) is enforced
+    // by the seeded settings.json written at run-start — it is independent of
     // permissionMode and is NOT weakened by night-mode bypass.
     const options: Parameters<typeof query>[0]["options"] = {
       cwd: worktreePath,

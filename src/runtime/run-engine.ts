@@ -802,7 +802,7 @@ export async function startRun(opts: {
   // any DEVHARNESS_SRC rsync that session-start.sh may have applied.
   seedWorktreeSiblings(dagrunnerRoot, destClaude);
 
-  // Runtime settings.json: full permission/sandbox/network model (Phase 2a D1).
+  // Runtime settings.json: full permission model (Phase 2a D1).
   // DISTINCT from the build-harness settings.json (bypassPermissions).
   // buildSeededSettings is the single authoritative template (settings-seed.ts).
   const seededSettings = buildSeededSettings({
@@ -1338,15 +1338,22 @@ export async function resumeRun(opts: {
 }
 
 // ---------------------------------------------------------------------------
-// runPrPostProcess — push branch + open draft PR outside the agent sandbox
+// runPrPostProcess — push branch + open draft PR outside the agent session
 // ---------------------------------------------------------------------------
 
 /**
  * After the pr node's agent session exits, push the feature branch and create
- * a draft PR using Node.js (outside the Claude Code sandbox). This avoids the
- * TLS certificate error that occurs when `gh` (Go binary) runs inside the
- * sandbox — Go's TLS stack doesn't trust the sandbox proxy certificate, while
- * Node.js and macOS-native tools use the keychain correctly.
+ * a draft PR using Node.js, outside the agent's own session. This dates from
+ * when the filesystem sandbox was active and `gh` (Go binary) hit a TLS
+ * certificate error under the sandbox's network proxy — Go's TLS stack didn't
+ * trust the proxy certificate, while Node.js and macOS-native tools used the
+ * keychain correctly. `sandbox.enabled` has been false since commit 3015634
+ * (no proxy exists today), so that specific TLS failure no longer applies —
+ * but pushing deterministically from Node.js rather than trusting the agent
+ * to construct the right git/gh invocation is still the right design, so this
+ * has not been reverted to an in-session `gh` call. Not yet re-verified
+ * whether `gh`/`git push` now also work fine from inside the agent's own
+ * Bash tool without the sandbox's proxy in the way.
  *
  * Reads pr-meta.json for the branch and title written by the agent.
  * Writes prUrl back to pr-meta.json on success, pr-error.txt on failure.

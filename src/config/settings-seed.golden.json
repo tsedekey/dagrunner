@@ -47,26 +47,6 @@
       "mcp__camunda-knowledge__sg_references"
     ]
   },
-  "sandbox": {
-    "enabled": false,
-    "autoAllowBashIfSandboxed": true,
-    "network": {
-      "allowedDomains": [
-        "api.anthropic.com",
-        "registry.npmjs.org",
-        "*.npmjs.org",
-        "github.com",
-        "api.github.com",
-        "*.githubusercontent.com",
-        "repo.maven.apache.org",
-        "central.maven.org",
-        "*.maven.org",
-        "plugins.gradle.org",
-        "localhost",
-        "127.0.0.1"
-      ]
-    }
-  },
   "hooks": {
     "SessionStart": [
       {

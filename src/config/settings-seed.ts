@@ -2,7 +2,7 @@
  * settings-seed.ts — shared logic for seeding the worktree's .claude/settings.json.
  *
  * Merge rules (owned = dagrunner wins, passthrough = DEVHARNESS_SRC wins):
- *   - permissions / sandbox / hooks: dagrunner replaces wholesale.
+ *   - permissions / hooks: dagrunner replaces wholesale.
  *   - env: key-level merge; dagrunner's keys win on conflict (none defined today).
  *   - mcpServers + anything else: DEVHARNESS_SRC passes through unchanged.
  *
@@ -111,7 +111,7 @@ export function buildSeededSettings(opts: {
    * DEVHARNESS_SRC (e.g. ~/dev/camunda/camunda-main). When provided, added to
    * additionalDirectories so nodes can read from the main source tree (e.g.
    * cross-tree file reads). All nodes get this access — scope is intentional:
-   * prompt-discipline is the guard, not the sandbox boundary.
+   * prompt-discipline is the guard, not the permission boundary.
    */
   devharnessSrc?: string;
   /**
@@ -192,26 +192,6 @@ export function buildSeededSettings(opts: {
         "mcp__camunda-knowledge__sg_definition",
         "mcp__camunda-knowledge__sg_references",
       ],
-    },
-    sandbox: {
-      enabled: false,
-      autoAllowBashIfSandboxed: true,
-      network: {
-        allowedDomains: [
-          "api.anthropic.com",
-          "registry.npmjs.org",
-          "*.npmjs.org",
-          "github.com",
-          "api.github.com",
-          "*.githubusercontent.com",
-          "repo.maven.apache.org",
-          "central.maven.org",
-          "*.maven.org",
-          "plugins.gradle.org",
-          "localhost",
-          "127.0.0.1",
-        ],
-      },
     },
     hooks: {
       SessionStart: [

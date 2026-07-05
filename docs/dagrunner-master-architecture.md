@@ -55,7 +55,7 @@ Phase 3 is three LOCAL siblings (/seed-data + ci-babysit + pr-triage) — one su
           verify-report.json) -> outcomeGate on verify-report.json's `outcome`
         |  field: non-PASS fails this node (halts the run) exactly like a produces
         |  violation — no human gate, no election. See §3d.
-  pr (haiku)               -> opens the PR (git push / gh run OUTSIDE the sandbox — see §5)
+  pr (haiku)               -> opens the PR (git push / gh run outside the agent's own session — see §6)
                               [TERMINAL — run ends here]
                               Each node may write reflections.md; the SessionEnd hook captures it to store
 ```
@@ -130,7 +130,8 @@ workflows share the same `payload/commands/verify.md`.
 cluster bring-up was believed to conflict with the runtime sandbox (Seatbelt kernel enforcement).
 That rationale is stale: `sandbox.enabled` has been `false` since commit `3015634` — the
 structural boundary today is the Bash allow/deny list (`src/config/settings-seed.ts`) + PreToolUse
-deny-guard hook, not a kernel sandbox (see §6's footnote). `./mvnw *`/`mvn *` are already
+deny-guard hook, not a kernel sandbox (§6 — the `sandbox` key has since been removed from
+`buildSeededSettings` entirely, not merely left disabled). `./mvnw *`/`mvn *` are already
 allow-listed and already used by `implement`/`fix`; Testcontainers talks to the Docker daemon
 directly from the JVM (not via the Bash tool), so it isn't gated by the allowlist either — the only
 real precondition is Docker being reachable on the host, which verify checks as a fail-loud
@@ -258,27 +259,24 @@ Two structural guards (prompt discipline is no longer the only line of defence):
 
 ---
 
-## 6. Runtime permission / sandbox / network model
+## 6. Runtime permission model
 
 Seeded into each worktree `.claude/settings.json`, loaded via `settingSources:["project"]`, node `cwd` = worktree. Distinct from the build-time `bypassPermissions` posture used by the agent that BUILDS dagrunner.
 
-Goal: free inside the worktree, read anywhere, mutation/network outside hard-blocked, no prompts before a gate.
+Goal: free inside the worktree, read anywhere, mutation outside hard-blocked, no prompts before a gate.
 
 - `defaultMode: acceptEdits`; `additionalDirectories` includes the per-run artifact path (else every node prompts — the #1 prompt pitfall).
-- `allow: [Read, Bash(git *), Bash(npm run *), Bash(npx tsc *)]`; `deny: rm -rf, sudo, force-push, .env/secrets read+write`.
-- `sandbox.enabled` (macOS Seatbelt) + `autoAllowBashIfSandboxed` + network `allowedDomains` (anthropic, npm, github). Out-of-worktree mutation is kernel-blocked; network is proxied+allowlisted, NOT cut off (WebFetch/WebSearch run in-process, unaffected).
-- **Known reality from the build:** `gh` and `git push` do NOT work inside the Seatbelt sandbox (TLS cert mismatch with the proxy). The `pr` node performs push / PR-creation via Node.js **outside** the sandbox. **This is the key sibling lesson: anything using `gh` must run un-sandboxed** — which the siblings are (interactive commands, not nodes).
-- Node-native `fetch`/undici ignores the proxy and breaks under the sandbox (npm/git/tsc respect it).
-- **Two contexts, do not conflate:** the agent BUILDING dagrunner runs bypassPermissions + fail-closed deny-guard (NOT Seatbelt); dagrunner RUNTIME nodes run Seatbelt. Seatbelt is built into macOS.
-- **Two-posture permission rule (night-mode):** runtime nodes have two SDK `permissionMode` settings — `acceptEdits` for attended runs (human is present and can answer prompts) and `bypassPermissions` for night-mode (`--night` flag). The safety boundary — the Bash allow/deny list + fail-closed deny-guard hook (see footnote below) — is written by `buildSeededSettings` independently of `permissionMode` and is never weakened by night-mode. Bypassing prompts (night) means "don't hang waiting for a human at 3am"; it does NOT remove the hook-enforced mutation fence. `selectPermissionMode(nightMode?)` in `sdk-runner.ts` is the single decision point, exported and unit-tested.
+- `allow`/`deny` (`src/config/settings-seed.ts`): `./mvnw *`/`mvn *`/`git *`/`npm *`/`curl *`/`jq *`/`docker *` etc. allow-listed; `rm -rf`, `sudo`, force-push, `.env`/secrets read+write, `Write(.claude/**)` deny-listed. This allow/deny list, plus the PreToolUse deny-guard hook, IS the enforced mutation boundary — there is no filesystem sandbox underneath it (see below).
+- **Two contexts, do not conflate:** the agent BUILDING dagrunner runs `bypassPermissions` + the fail-closed deny-guard hook; dagrunner RUNTIME nodes run `acceptEdits`/`bypassPermissions` (see the two-posture rule below) + the same deny-guard hook.
+- **Two-posture permission rule (night-mode):** runtime nodes have two SDK `permissionMode` settings — `acceptEdits` for attended runs (human is present and can answer prompts) and `bypassPermissions` for night-mode (`--night` flag). The safety boundary — the Bash allow/deny list + fail-closed deny-guard hook — is written by `buildSeededSettings` independently of `permissionMode` and is never weakened by night-mode. Bypassing prompts (night) means "don't hang waiting for a human at 3am"; it does NOT remove the hook-enforced mutation fence. `selectPermissionMode(nightMode?)` in `sdk-runner.ts` is the single decision point, exported and unit-tested.
 
-> **Footnote — this section is partly stale (kept for the historical Seatbelt design intent above, corrected here):** `sandbox.enabled` has been `false` in `buildSeededSettings` since commit `3015634` ("disable filesystem sandbox; allow localhost for Maven and seed-data") — Seatbelt kernel enforcement described above is NOT what's active today. The real boundary is the Bash allow/deny list in `src/config/settings-seed.ts` (`./mvnw *`/`mvn *`/`git *`/`npm *` etc. allow-listed; `rm -rf`/`sudo`/force-push/`.env` deny-listed) plus the PreToolUse deny-guard hook — see `DECISIONS.md § night-mode-permission-posture` for the full history and `§ verify-autonomy-remove-election` for why this mattered for the verify redesign (§3d): the sandbox was never actually blocking Maven/Docker-based build+test+acceptance automation by the time verify was made autonomous, so there was no permission-model change needed to enable it. `gh`/`git push` working or not working un-sandboxed (next bullet) is therefore also no longer a Seatbelt-vs-proxy TLS story — it predates the `3015634` change and has not been re-verified against the current deny-guard-only boundary.
+> **History — there used to be a filesystem sandbox here; it's gone, not just disabled.** Earlier design (`phase2b-verify-guide` in `DECISIONS.md`) had runtime nodes wrapped in a macOS Seatbelt sandbox (`sandbox.enabled: true` + `autoAllowBashIfSandboxed` + network `allowedDomains`), with `gh`/`git push` failing inside it (TLS cert mismatch with the sandbox's network proxy) — which is why the `pr` node still pushes/opens the PR via Node.js **outside the agent's own session** rather than via an in-session `gh` call (see `runPrPostProcess` in `run-engine.ts`). Commit `3015634` set `sandbox.enabled: false` (it was blocking Maven writes to `**/target/`), and the verify-autonomy change (§3d, `DECISIONS.md § verify-autonomy-remove-election`) removed the `sandbox` key from `buildSeededSettings` entirely, since a permanently-`false` toggle with no code path to re-enable it was dead config, not a real security posture — see `DECISIONS.md § night-mode-permission-posture` for the fuller history. The `gh`/`git push`-outside-session design was kept (pushing deterministically from Node.js rather than trusting the agent's own command construction is still good practice on its own merits) but the original TLS-under-proxy rationale for it no longer applies and has not been re-verified against the current deny-guard-only boundary.
 
 ---
 
 ## 7. Preflight ("Prepare") — not a node
 
-`dagrun preflight` runs before the graph: on expected base branch; git tree clean; DEVHARNESS_SRC resolves+is a repo; seeded settings present; Seatbelt available; network allowlist covers the task; ANTHROPIC_API_KEY unset; CLAUDE_CONFIG_DIR=~/.claude-work; enterprise policy doesn't block; artifact path in additionalDirectories.
+`dagrun preflight` runs before the graph: on expected base branch; git tree clean; DEVHARNESS_SRC resolves+is a repo; seeded settings present; ANTHROPIC_API_KEY unset; CLAUDE_CONFIG_DIR=~/.claude-work; enterprise policy doesn't block; artifact path in additionalDirectories. (No sandbox/network-allowlist check — there is no sandbox to check; see §6.)
 
 **Version banner (implemented):** `dagrun preflight` and a passing `dagrun start` both print dagrunner's own package version + build date/time before any node runs — `src/config/version.ts` (`getVersionInfo`), surfaced via `formatAgentContext` (preflight) and `formatVersionBanner` (start). Compiled binaries read the compile-instant timestamp from `dist/build-meta.json` (regenerated every `npm run build` by `scripts/write-build-meta.mjs`) and fail loud if it's missing; dev mode (`tsx`) prints `(dev, unbuilt)`. This makes drift between a rebuild and the running `~/.local/bin/dagrun` binary visible instead of assumed. Every dagrunner self-change bumps this version (enforced by `dr-build`, see `.claude/agents/dr-build.md`).
 
@@ -342,7 +340,7 @@ All four thresholds (`COLD_RELOAD_TAX_THRESHOLD`, `OUTPUT_HEAVY_SHARE_THRESHOLD`
 
 ## 10. Phase 3 siblings — THREE interactive Claude Code commands
 
-All three: Claude Code commands in the **Camunda monorepo's private `.claude/`** (alongside `/pr-review`, gitignored via `.git/info/exclude`), **copied into each worktree by dagrunner's seed/sync** and RUN inside the worktree (where the built code, PR branch, and cluster live). Edit the canonical copy in DEVHARNESS_SRC; the worktree copy is ephemeral. Interactive, human-driven, **NOT sandboxed** (they need Docker, host ports, `gh`, broad network — exactly why they're commands, not nodes). Run under CLAUDE_CONFIG_DIR=~/.claude-work. Built one at a time, in order.
+All three: Claude Code commands in the **Camunda monorepo's private `.claude/`** (alongside `/pr-review`, gitignored via `.git/info/exclude`), **copied into each worktree by dagrunner's seed/sync** and RUN inside the worktree (where the built code, PR branch, and cluster live). Edit the canonical copy in DEVHARNESS_SRC; the worktree copy is ephemeral. Interactive, human-driven — they need Docker, host ports, `gh`, broad network, none of which the autonomous DAG's fire-and-forget nodes are a good fit for; that's why they're commands, not nodes. Run under CLAUDE_CONFIG_DIR=~/.claude-work. Built one at a time, in order.
 
 > DROPPED: the dedicated "/verify-demo environment creator" (DMS-based cluster + breakpoint placement). The **c8ctl dev plugin** spins up a configured local OC smoothly, making a separate cluster-creator command unnecessary. The **Debugger MCP Server (DMS)** is parked for a FUTURE bug-fix / issue-investigation workflow (where programmatic breakpoints aid an investigating agent) — it has no role in the feature-task workflow. **Since the verify-autonomy change (§3d), the pipeline's `verify` node no longer emits `seeding-spec.json`/`manual-test.md` at all** — that generation moved to the on-demand `/manual-smoke` sibling (§10.4). The code-trail the old `tour-spec.json` carried is folded into `manual-test.md`, and no automated breakpoint-placer consumes it.
 
@@ -355,7 +353,7 @@ All three: Claude Code commands in the **Camunda monorepo's private `.claude/`**
 
 ### 10.2 ci-babysit (Sibling 2)
 
-Local: monitors CI on the open PR, rebases on base, fixes failing checks (scoped to making CI green — never a backdoor for feature changes), and re-verifies before pushing. Needs the local cluster (human-started via the c8ctl dev plugin) for runtime re-verification + private context (why it's local, not gh-aw). Uses `gh` and `git push` (un-sandboxed — fine, it's a command); rebase pushes use `--force-with-lease`, never blind `--force`.
+Local: monitors CI on the open PR, rebases on base, fixes failing checks (scoped to making CI green — never a backdoor for feature changes), and re-verifies before pushing. Needs the local cluster (human-started via the c8ctl dev plugin) for runtime re-verification + private context (why it's local, not gh-aw). Uses `gh` and `git push` directly; rebase pushes use `--force-with-lease`, never blind `--force`.
 
 **Human gate (never auto):** the **draft -> ready flip** is ci-babysit's defining gate — when CI is green and re-verification passes, it surfaces the readiness summary and the `gh pr ready` command but NEVER flips the PR itself. Readiness is not latched: new commits/failures reopen the work and re-present the gate.
 
@@ -450,8 +448,8 @@ Open items: confirm Agent SDK credit pool covers volume; some preflight checks (
   run from any git checkout on any branch with a discoverable PR — not restricted to a
   dagrunner-managed worktree. When `DAGRUN_RUN_ID` IS set (dagrunner-managed worktree), persist
   the worktree until the PR is done.
-- `gh`/network mutations must run un-sandboxed.
-- Unattended pipeline runs: never auto-approve a gate **unless `--night` is active and no concern is flagged** (see §3 night-mode). The one-rule policy: agent-decidable gates (Gate 1, Gate 2) auto-approve when `guide.md`/`summary.md` contains no "Concerns / plan challenges" heading; verify-election always pauses. Subagents never end a turn with a question.
+- `gh`/network mutations in the pipeline (the `pr` node) run via Node.js outside the agent's own session, not via an in-session `gh` call (see §6).
+- Unattended pipeline runs: never auto-approve a gate **unless `--night` is active and no concern is flagged** (see §3 night-mode). The one-rule policy: agent-decidable gates (Gate 1, Gate 2) auto-approve when `guide.md`/`summary.md` contains no "Concerns / plan challenges" heading. Since the verify-autonomy change (§3d), `verify` has no gate at all — it runs autonomously to a terminal classification, so a clean night-mode run now proceeds through `verify` and `pr` fully unattended with no park anywhere. Subagents never end a turn with a question.
 - Schema is single-source-of-truth, owned by dagrunner, never duplicated.
 - Each sibling plan front-loads a tool-introspection spike (c8ctl for /seed-data; the `gh` CI-status surface for ci-babysit; the `gh` review-comment surface for pr-triage) — verify the installed surface, don't assume from docs.
 - ci-babysit and pr-triage share a worktree but have hard domain separation: ci-babysit owns git mutations (rebase, fix, commit, push); pr-triage owns the comment conversation (never calls git push, never edits source files, never stages/commits).

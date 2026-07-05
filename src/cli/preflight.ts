@@ -2,8 +2,8 @@
  * preflight.ts — pre-run sanity checks (Phase 2a D1).
  *
  * Runs before the DAG starts. Fails loud on any misconfiguration so the
- * runtime permission model, sandbox, and environment are correct before
- * any node mutates the real repo.
+ * runtime permission model and environment are correct before any node
+ * mutates the real repo.
  *
  * Called by: `dagrun preflight` (standalone) and `cmdStart` (always).
  */
@@ -652,9 +652,6 @@ export function formatAgentContext(
   lines.push(hr);
   lines.push(
     `  Permission mode   acceptEdits (attended) · bypassPermissions (--night)`,
-  );
-  lines.push(
-    `  Sandbox           disabled (since 3015634) — Bash allow/deny list + deny-guard hook`,
   );
   lines.push(`  Hooks             ${ctx.hooks.join(" · ")}`);
 

@@ -31,7 +31,7 @@ import {
 // buildSeededSettings — owned keys come from dagrunner
 // ---------------------------------------------------------------------------
 
-test("buildSeededSettings: owned keys (permissions/sandbox/hooks) come from dagrunner", () => {
+test("buildSeededSettings: owned keys (permissions/hooks) come from dagrunner", () => {
   const dir = mkdtempSync(join(tmpdir(), "dr-ss-"));
   const settings = buildSeededSettings({
     runDir: join(dir, "runs", "test-run"),
@@ -52,15 +52,6 @@ test("buildSeededSettings: owned keys (permissions/sandbox/hooks) come from dagr
     "permissions.allow must be an array",
   );
   assert.ok(Array.isArray(perms["deny"]), "permissions.deny must be an array");
-
-  // sandbox
-  const sandbox = settings["sandbox"] as Record<string, unknown>;
-  assert.ok(
-    sandbox !== null && typeof sandbox === "object",
-    "sandbox must be present",
-  );
-  assert.equal(sandbox["enabled"], false);
-  assert.equal(sandbox["autoAllowBashIfSandboxed"], true);
 
   // hooks — all four lifecycle hooks present
   const hooks = settings["hooks"] as Record<string, unknown>;

@@ -2,7 +2,7 @@
  * sdk-runner.test.ts — unit tests for pure exported helpers.
  *
  * Scope: selectPermissionMode (pure, deterministic).
- *        Teeth-check: seeded settings always enforce sandbox + deny-guard
+ *        Teeth-check: seeded settings always enforce the deny-guard hook
  *        regardless of permissionMode — night-mode bypasses prompts only,
  *        never the boundary.
  *
@@ -36,9 +36,13 @@ test("selectPermissionMode: attended (undefined) → acceptEdits", () => {
 // Teeth-check — bypass flips prompts only, never the boundary
 //
 // Night-mode sets permissionMode: bypassPermissions in the SDK call, but
-// the seeded settings.json that enforces sandbox + deny-guard is written by
-// buildSeededSettings, which is independent of permissionMode. These tests
-// prove the boundary is structurally intact regardless of the night flag.
+// the seeded settings.json that enforces the deny-guard hook is written by
+// buildSeededSettings, which is independent of permissionMode. This test
+// proves the boundary is structurally intact regardless of the night flag.
+// (There is no filesystem sandbox to also check — sandbox.enabled has been
+// removed from buildSeededSettings entirely; see DECISIONS.md
+// § verify-autonomy-remove-election and the commit that removed it. The
+// Bash allow/deny list + this hook are the only enforced boundary.)
 // ---------------------------------------------------------------------------
 
 const minimalSettings = () =>
@@ -48,23 +52,6 @@ const minimalSettings = () =>
     tmpDir: "/tmp",
     passthrough: { env: {}, mcpServers: undefined },
   }) as Record<string, unknown>;
-
-// sandbox.enabled is intentionally false (commit 3015634: Maven builds require
-// access to **/target/ and local-cluster ports that the sandbox blocks).
-// The authoritative test for sandbox shape is settings-seed.test.ts.
-// The real boundary teeth: deny-guard (stop-verifier) hook is always wired,
-// regardless of permissionMode — tested below.
-test("teeth-check: seeded settings have sandbox present and independent of permissionMode", () => {
-  const s = minimalSettings();
-  const sandbox = s["sandbox"] as Record<string, unknown>;
-  assert.ok(
-    sandbox !== null && typeof sandbox === "object",
-    "sandbox key must be present in seeded settings",
-  );
-  // sandbox.enabled=false is intentional (3015634). Do not assert true here.
-  // The boundary is enforced by the deny-guard hook, not the filesystem sandbox.
-  assert.equal(sandbox?.["enabled"], false);
-});
 
 test("teeth-check: seeded settings always wire the deny-guard (stop-verifier) hook", () => {
   const s = minimalSettings();
