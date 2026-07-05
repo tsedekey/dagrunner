@@ -12,7 +12,7 @@
 🤖 Agent context  (dagrunner + DEVHARNESS_SRC)
 ────────────────────────────────────────────────────────────
   Permission mode   acceptEdits (attended) · bypassPermissions (--night)
-  Sandbox           enabled for all nodes
+  Sandbox           disabled (since 3015634) — Bash allow/deny list + deny-guard hook
   Hooks             SessionStart · Stop · PostToolUse · SessionEnd
   Env               REPO_ENV=repo-value  ← DEVHARNESS_SRC
   MCP servers       camunda-knowledge

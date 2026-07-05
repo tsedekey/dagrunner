@@ -653,7 +653,9 @@ export function formatAgentContext(
   lines.push(
     `  Permission mode   acceptEdits (attended) · bypassPermissions (--night)`,
   );
-  lines.push(`  Sandbox           enabled for all nodes`);
+  lines.push(
+    `  Sandbox           disabled (since 3015634) — Bash allow/deny list + deny-guard hook`,
+  );
   lines.push(`  Hooks             ${ctx.hooks.join(" · ")}`);
 
   if (Object.keys(ctx.env).length === 0) {
