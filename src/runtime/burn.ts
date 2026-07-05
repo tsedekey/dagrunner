@@ -249,23 +249,35 @@ export function buildBurn(params: BuildBurnParams): BurnDoc {
 }
 
 // ---------------------------------------------------------------------------
-// Hotspot detection (Deliverable 2 — report rendering)
+// Hotspot detection (Deliverable 2 — report rendering; extended by D4b with
+// two transcript-derived checks)
 //
-// Rollup-level only: these functions read a node's already-computed
-// BurnDerived + the run-wide set of BurnDocOk docs. No transcript parsing,
-// no intra-node attribution — that is D4, gated on the separate D3 spike.
+// The first four checks (cold-reload-tax, tier-leak, fat-fixed-prefix,
+// output-heavy) are rollup-level only: they read a node's already-computed
+// BurnDerived + the run-wide set of BurnDocOk docs, no transcript parsing.
+// D4b (verbose-tool-output, fan-out-multiplier) additionally reads a
+// node's `intraNode` (populated only for "transcript"-phase nodes, D4a) —
+// both degrade to "no flag" on a null intraNode, so a rollup-only node's
+// flag list is unaffected by their addition.
 //
 // Thresholds below are explicitly provisional constants, not a config
-// system (out of scope per the D2 brief) — they will be tuned from real
-// burn.json evidence once the report has shipped and a body of real runs
-// exists to calibrate against. See DECISIONS.md § burn-monitor-d2-hotspots.
+// system (out of scope per the D2 brief, and unchanged for D4b) — they
+// will be tuned from real burn.json evidence once a body of real runs
+// exists to calibrate against. See DECISIONS.md § burn-monitor-d2-hotspots
+// and § burn-monitor-d4b-report-rendering.
 // ---------------------------------------------------------------------------
 
 export type HotspotFlag =
   | { kind: "cold-reload-tax"; cacheColdRatio: number }
   | { kind: "tier-leak"; declaredTier: Tier; leakedTiers: Tier[] }
   | { kind: "fat-fixed-prefix"; cacheCreationTokens: number }
-  | { kind: "output-heavy"; outputShare: number };
+  | { kind: "output-heavy"; outputShare: number }
+  | { kind: "verbose-tool-output"; count: number; totalKb: number }
+  | {
+      kind: "fan-out-multiplier";
+      qualifyingCount: number;
+      totalCacheReadTokens: number;
+    };
 
 /** Above this cacheColdRatio, a node is re-paying its fixed prompt prefix
  * on (almost) every turn instead of hitting cache. Provisional — see
@@ -288,6 +300,18 @@ export const FAT_PREFIX_TOKEN_THRESHOLD = 50_000;
  * FAT_PREFIX_TOKEN_THRESHOLD for the fat-fixed-prefix flag to fire on any
  * of them. Provisional — see module header. */
 export const FAT_PREFIX_NODE_COVERAGE = 0.8;
+
+/** Minimum number of a node's subagents that must each independently clear
+ * FAN_OUT_MULTIPLIER_CACHE_READ_THRESHOLD for the fan-out-multiplier flag
+ * to fire (see detectFanOutMultiplier below). Provisional — see module
+ * header. */
+export const FAN_OUT_MULTIPLIER_MIN_SUBAGENTS = 2;
+
+/** Per-subagent cacheReadInputTokens threshold (raw token count, not a
+ * share) above which a subagent counts as "independently re-reading a
+ * large cached context" for the fan-out-multiplier check. Provisional —
+ * see module header. */
+export const FAN_OUT_MULTIPLIER_CACHE_READ_THRESHOLD = 500_000;
 
 /** Total order over the three real tiers ("unknown" has no rank — a
  * declared tier of "unknown" is treated as "no declared tier", see
@@ -369,6 +393,59 @@ export function detectOutputHeavy(derived: BurnDerived): HotspotFlag | null {
   return null;
 }
 
+/** Verbose-tool-output flag (Burn Monitor D4b): fires on presence alone —
+ * `intraNode.verboseToolOutputs` is only ever populated for a tool result
+ * Claude Code's OWN externalization already decided was oversized (see
+ * src/runtime/intra-node.ts's module header); inventing a second size
+ * threshold on top of an already-thresholded signal would be redundant.
+ * null intraNode (a "rollup"-phase node) never flags — there is nothing to
+ * inspect. */
+export function detectVerboseToolOutput(
+  intraNode: IntraNodeData | null,
+): HotspotFlag | null {
+  if (intraNode === null) return null;
+  if (intraNode.verboseToolOutputs.length === 0) return null;
+  const totalKb = intraNode.verboseToolOutputs.reduce(
+    (sum, v) => sum + v.sizeKb,
+    0,
+  );
+  return {
+    kind: "verbose-tool-output",
+    count: intraNode.verboseToolOutputs.length,
+    totalKb,
+  };
+}
+
+/** Fan-out-multiplier flag (Burn Monitor D4b): fires when at least
+ * FAN_OUT_MULTIPLIER_MIN_SUBAGENTS of a node's subagents each
+ * independently re-read a large, similarly-sized cached context
+ * (cacheReadInputTokens >= FAN_OUT_MULTIPLIER_CACHE_READ_THRESHOLD) — the
+ * "same input re-read N times" cost multiplier a reviewer-style fan-out
+ * pays for splitting one large context across many subagent invocations.
+ * Reports the qualifying count and the SUM of cacheReadInputTokens across
+ * only the qualifying subagents (the total cache-read "tax" paid across
+ * the fan-out) — non-qualifying subagents are excluded from both the count
+ * and the sum. null intraNode never flags. */
+export function detectFanOutMultiplier(
+  intraNode: IntraNodeData | null,
+): HotspotFlag | null {
+  if (intraNode === null) return null;
+  const qualifying = intraNode.subagents.filter(
+    (s) =>
+      s.tokens.cacheReadInputTokens >= FAN_OUT_MULTIPLIER_CACHE_READ_THRESHOLD,
+  );
+  if (qualifying.length < FAN_OUT_MULTIPLIER_MIN_SUBAGENTS) return null;
+  const totalCacheReadTokens = qualifying.reduce(
+    (sum, s) => sum + s.tokens.cacheReadInputTokens,
+    0,
+  );
+  return {
+    kind: "fan-out-multiplier",
+    qualifyingCount: qualifying.length,
+    totalCacheReadTokens,
+  };
+}
+
 /** Run-level: which node ids meet the fat-fixed-prefix per-node token
  * threshold AND the prefix recurs across at least FAT_PREFIX_NODE_COVERAGE
  * of nodes with valid (BurnDocOk) burn data. Denominator is nodes with
@@ -392,17 +469,22 @@ export function computeFatPrefixFlaggedNodes(
   return new Set(overThreshold);
 }
 
-/** Compose all four hotspot checks for one node into its flag list.
+/** Compose all six hotspot checks for one node into its flag list.
  * `fatPrefixFlagged` is pre-computed run-wide by computeFatPrefixFlaggedNodes
  * — the fat-fixed-prefix check is inherently a run-level computation
  * threaded back in as a per-node badge, not a check this function can do
- * in isolation (see module header). */
+ * in isolation (see module header). `intraNode` defaults to null (a
+ * "rollup"-phase node, or any caller that hasn't wired D4b data through
+ * yet) — both transcript-derived checks (verbose-tool-output, fan-out-
+ * multiplier) degrade to "no flag" identically to a null intraNode, so
+ * existing rollup-only call sites are unaffected. */
 export function computeNodeHotspots(params: {
   derived: BurnDerived;
   declaredTier: Tier | undefined;
   fatPrefixFlagged: boolean;
+  intraNode?: IntraNodeData | null;
 }): HotspotFlag[] {
-  const { derived, declaredTier, fatPrefixFlagged } = params;
+  const { derived, declaredTier, fatPrefixFlagged, intraNode = null } = params;
   const flags: HotspotFlag[] = [];
 
   const coldReload = detectColdReloadTax(derived);
@@ -420,6 +502,12 @@ export function computeNodeHotspots(params: {
 
   const outputHeavy = detectOutputHeavy(derived);
   if (outputHeavy) flags.push(outputHeavy);
+
+  const verboseToolOutput = detectVerboseToolOutput(intraNode);
+  if (verboseToolOutput) flags.push(verboseToolOutput);
+
+  const fanOutMultiplier = detectFanOutMultiplier(intraNode);
+  if (fanOutMultiplier) flags.push(fanOutMultiplier);
 
   return flags;
 }

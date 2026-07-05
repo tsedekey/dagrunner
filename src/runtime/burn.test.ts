@@ -24,17 +24,22 @@ import {
   detectColdReloadTax,
   detectTierLeak,
   detectOutputHeavy,
+  detectVerboseToolOutput,
+  detectFanOutMultiplier,
   computeFatPrefixFlaggedNodes,
   computeNodeHotspots,
   COLD_RELOAD_TAX_THRESHOLD,
   OUTPUT_HEAVY_SHARE_THRESHOLD,
   FAT_PREFIX_TOKEN_THRESHOLD,
   FAT_PREFIX_NODE_COVERAGE,
+  FAN_OUT_MULTIPLIER_MIN_SUBAGENTS,
+  FAN_OUT_MULTIPLIER_CACHE_READ_THRESHOLD,
   type ModelUsage,
   type BurnDerived,
   type BurnDocOk,
   type TierMix,
 } from "./burn.js";
+import type { IntraNodeData, IntraNodeSubagent } from "./intra-node.js";
 
 // ---------------------------------------------------------------------------
 // cacheColdRatio
@@ -428,4 +433,182 @@ test("computeNodeHotspots: multiple simultaneous flags all appear", () => {
     "output-heavy",
     "tier-leak",
   ]);
+});
+
+// ---------------------------------------------------------------------------
+// detectVerboseToolOutput / detectFanOutMultiplier (Burn Monitor D4b)
+// ---------------------------------------------------------------------------
+
+const subagent = (
+  over: Partial<IntraNodeSubagent> = {},
+): IntraNodeSubagent => ({
+  agentId: "agent-1",
+  agentType: "reviewer-correctness",
+  tier: "sonnet",
+  tokens: {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+  },
+  apportionedCostUsd: 0,
+  ...over,
+});
+
+const intraNode = (over: Partial<IntraNodeData> = {}): IntraNodeData => ({
+  subagents: [],
+  toolCallCounts: {},
+  retryCount: 0,
+  verboseToolOutputs: [],
+  reconciliation: {},
+  ...over,
+});
+
+test("detectVerboseToolOutput: null intraNode (rollup-phase node) never flags", () => {
+  assert.equal(detectVerboseToolOutput(null), null);
+});
+
+test("detectVerboseToolOutput: empty verboseToolOutputs does not flag", () => {
+  assert.equal(
+    detectVerboseToolOutput(intraNode({ verboseToolOutputs: [] })),
+    null,
+  );
+});
+
+test("detectVerboseToolOutput: any entries present flags, with count and total KB", () => {
+  const flag = detectVerboseToolOutput(
+    intraNode({
+      verboseToolOutputs: [
+        { toolUseId: "tu1", toolName: "Read", sizeKb: 12.5 },
+        { toolUseId: "tu2", toolName: "Bash", sizeKb: 7.5 },
+      ],
+    }),
+  );
+  assert.deepEqual(flag, {
+    kind: "verbose-tool-output",
+    count: 2,
+    totalKb: 20,
+  });
+});
+
+test("detectFanOutMultiplier: null intraNode never flags", () => {
+  assert.equal(detectFanOutMultiplier(null), null);
+});
+
+test("detectFanOutMultiplier: fewer than MIN_SUBAGENTS qualifying subagents — no flag even though one exceeds the per-subagent threshold", () => {
+  const flag = detectFanOutMultiplier(
+    intraNode({
+      subagents: [
+        subagent({
+          agentId: "a",
+          tokens: {
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadInputTokens: FAN_OUT_MULTIPLIER_CACHE_READ_THRESHOLD + 1,
+            cacheCreationInputTokens: 0,
+          },
+        }),
+        subagent({
+          agentId: "b",
+          tokens: {
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadInputTokens: 100,
+            cacheCreationInputTokens: 0,
+          },
+        }),
+      ],
+    }),
+  );
+  assert.equal(flag, null);
+});
+
+test("detectFanOutMultiplier: at/above MIN_SUBAGENTS each below the per-subagent threshold — no flag", () => {
+  const flag = detectFanOutMultiplier(
+    intraNode({
+      subagents: Array.from(
+        { length: FAN_OUT_MULTIPLIER_MIN_SUBAGENTS },
+        (_, i) =>
+          subagent({
+            agentId: `sub-${i}`,
+            tokens: {
+              inputTokens: 0,
+              outputTokens: 0,
+              cacheReadInputTokens: FAN_OUT_MULTIPLIER_CACHE_READ_THRESHOLD - 1,
+              cacheCreationInputTokens: 0,
+            },
+          }),
+      ),
+    }),
+  );
+  assert.equal(flag, null);
+});
+
+test("detectFanOutMultiplier: at least MIN_SUBAGENTS each at/above the threshold flags, reporting only the qualifying count/sum", () => {
+  const qualifying = Array.from(
+    { length: FAN_OUT_MULTIPLIER_MIN_SUBAGENTS },
+    (_, i) =>
+      subagent({
+        agentId: `qualifying-${i}`,
+        tokens: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadInputTokens: FAN_OUT_MULTIPLIER_CACHE_READ_THRESHOLD,
+          cacheCreationInputTokens: 0,
+        },
+      }),
+  );
+  const nonQualifying = subagent({
+    agentId: "below-threshold",
+    tokens: {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadInputTokens: 1,
+      cacheCreationInputTokens: 0,
+    },
+  });
+  const flag = detectFanOutMultiplier(
+    intraNode({ subagents: [...qualifying, nonQualifying] }),
+  );
+  assert.deepEqual(flag, {
+    kind: "fan-out-multiplier",
+    qualifyingCount: FAN_OUT_MULTIPLIER_MIN_SUBAGENTS,
+    totalCacheReadTokens:
+      FAN_OUT_MULTIPLIER_MIN_SUBAGENTS *
+      FAN_OUT_MULTIPLIER_CACHE_READ_THRESHOLD,
+  });
+});
+
+test("computeNodeHotspots: intraNode defaulting to null (omitted param) does not throw and adds no D4b flags", () => {
+  const flags = computeNodeHotspots({
+    derived: derived({
+      cacheReadTokens: 100,
+      cacheCreationTokens: 10,
+      outputTokens: 5,
+      tierMix: { ...zeroTierMix(), sonnet: 115 },
+    }),
+    declaredTier: "sonnet",
+    fatPrefixFlagged: false,
+  });
+  assert.deepEqual(flags, []);
+});
+
+test("computeNodeHotspots: transcript-phase node's intraNode flags surface alongside rollup-level flags", () => {
+  const flags = computeNodeHotspots({
+    derived: derived({
+      cacheReadTokens: 100,
+      cacheCreationTokens: 10,
+      outputTokens: 5,
+      tierMix: { ...zeroTierMix(), sonnet: 115 },
+    }),
+    declaredTier: "sonnet",
+    fatPrefixFlagged: false,
+    intraNode: intraNode({
+      verboseToolOutputs: [{ toolUseId: "tu1", toolName: "Read", sizeKb: 5 }],
+    }),
+  });
+  assert.deepEqual(
+    flags.map((f) => f.kind),
+    ["verbose-tool-output"],
+  );
 });

@@ -87,6 +87,18 @@ const FIXED_STATE: RunState = {
       cost: 0.0,
       gateHistory: [],
     },
+    reviewers: {
+      status: "done",
+      startedAt: "2026-06-17T11:00:00.000Z",
+      endedAt: "2026-06-17T11:45:00.000Z",
+      artifacts: [
+        "/home/testuser/.local/share/dagrunner/runs/test-plan-1234567890/reviewers/findings.json",
+      ],
+      model: "opus",
+      iteration: 1,
+      cost: 1.3,
+      gateHistory: [],
+    },
   },
 };
 
@@ -103,6 +115,25 @@ const FIXED_FRICTION = ["first friction line", "second friction line <&>"];
 //               render path in isolation)
 //   review    — BurnDocError (the D1 error-marker case)
 //   pr        — entirely absent from the map (no burn.json ever written)
+//
+// Burn Monitor Deliverable 4b fixture:
+//   reviewers — phase: "transcript", populated intraNode. The per-model
+//               token figures (opus/sonnet input, cache-read, cache-
+//               creation, and the -2004/-2653 output-token deltas) are
+//               D4a's own real, regression-locked reconciliation numbers
+//               off run 53861-1/review (see DECISIONS.md §
+//               burn-monitor-d4a-intra-node-capture) — reused here instead
+//               of inventing fresh figures, so this fixture exercises the
+//               real shape (dual opus/sonnet models, ~5-13% output
+//               residual) a live transcript-phase report would show.
+//   Three subagents: two ("reviewer-test-adequacy", "reviewer-api-
+//   stability") each clear FAN_OUT_MULTIPLIER_CACHE_READ_THRESHOLD
+//   (500_000 cache-read tokens) — triggering the fan-out-multiplier
+//   hotspot — the third ("reviewer-correctness") does not, proving the
+//   qualifying-only filter. apportionedCostUsd is deliberately NOT in
+//   descending array order (agent-2 > agent-1 > agent-3) — this is the
+//   regression check that renderSubagentDrilldown sorts, not merely
+//   passes through array order.
 // ---------------------------------------------------------------------------
 
 const FIXED_BURN: Record<string, BurnDoc | undefined> = {
@@ -180,6 +211,114 @@ const FIXED_BURN: Record<string, BurnDoc | undefined> = {
     error: "modelUsage missing from SDK result",
   },
   // pr: deliberately absent — no burn.json was ever written for this node.
+  reviewers: {
+    node: "reviewers",
+    sessionId: "sess-reviewers",
+    costUsd: 1.3,
+    schemaVersion: 1,
+    phase: "transcript",
+    models: [
+      {
+        model: "claude-opus-4-8",
+        inputTokens: 7657,
+        outputTokens: 38858,
+        cacheReadInputTokens: 3620542,
+        cacheCreationInputTokens: 214434,
+        webSearchRequests: 0,
+        costUSD: 0.9,
+        contextWindow: 200000,
+        maxOutputTokens: 8192,
+      },
+      {
+        model: "claude-sonnet-4-6",
+        inputTokens: 94,
+        outputTokens: 20450,
+        cacheReadInputTokens: 3597662,
+        cacheCreationInputTokens: 160419,
+        webSearchRequests: 0,
+        costUSD: 0.4,
+        contextWindow: 200000,
+        maxOutputTokens: 8192,
+      },
+    ],
+    derived: {
+      cacheReadTokens: 7218204,
+      cacheCreationTokens: 374853,
+      cacheColdRatio: 374853 / (374853 + 7218204),
+      outputTokens: 59308,
+      tierMix: {
+        opus: 3881491,
+        sonnet: 3778625,
+        haiku: 0,
+        unknown: 0,
+      },
+    },
+    intraNode: {
+      subagents: [
+        {
+          agentId: "agent-1",
+          agentType: "reviewer-test-adequacy",
+          tier: "sonnet",
+          tokens: {
+            inputTokens: 94,
+            outputTokens: 8002,
+            cacheReadInputTokens: 620000,
+            cacheCreationInputTokens: 5000,
+          },
+          apportionedCostUsd: 0.15,
+        },
+        {
+          agentId: "agent-2",
+          agentType: "reviewer-api-stability",
+          tier: "sonnet",
+          tokens: {
+            inputTokens: 50,
+            outputTokens: 4994,
+            cacheReadInputTokens: 560000,
+            cacheCreationInputTokens: 3000,
+          },
+          apportionedCostUsd: 0.22,
+        },
+        {
+          agentId: "agent-3",
+          agentType: "reviewer-correctness",
+          tier: "opus",
+          tokens: {
+            inputTokens: 30,
+            outputTokens: 6540,
+            cacheReadInputTokens: 200000,
+            cacheCreationInputTokens: 1000,
+          },
+          apportionedCostUsd: 0.08,
+        },
+      ],
+      toolCallCounts: { Bash: 12, Read: 5, Edit: 3 },
+      retryCount: 2,
+      verboseToolOutputs: [
+        { toolUseId: "toolu_01abc", toolName: "Read", sizeKb: 42.7 },
+      ],
+      reconciliation: {
+        "claude-opus-4-8": {
+          inputTokens: { delta: 0, deltaPct: 0 },
+          outputTokens: {
+            delta: -2004,
+            deltaPct: -2004 / 38858,
+          },
+          cacheReadInputTokens: { delta: 0, deltaPct: 0 },
+          cacheCreationInputTokens: { delta: 0, deltaPct: 0 },
+        },
+        "claude-sonnet-4-6": {
+          inputTokens: { delta: 0, deltaPct: 0 },
+          outputTokens: {
+            delta: -2653,
+            deltaPct: -2653 / 20450,
+          },
+          cacheReadInputTokens: { delta: 0, deltaPct: 0 },
+          cacheCreationInputTokens: { delta: 0, deltaPct: 0 },
+        },
+      },
+    },
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -357,15 +496,140 @@ test("generateReport: per-model breakdown from models[] renders alongside the ti
 test("generateReport: run-level Token Rollup section shows totals by bucket and by tier", () => {
   const html = generateReport(FIXED_STATE, [], FIXED_BURN);
   assert.ok(html.includes("Token Rollup"));
-  // cacheCreation total = 95 (define) + 2 (implement) = 97
-  assert.ok(html.includes("97"), "rollup cache-creation total must appear");
-  // cacheRead total = 15 (define) + 300 (implement) = 315
-  assert.ok(html.includes("315"), "rollup cache-read total must appear");
-  // output total = 60 (define) + 5 (implement) = 65
-  assert.ok(html.includes("65"), "rollup output total must appear");
+  // cacheCreation total = 95 (define) + 2 (implement) + 374,853 (reviewers) = 374,950
+  assert.ok(
+    html.includes("374,950"),
+    "rollup cache-creation total must appear",
+  );
+  // cacheRead total = 15 (define) + 300 (implement) + 7,218,204 (reviewers) = 7,218,519
+  assert.ok(html.includes("7,218,519"), "rollup cache-read total must appear");
+  // output total = 60 (define) + 5 (implement) + 59,308 (reviewers) = 59,373
+  assert.ok(html.includes("59,373"), "rollup output total must appear");
 });
 
 test("generateReport: Token Rollup section is omitted when no node has valid burn data", () => {
   const html = generateReport(FIXED_STATE, []);
   assert.ok(!html.includes("Token Rollup"));
+});
+
+// ---------------------------------------------------------------------------
+// Intra-Node Attribution (Burn Monitor Deliverable 4b)
+// ---------------------------------------------------------------------------
+
+/** Slices out ONLY the Intra-Node Attribution <section>...</section> block
+ * — bounded at both ends, since "Node: <code>define</code>" also appears
+ * (unrelated) inside the later Gate History section. */
+function intraNodeSectionOf(html: string): string {
+  const start = html.indexOf("<h2>Intra-Node Attribution</h2>");
+  assert.ok(start >= 0, "Intra-Node Attribution section must appear");
+  const end = html.indexOf("</section>", start);
+  assert.ok(end >= 0, "Intra-Node Attribution section must be closed");
+  return html.slice(start, end);
+}
+
+test("generateReport: a rollup-phase node (intraNode null) is entirely unaffected — no Intra-Node Attribution block for it", () => {
+  const html = generateReport(FIXED_STATE, [], FIXED_BURN);
+  const section = intraNodeSectionOf(html);
+  assert.ok(
+    !/Node: <code>define<\/code>/.test(section),
+    "define (phase: rollup) must not get an Intra-Node Attribution block",
+  );
+  assert.ok(
+    !/Node: <code>implement<\/code>/.test(section),
+    "implement (phase: rollup) must not get an Intra-Node Attribution block",
+  );
+});
+
+test("generateReport: Intra-Node Attribution section omitted entirely when no node has phase: transcript", () => {
+  const rollupOnly: Record<string, BurnDoc | undefined> = {
+    define: FIXED_BURN["define"],
+    implement: FIXED_BURN["implement"],
+  };
+  const html = generateReport(FIXED_STATE, [], rollupOnly);
+  assert.ok(!html.includes("Intra-Node Attribution"));
+});
+
+test("generateReport: subagent fan-out drilldown renders one row per subagent, sorted descending by apportioned cost", () => {
+  const html = generateReport(FIXED_STATE, [], FIXED_BURN);
+  const section = intraNodeSectionOf(html);
+  const idxApiStability = section.indexOf("reviewer-api-stability"); // $0.2200 — highest
+  const idxTestAdequacy = section.indexOf("reviewer-test-adequacy"); // $0.1500
+  const idxCorrectness = section.indexOf("reviewer-correctness"); // $0.0800 — lowest
+  assert.ok(
+    idxApiStability >= 0 && idxTestAdequacy >= 0 && idxCorrectness >= 0,
+    "all three reviewer dimensions must render",
+  );
+  assert.ok(
+    idxApiStability < idxTestAdequacy && idxTestAdequacy < idxCorrectness,
+    "subagents must be sorted DESCENDING by apportionedCostUsd, not array order",
+  );
+  assert.ok(html.includes("$0.2200"), "highest apportioned cost must render");
+  assert.ok(html.includes("$0.0800"), "lowest apportioned cost must render");
+});
+
+test("generateReport: tool-call counts render sorted descending by count", () => {
+  const html = generateReport(FIXED_STATE, [], FIXED_BURN);
+  const section = intraNodeSectionOf(html);
+  const idxBash = section.indexOf("<code>Bash</code>"); // count 12 — highest
+  const idxRead = section.indexOf("<code>Read</code>"); // count 5
+  const idxEdit = section.indexOf("<code>Edit</code>"); // count 3 — lowest
+  assert.ok(idxBash >= 0 && idxRead >= 0 && idxEdit >= 0);
+  assert.ok(
+    idxBash < idxRead && idxRead < idxEdit,
+    "tool calls must render sorted DESCENDING by count",
+  );
+});
+
+test("generateReport: nonzero retry count renders", () => {
+  const html = generateReport(FIXED_STATE, [], FIXED_BURN);
+  assert.ok(html.includes("Retry count: 2"));
+});
+
+test("generateReport: verbose tool output renders tool name + size, never the absolute transcript path", () => {
+  const html = generateReport(FIXED_STATE, [], FIXED_BURN);
+  assert.ok(html.includes("Read"));
+  assert.ok(html.includes("42.7 KB"));
+  assert.ok(
+    !html.includes("toolu_01abc"),
+    "the raw toolUseId (Claude Code internal transcript linkage) must not be rendered",
+  );
+});
+
+test("generateReport: reconciliation deltas render plainly for both models, matching the stored delta/deltaPct", () => {
+  const html = generateReport(FIXED_STATE, [], FIXED_BURN);
+  assert.ok(html.includes("claude-opus-4-8"));
+  assert.ok(html.includes("claude-sonnet-4-6"));
+  // opus output-token delta: -2004, deltaPct -2004/38858 ≈ -5.157239% → "-5.16%"
+  assert.ok(
+    html.includes("-5.16%"),
+    "opus output-token reconciliation percentage must render to 2 decimal places",
+  );
+  // sonnet output-token delta: -2653, deltaPct -2653/20450 ≈ -12.973105% → "-12.97%"
+  assert.ok(
+    html.includes("-12.97%"),
+    "sonnet output-token reconciliation percentage must render to 2 decimal places",
+  );
+  assert.ok(html.includes("-2,004"), "opus output-token raw delta must render");
+  assert.ok(
+    html.includes("-2,653"),
+    "sonnet output-token raw delta must render",
+  );
+});
+
+test("generateReport: verbose-tool-output and fan-out-multiplier hotspot badges fire for the transcript-phase node", () => {
+  const html = generateReport(FIXED_STATE, [], FIXED_BURN);
+  assert.ok(
+    html.includes("verbose tool output"),
+    "verbose-tool-output badge must render",
+  );
+  assert.ok(
+    html.includes("fan-out multiplier"),
+    "fan-out-multiplier badge must render",
+  );
+  // Only agent-1 (620,000) and agent-2 (560,000) qualify (>= 500,000);
+  // agent-3 (200,000) does not — qualifying count is 2, sum is 1,180,000.
+  assert.ok(
+    html.includes("2 subagents, 1,180,000 cache-read tokens total"),
+    "fan-out-multiplier badge must report only the qualifying count/sum",
+  );
 });

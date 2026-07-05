@@ -116,6 +116,15 @@
           <td>&mdash;</td>
           <td style="font-size:0.85em;color:#c62828;">&mdash;</td>
         </tr>
+        <tr>
+          <td><code>reviewers</code></td>
+          <td><span style="background:#2e7d32;color:#fff;padding:2px 8px;border-radius:3px;font-size:0.85em;font-weight:600;">done</span></td>
+          <td style="font-size:0.85em;">opus</td>
+          <td style="text-align:center;">1</td>
+          <td style="text-align:right;">$1.3000</td>
+          <td><a href="file:///home/testuser/.local/share/dagrunner/runs/test-plan-1234567890/reviewers/findings.json" style="font-family:monospace;font-size:0.85em;">findings.json</a></td>
+          <td style="font-size:0.85em;color:#c62828;">&mdash;</td>
+        </tr>
         </tbody>
       </table>
     </section>
@@ -123,7 +132,7 @@
     <section>
       <h2>Cost Totals</h2>
       <table>
-        <tr><th>Total Cost</th><td><strong>$0.1234</strong></td></tr>
+        <tr><th>Total Cost</th><td><strong>$1.4234</strong></td></tr>
       </table>
     </section>
   
@@ -169,6 +178,140 @@
           <td><code>pr</code></td>
           <td colspan="6" style="color:#757575;font-style:italic;">no burn data</td>
         </tr>
+        <tr>
+          <td><code>reviewers</code></td>
+          <td style="text-align:right;">374,853</td>
+          <td style="text-align:right;">7,218,204</td>
+          <td style="text-align:right;">59,308</td>
+          <td>opus: 3,881,491, sonnet: 3,778,625</td>
+          <td style="font-size:0.85em;">claude-opus-4-8: 3,881,491 tok ($0.9000) | claude-sonnet-4-6: 3,778,625 tok ($0.4000)</td>
+          <td><span style="background:#8d6e63;color:#fff;padding:2px 8px;border-radius:3px;font-size:0.8em;font-weight:600;margin:0 4px 4px 0;display:inline-block;">verbose tool output — 1 output(s), 42.7 KB total</span><span style="background:#5c6bc0;color:#fff;padding:2px 8px;border-radius:3px;font-size:0.8em;font-weight:600;margin:0 4px 4px 0;display:inline-block;">fan-out multiplier — 2 subagents, 1,180,000 cache-read tokens total</span></td>
+        </tr>
+        </tbody>
+      </table>
+    </section>
+  
+    <section>
+      <h2>Intra-Node Attribution</h2>
+      
+      <h3>Node: <code>reviewers</code></h3>
+      
+      <h4>Subagent Fan-Out</h4>
+      <table>
+        <thead>
+          <tr>
+            <th>Agent Type</th>
+            <th>Tier</th>
+            <th>Input</th>
+            <th>Output</th>
+            <th>Cache-Read</th>
+            <th>Cache-Creation</th>
+            <th>Apportioned Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          
+          <tr>
+            <td><code>reviewer-api-stability</code></td>
+            <td>sonnet</td>
+            <td style="text-align:right;">50</td>
+            <td style="text-align:right;">4,994</td>
+            <td style="text-align:right;">560,000</td>
+            <td style="text-align:right;">3,000</td>
+            <td style="text-align:right;">$0.2200</td>
+          </tr>
+          <tr>
+            <td><code>reviewer-test-adequacy</code></td>
+            <td>sonnet</td>
+            <td style="text-align:right;">94</td>
+            <td style="text-align:right;">8,002</td>
+            <td style="text-align:right;">620,000</td>
+            <td style="text-align:right;">5,000</td>
+            <td style="text-align:right;">$0.1500</td>
+          </tr>
+          <tr>
+            <td><code>reviewer-correctness</code></td>
+            <td>opus</td>
+            <td style="text-align:right;">30</td>
+            <td style="text-align:right;">6,540</td>
+            <td style="text-align:right;">200,000</td>
+            <td style="text-align:right;">1,000</td>
+            <td style="text-align:right;">$0.0800</td>
+          </tr>
+        </tbody>
+      </table>
+      
+      <h4>Tool Calls</h4>
+      <table>
+        <thead><tr><th>Tool</th><th>Count</th></tr></thead>
+        <tbody>
+          
+          <tr><td><code>Bash</code></td><td style="text-align:right;">12</td></tr>
+          <tr><td><code>Read</code></td><td style="text-align:right;">5</td></tr>
+          <tr><td><code>Edit</code></td><td style="text-align:right;">3</td></tr>
+        </tbody>
+      </table>
+      <p>Retry count: 2</p>
+      
+      <h4>Verbose Tool Outputs</h4>
+      <ul>
+        <li>Read — 42.7 KB</li>
+      </ul>
+      
+      <h4>Reconciliation (intra-node vs. rollup — observational)</h4>
+      
+      <h5>claude-opus-4-8</h5>
+      <table>
+        <thead><tr><th>Field</th><th>Delta</th><th>Delta %</th></tr></thead>
+        <tbody>
+          
+          <tr>
+            <td>Input Tokens</td>
+            <td style="text-align:right;">0</td>
+            <td style="text-align:right;">0.00%</td>
+          </tr>
+          <tr>
+            <td>Output Tokens</td>
+            <td style="text-align:right;">-2,004</td>
+            <td style="text-align:right;">-5.16%</td>
+          </tr>
+          <tr>
+            <td>Cache-Read Tokens</td>
+            <td style="text-align:right;">0</td>
+            <td style="text-align:right;">0.00%</td>
+          </tr>
+          <tr>
+            <td>Cache-Creation Tokens</td>
+            <td style="text-align:right;">0</td>
+            <td style="text-align:right;">0.00%</td>
+          </tr>
+        </tbody>
+      </table>
+      <h5>claude-sonnet-4-6</h5>
+      <table>
+        <thead><tr><th>Field</th><th>Delta</th><th>Delta %</th></tr></thead>
+        <tbody>
+          
+          <tr>
+            <td>Input Tokens</td>
+            <td style="text-align:right;">0</td>
+            <td style="text-align:right;">0.00%</td>
+          </tr>
+          <tr>
+            <td>Output Tokens</td>
+            <td style="text-align:right;">-2,653</td>
+            <td style="text-align:right;">-12.97%</td>
+          </tr>
+          <tr>
+            <td>Cache-Read Tokens</td>
+            <td style="text-align:right;">0</td>
+            <td style="text-align:right;">0.00%</td>
+          </tr>
+          <tr>
+            <td>Cache-Creation Tokens</td>
+            <td style="text-align:right;">0</td>
+            <td style="text-align:right;">0.00%</td>
+          </tr>
         </tbody>
       </table>
     </section>
@@ -176,12 +319,12 @@
     <section>
       <h2>Token Rollup</h2>
       <table>
-        <tr><th>Cache-Creation Tokens</th><td style="text-align:right;">97</td></tr>
-        <tr><th>Cache-Read Tokens</th><td style="text-align:right;">315</td></tr>
-        <tr><th>Output Tokens</th><td style="text-align:right;">65</td></tr>
-        <tr><th>Cold-Reload Tax (run-wide)</th><td style="text-align:right;">23.5%</td></tr>
-        <tr><th>Opus Tokens</th><td style="text-align:right;">40</td></tr>
-        <tr><th>Sonnet Tokens</th><td style="text-align:right;">250</td></tr>
+        <tr><th>Cache-Creation Tokens</th><td style="text-align:right;">374,950</td></tr>
+        <tr><th>Cache-Read Tokens</th><td style="text-align:right;">7,218,519</td></tr>
+        <tr><th>Output Tokens</th><td style="text-align:right;">59,373</td></tr>
+        <tr><th>Cold-Reload Tax (run-wide)</th><td style="text-align:right;">4.9%</td></tr>
+        <tr><th>Opus Tokens</th><td style="text-align:right;">3,881,531</td></tr>
+        <tr><th>Sonnet Tokens</th><td style="text-align:right;">3,778,875</td></tr>
         <tr><th>Haiku Tokens</th><td style="text-align:right;">0</td></tr>
         <tr><th>Unclassified Tokens</th><td style="text-align:right;">407</td></tr>
       </table>

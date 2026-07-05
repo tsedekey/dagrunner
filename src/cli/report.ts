@@ -16,9 +16,18 @@
  * reviewer-subagent fan-out), plus hotspot badges (cold-reload-tax /
  * tier-leak / fat-fixed-prefix / output-heavy) computed by the pure
  * functions in runtime/burn.ts. This module stays pure (no fs) — cli.ts
- * reads burn.json per node and passes the resulting map in. intraNode
- * stays null / phase stays "rollup" for the lifetime of this deliverable
- * — no transcript-level rendering here.
+ * reads burn.json per node and passes the resulting map in.
+ *
+ * Burn Monitor Deliverable 4b: additionally renders `doc.intraNode` for any
+ * node whose burn.json has `phase: "transcript"` (D4a's capture — see
+ * runtime/intra-node.ts) — a subagent fan-out drilldown (per-reviewer
+ * token + apportioned cost, sorted by cost descending), tool-call counts,
+ * retry count, verbose-tool-output entries, and reconciliation deltas
+ * (rendered plainly, observational — never alarming/pass-fail styling).
+ * A "rollup"-phase node (intraNode null) renders exactly as it did before
+ * D4b — no new markup, no new hotspot badges beyond the two D4b adds
+ * (verbose-tool-output, fan-out-multiplier), both of which also degrade to
+ * "no flag" on a null intraNode.
  */
 
 import type { RunState, NodeState, GateHistoryEntry } from "../core/state.js";
@@ -34,6 +43,11 @@ import {
   computeNodeHotspots,
   declaredTierFromModel,
 } from "../runtime/burn.js";
+import type {
+  IntraNodeData,
+  IntraNodeSubagent,
+  ModelReconciliation,
+} from "../runtime/intra-node.js";
 
 // ---------------------------------------------------------------------------
 // HTML-escape (prevents XSS from gate comments, paths, error strings)
@@ -173,6 +187,8 @@ const HOTSPOT_COLORS: Record<HotspotFlag["kind"], string> = {
   "tier-leak": "#c62828",
   "fat-fixed-prefix": "#6a1b9a",
   "output-heavy": "#00838f",
+  "verbose-tool-output": "#8d6e63",
+  "fan-out-multiplier": "#5c6bc0",
 };
 
 function hotspotDetail(flag: HotspotFlag): string {
@@ -185,6 +201,10 @@ function hotspotDetail(flag: HotspotFlag): string {
       return `fat fixed prefix — ${formatInt(flag.cacheCreationTokens)} cache-creation tokens`;
     case "output-heavy":
       return `output-heavy — ${(flag.outputShare * 100).toFixed(0)}% output`;
+    case "verbose-tool-output":
+      return `verbose tool output — ${flag.count} output(s), ${flag.totalKb.toFixed(1)} KB total`;
+    case "fan-out-multiplier":
+      return `fan-out multiplier — ${flag.qualifyingCount} subagents, ${formatInt(flag.totalCacheReadTokens)} cache-read tokens total`;
   }
 }
 
@@ -268,6 +288,7 @@ function renderBurnSection(
       derived: doc.derived,
       declaredTier,
       fatPrefixFlagged: fatPrefixFlagged.has(id),
+      intraNode: doc.intraNode,
     });
     const badges =
       flags.length > 0 ? flags.map(hotspotBadge).join("") : "&mdash;";
@@ -303,6 +324,190 @@ function renderBurnSection(
           ${rows.join("")}
         </tbody>
       </table>
+    </section>`;
+}
+
+// ---------------------------------------------------------------------------
+// Intra-Node Attribution (Burn Monitor Deliverable 4b)
+//
+// Renders `doc.intraNode` for any node whose burn.json has
+// `phase: "transcript"` (D4a's capture — src/runtime/intra-node.ts). A
+// "rollup"-phase node (intraNode null) never reaches these renderers —
+// renderIntraNodeSection filters to transcript-phase nodes up front.
+// ---------------------------------------------------------------------------
+
+/** `$X.XXXX` — same convention renderModelBreakdown/renderCostTotals use
+ * elsewhere in this report; not a new format. */
+function formatUsd(n: number): string {
+  return `$${n.toFixed(4)}`;
+}
+
+/** Subagent fan-out drilldown: one row per subagent, sorted DESCENDING by
+ * apportionedCostUsd (highest-cost reviewer dimension first) — the
+ * headline "split the review node's cost per reviewer" deliverable. */
+function renderSubagentDrilldown(subagents: IntraNodeSubagent[]): string {
+  if (subagents.length === 0) return "";
+  const sorted = [...subagents].sort(
+    (a, b) => b.apportionedCostUsd - a.apportionedCostUsd,
+  );
+  const rows = sorted.map((s) => {
+    const t = s.tokens;
+    return `
+          <tr>
+            <td><code>${esc(s.agentType)}</code></td>
+            <td>${esc(s.tier)}</td>
+            <td style="text-align:right;">${formatInt(t.inputTokens)}</td>
+            <td style="text-align:right;">${formatInt(t.outputTokens)}</td>
+            <td style="text-align:right;">${formatInt(t.cacheReadInputTokens)}</td>
+            <td style="text-align:right;">${formatInt(t.cacheCreationInputTokens)}</td>
+            <td style="text-align:right;">${esc(formatUsd(s.apportionedCostUsd))}</td>
+          </tr>`;
+  });
+  return `
+      <h4>Subagent Fan-Out</h4>
+      <table>
+        <thead>
+          <tr>
+            <th>Agent Type</th>
+            <th>Tier</th>
+            <th>Input</th>
+            <th>Output</th>
+            <th>Cache-Read</th>
+            <th>Cache-Creation</th>
+            <th>Apportioned Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.join("")}
+        </tbody>
+      </table>`;
+}
+
+/** Tool calls by name, sorted DESCENDING by count. */
+function renderToolCallCounts(counts: Record<string, number>): string {
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  if (entries.length === 0) return "";
+  const rows = entries.map(
+    ([name, count]) => `
+          <tr><td><code>${esc(name)}</code></td><td style="text-align:right;">${formatInt(count)}</td></tr>`,
+  );
+  return `
+      <h4>Tool Calls</h4>
+      <table>
+        <thead><tr><th>Tool</th><th>Count</th></tr></thead>
+        <tbody>
+          ${rows.join("")}
+        </tbody>
+      </table>`;
+}
+
+/** One line per verbose (externalized) tool output: tool name + size in
+ * KB. Deliberately omits toolUseId / the on-disk transcript path — see
+ * module header and the D4b brief's own explicit scope decision: the path
+ * is host-local Claude Code internal-transcript clutter with no value to a
+ * report reader, unlike every other artifact link in this report (all
+ * in-repo/run-directory paths). */
+function renderVerboseToolOutputs(
+  outputs: IntraNodeData["verboseToolOutputs"],
+): string {
+  if (outputs.length === 0) return "";
+  const lines = outputs.map(
+    (o) => `${esc(o.toolName)} — ${o.sizeKb.toFixed(1)} KB`,
+  );
+  return `
+      <h4>Verbose Tool Outputs</h4>
+      <ul>
+        ${lines.map((l) => `<li>${l}</li>`).join("")}
+      </ul>`;
+}
+
+const RECONCILIATION_FIELD_LABELS: Array<{
+  key: keyof ModelReconciliation;
+  label: string;
+}> = [
+  { key: "inputTokens", label: "Input Tokens" },
+  { key: "outputTokens", label: "Output Tokens" },
+  { key: "cacheReadInputTokens", label: "Cache-Read Tokens" },
+  { key: "cacheCreationInputTokens", label: "Cache-Creation Tokens" },
+];
+
+/** Per-model reconciliation of intra-node token sums against the trusted
+ * rollup — rendered plainly (no color-coding, no "this is broken"
+ * styling): this is burn-capture's own observational self-check, not a
+ * pass/fail gate (see runtime/intra-node.ts's module header and
+ * DECISIONS.md § burn-monitor-d4a-intra-node-capture for the known,
+ * expected ~5-13% output-token baseline this reproduces). */
+function renderReconciliation(
+  reconciliation: Record<string, ModelReconciliation>,
+): string {
+  const modelIds = Object.keys(reconciliation);
+  if (modelIds.length === 0) return "";
+  const blocks = modelIds.map((modelId) => {
+    const rec = reconciliation[modelId]!;
+    const rows = RECONCILIATION_FIELD_LABELS.map(({ key, label }) => {
+      const field = rec[key];
+      const pct = (field.deltaPct * 100).toFixed(2);
+      return `
+          <tr>
+            <td>${esc(label)}</td>
+            <td style="text-align:right;">${formatInt(field.delta)}</td>
+            <td style="text-align:right;">${esc(pct)}%</td>
+          </tr>`;
+    });
+    return `
+      <h5>${esc(modelId)}</h5>
+      <table>
+        <thead><tr><th>Field</th><th>Delta</th><th>Delta %</th></tr></thead>
+        <tbody>
+          ${rows.join("")}
+        </tbody>
+      </table>`;
+  });
+  return `
+      <h4>Reconciliation (intra-node vs. rollup — observational)</h4>
+      ${blocks.join("")}`;
+}
+
+/** Top-level Intra-Node Attribution section: one block per node whose
+ * burn.json is `phase: "transcript"` (intraNode !== null). A node still on
+ * `phase: "rollup"` never reaches this function's per-node rendering —
+ * filtered out up front, so it is entirely unaffected by D4b. Returns ""
+ * (whole section omitted) when no node in the run has transcript-phase
+ * data — mirrors renderGateHistory's empty-return convention. */
+function renderIntraNodeSection(
+  burnByNode: Record<string, BurnDoc | undefined>,
+): string {
+  const transcriptNodes: Array<{ id: string; intraNode: IntraNodeData }> = [];
+  for (const [id, doc] of Object.entries(burnByNode)) {
+    if (
+      doc !== undefined &&
+      !("error" in doc) &&
+      doc.phase === "transcript" &&
+      doc.intraNode !== null
+    ) {
+      transcriptNodes.push({ id, intraNode: doc.intraNode });
+    }
+  }
+  if (transcriptNodes.length === 0) return "";
+
+  const blocks = transcriptNodes.map(({ id, intraNode: data }) => {
+    const retryLine =
+      data.retryCount > 0
+        ? `<p>Retry count: ${formatInt(data.retryCount)}</p>`
+        : "";
+    return `
+      <h3>Node: <code>${esc(id)}</code></h3>
+      ${renderSubagentDrilldown(data.subagents)}
+      ${renderToolCallCounts(data.toolCallCounts)}
+      ${retryLine}
+      ${renderVerboseToolOutputs(data.verboseToolOutputs)}
+      ${renderReconciliation(data.reconciliation)}`;
+  });
+
+  return `
+    <section>
+      <h2>Intra-Node Attribution</h2>
+      ${blocks.join("")}
     </section>`;
 }
 
@@ -407,6 +612,7 @@ export function generateReport(
   const nodeTable = renderNodeTable(state.nodes);
   const costTotals = renderCostTotals(state.nodes);
   const burnSection = renderBurnSection(state.nodes, burnByNode);
+  const intraNodeSection = renderIntraNodeSection(burnByNode);
   const burnRollup = renderBurnRollup(burnByNode);
   const gateHistory = renderGateHistory(state.nodes);
   const friction = renderFriction(frictionLines);
@@ -467,6 +673,7 @@ export function generateReport(
   ${nodeTable}
   ${costTotals}
   ${burnSection}
+  ${intraNodeSection}
   ${burnRollup}
   ${gateHistory}
   ${friction}
