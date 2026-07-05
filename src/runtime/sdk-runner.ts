@@ -31,7 +31,8 @@ import type { Node } from "../core/types.js";
 import type { DagrunnerConfig } from "../config/xdg.js";
 import { applyNodeEnv, buildNodeEnv } from "./launcher.js";
 import { readWorkProfileMcpServers } from "../config/settings-seed.js";
-import { buildBurn } from "./burn.js";
+import { buildBurn, isBurnDocOk, type BurnDocOk } from "./burn.js";
+import { computeIntraNode } from "./intra-node.js";
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -300,6 +301,8 @@ export function makeSDKRunner(
     // writing one artifact never suppresses the other. buildBurn() is total
     // (never throws): missing/malformed modelUsage yields an explicit error
     // marker doc, never a silently-zeroed "ok" shape — write it unchanged.
+    const burnJsonPath = join(ctx.artifactsDir, "burn.json");
+    let writtenBurnDoc: BurnDocOk | undefined;
     try {
       const burnDoc = buildBurn({
         node: nodeId,
@@ -307,13 +310,44 @@ export function makeSDKRunner(
         costUsd: totalCost,
         modelUsage,
       });
-      writeFileSync(
-        join(ctx.artifactsDir, "burn.json"),
-        JSON.stringify(burnDoc, null, 2),
-        "utf8",
-      );
+      writeFileSync(burnJsonPath, JSON.stringify(burnDoc, null, 2), "utf8");
+      if (isBurnDocOk(burnDoc)) {
+        writtenBurnDoc = burnDoc;
+      }
     } catch {
       // observability-only — never block a node result
+    }
+
+    // D4a: intra-node attribution enrichment (Burn Monitor Deliverable 4a).
+    // Independent try/catch, deliberately separate from the rollup write
+    // above — a failure locating/parsing the raw session JSONL must never
+    // block the node and must never affect the already-written rollup
+    // burn.json (which stands unchanged as the fallback: phase "rollup",
+    // intraNode null). Only attempted when the rollup write above actually
+    // produced an ok doc (never on an error-marker doc — nothing to enrich).
+    try {
+      if (writtenBurnDoc !== undefined) {
+        const intraNode = computeIntraNode({
+          claudeConfigDir: config.claudeConfigDir ?? join(homedir(), ".claude"),
+          sessionId: finalSessionId,
+          rollupModels: writtenBurnDoc.models,
+        });
+        if (intraNode !== null) {
+          const enriched: BurnDocOk = {
+            ...writtenBurnDoc,
+            phase: "transcript",
+            intraNode,
+          };
+          writeFileSync(
+            burnJsonPath,
+            JSON.stringify(enriched, null, 2),
+            "utf8",
+          );
+        }
+      }
+    } catch {
+      // observability-only — never block a node result; the rollup doc
+      // written above stands unchanged (phase "rollup", intraNode null).
     }
 
     if (sdkError !== null) {

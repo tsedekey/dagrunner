@@ -10,10 +10,19 @@
  * testable in isolation from the SDK message loop. sdk-runner.ts calls
  * buildBurn() once per node, at the same write-site as friction.jsonl.
  *
- * v1 scope (this deliverable): phase is always "rollup", intraNode is
- * always null. Transcript-level parsing and intra-node tier-leak detection
- * are later, separately-gated deliverables — not implemented here.
+ * v1 scope (D1/D2): phase is always "rollup", intraNode is always null.
+ *
+ * D4a (intra-node attribution capture, see src/runtime/intra-node.ts)
+ * extends this: when sdk-runner.ts successfully parses the raw session
+ * JSONL, it overwrites the written burn.json with phase: "transcript" and
+ * a populated intraNode. When parsing isn't attempted or fails, phase
+ * stays "rollup" and intraNode stays null — this module's own buildBurn()
+ * always produces the rollup shape; enrichment is a later, independent
+ * step, never inline here (see BurnDocOk's widened phase/intraNode types
+ * below, and isBurnDocOk()).
  */
+
+import type { IntraNodeData } from "./intra-node.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -53,10 +62,14 @@ export type BurnDocOk = {
   sessionId: string;
   costUsd: number;
   schemaVersion: 1;
-  phase: "rollup";
+  // "rollup": D1/D2 shape, intraNode always null (the only shape this
+  // module's own buildBurn() ever produces). "transcript": D4a enriched
+  // this doc in-place after buildBurn() ran — see src/runtime/intra-node.ts
+  // and sdk-runner.ts's independent enrichment try/catch.
+  phase: "rollup" | "transcript";
   models: BurnModelEntry[];
   derived: BurnDerived;
-  intraNode: null;
+  intraNode: IntraNodeData | null;
 };
 
 export type BurnDocError = {
@@ -67,6 +80,14 @@ export type BurnDocError = {
 };
 
 export type BurnDoc = BurnDocOk | BurnDocError;
+
+/** Type guard narrowing BurnDoc -> BurnDocOk. Reused by sdk-runner.ts's
+ * D4a enrichment step to decide whether a just-built doc is eligible for
+ * intra-node enrichment (an error-marker doc never is). Matches the same
+ * `!("error" in d)` narrowing report.ts already uses inline. */
+export function isBurnDocOk(doc: BurnDoc): doc is BurnDocOk {
+  return !("error" in doc);
+}
 
 // ---------------------------------------------------------------------------
 // Model id -> tier inversion
