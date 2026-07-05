@@ -270,7 +270,9 @@ Goal: free inside the worktree, read anywhere, mutation/network outside hard-blo
 - **Known reality from the build:** `gh` and `git push` do NOT work inside the Seatbelt sandbox (TLS cert mismatch with the proxy). The `pr` node performs push / PR-creation via Node.js **outside** the sandbox. **This is the key sibling lesson: anything using `gh` must run un-sandboxed** — which the siblings are (interactive commands, not nodes).
 - Node-native `fetch`/undici ignores the proxy and breaks under the sandbox (npm/git/tsc respect it).
 - **Two contexts, do not conflate:** the agent BUILDING dagrunner runs bypassPermissions + fail-closed deny-guard (NOT Seatbelt); dagrunner RUNTIME nodes run Seatbelt. Seatbelt is built into macOS.
-- **Two-posture permission rule (night-mode):** runtime nodes have two SDK `permissionMode` settings — `acceptEdits` for attended runs (human is present and can answer prompts) and `bypassPermissions` for night-mode (`--night` flag). The safety boundary — `sandbox.enabled: true` + fail-closed deny-guard hook — is written by `buildSeededSettings` independently of `permissionMode` and is never weakened by night-mode. Bypassing prompts (night) means "don't hang waiting for a human at 3am"; it does NOT remove the kernel- and hook-enforced mutation fence. `selectPermissionMode(nightMode?)` in `sdk-runner.ts` is the single decision point, exported and unit-tested.
+- **Two-posture permission rule (night-mode):** runtime nodes have two SDK `permissionMode` settings — `acceptEdits` for attended runs (human is present and can answer prompts) and `bypassPermissions` for night-mode (`--night` flag). The safety boundary — the Bash allow/deny list + fail-closed deny-guard hook (see footnote below) — is written by `buildSeededSettings` independently of `permissionMode` and is never weakened by night-mode. Bypassing prompts (night) means "don't hang waiting for a human at 3am"; it does NOT remove the hook-enforced mutation fence. `selectPermissionMode(nightMode?)` in `sdk-runner.ts` is the single decision point, exported and unit-tested.
+
+> **Footnote — this section is partly stale (kept for the historical Seatbelt design intent above, corrected here):** `sandbox.enabled` has been `false` in `buildSeededSettings` since commit `3015634` ("disable filesystem sandbox; allow localhost for Maven and seed-data") — Seatbelt kernel enforcement described above is NOT what's active today. The real boundary is the Bash allow/deny list in `src/config/settings-seed.ts` (`./mvnw *`/`mvn *`/`git *`/`npm *` etc. allow-listed; `rm -rf`/`sudo`/force-push/`.env` deny-listed) plus the PreToolUse deny-guard hook — see `DECISIONS.md § night-mode-permission-posture` for the full history and `§ verify-autonomy-remove-election` for why this mattered for the verify redesign (§3d): the sandbox was never actually blocking Maven/Docker-based build+test+acceptance automation by the time verify was made autonomous, so there was no permission-model change needed to enable it. `gh`/`git push` working or not working un-sandboxed (next bullet) is therefore also no longer a Seatbelt-vs-proxy TLS story — it predates the `3015634` change and has not been re-verified against the current deny-guard-only boundary.
 
 ---
 
@@ -342,12 +344,12 @@ All four thresholds (`COLD_RELOAD_TAX_THRESHOLD`, `OUTPUT_HEAVY_SHARE_THRESHOLD`
 
 All three: Claude Code commands in the **Camunda monorepo's private `.claude/`** (alongside `/pr-review`, gitignored via `.git/info/exclude`), **copied into each worktree by dagrunner's seed/sync** and RUN inside the worktree (where the built code, PR branch, and cluster live). Edit the canonical copy in DEVHARNESS_SRC; the worktree copy is ephemeral. Interactive, human-driven, **NOT sandboxed** (they need Docker, host ports, `gh`, broad network — exactly why they're commands, not nodes). Run under CLAUDE_CONFIG_DIR=~/.claude-work. Built one at a time, in order.
 
-> DROPPED: the dedicated "/verify-demo environment creator" (DMS-based cluster + breakpoint placement). The **c8ctl dev plugin** spins up a configured local OC smoothly, making a separate cluster-creator command unnecessary. The **Debugger MCP Server (DMS)** is parked for a FUTURE bug-fix / issue-investigation workflow (where programmatic breakpoints aid an investigating agent) — it has no role in the feature-task workflow. verify emits only `seeding-spec.json` + `manual-test.md` (see §3); the code-trail the old `tour-spec.json` carried is now folded into the human-readable `manual-test.md`, and no automated breakpoint-placer consumes it.
+> DROPPED: the dedicated "/verify-demo environment creator" (DMS-based cluster + breakpoint placement). The **c8ctl dev plugin** spins up a configured local OC smoothly, making a separate cluster-creator command unnecessary. The **Debugger MCP Server (DMS)** is parked for a FUTURE bug-fix / issue-investigation workflow (where programmatic breakpoints aid an investigating agent) — it has no role in the feature-task workflow. **Since the verify-autonomy change (§3d), the pipeline's `verify` node no longer emits `seeding-spec.json`/`manual-test.md` at all** — that generation moved to the on-demand `/manual-smoke` sibling (§10.4). The code-trail the old `tour-spec.json` carried is folded into `manual-test.md`, and no automated breakpoint-placer consumes it.
 
 ### 10.1 seed-data (Sibling 1)
 
 - Assumes the human has ALREADY spun up a local Orchestration Cluster via the **c8ctl dev plugin** (smooth, human-driven — this command does NOT create or tear down the cluster).
-- Consumes `seeding-spec.json` (from the verify node). Seeds the running cluster via **c8ctl**: resolve abstract deployments to concrete BPMN (the spec gives descriptions, not files), deploy `deployments[]`, start `instances[]` with their variables, capture instance keys, and confirm `expected_observations[]` are reachable (ES doc present; REST call recorded but not asserted — the human observes the value).
+- Consumes `seeding-spec.json` — **since §3d, this comes from `/manual-smoke` (§10.4), invoked on demand, not from the pipeline's `verify` node** (verify no longer produces this file at all). Seeds the running cluster via **c8ctl**: resolve abstract deployments to concrete BPMN (the spec gives descriptions, not files), deploy `deployments[]`, start `instances[]` with their variables, capture instance keys, and confirm `expected_observations[]` are reachable (ES doc present; REST call recorded but not asserted — the human observes the value).
 - If no OC is reachable, fail loud telling the human to start one first.
 - Named generically (`/seed-data`, not demo-specific) so it is reusable for manual testing, reproduction, and investigation — not only feature demos.
 
@@ -397,6 +399,26 @@ since the last processed marker.
 gh-aw deliberately rejected (its async edge is cancelled by the human gate; safe-outputs
 governance redundant with never-auto-post; data-governance cost not worth it). Revisit only if
 this becomes team-scale, multi-repo, no-single-human-gate infra.
+
+### 10.4 manual-smoke (Sibling 4 — added by the verify-autonomy change, §3d)
+
+`payload/siblings/commands/manual-smoke.md`. Generates the human-readable `seeding-spec.json` +
+`manual-test.md` pair the pipeline's `verify` node used to write before verify became autonomous
+(§3d, `DECISIONS.md § verify-autonomy-remove-election`) — relocated here rather than deleted,
+since the manual-walkthrough value didn't disappear, only the reason to gate on it did.
+
+- **Invocation:** `/manual-smoke [run-id]`, run on demand against any completed (or past-Gate-1)
+  run's existing artifacts — bootstrap logic (run/worktree/guide resolution) lives in
+  `payload/siblings/scripts/manual-smoke/phase-0-bootstrap.sh`.
+- **Read-only from the worktree** — never modifies worktree files, only writes into the run's own
+  `manual-smoke/` artifact subdirectory (so it can be invoked repeatedly, including against a run
+  whose `verify` node failed its `outcomeGate`, without disturbing pipeline state).
+- **Gates nothing.** Unlike the removed verify-election, this sibling has no pipeline effect —
+  it exists purely for a human who wants a walkthrough, independent of that run's `verify` outcome.
+- Reads the same input priority order the old verify-guide used: run artifacts (`plan.md`,
+  `define/guide.md` or `reproduce/guide.md`, `implement`/`review` outputs) → git log → git diff →
+  OpenAPI spec (to ground REST observations), producing the same two output files `seed-data`
+  (§10.1) already knows how to consume.
 
 ### Removed from scope
 
