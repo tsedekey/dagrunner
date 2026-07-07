@@ -51,6 +51,16 @@ These facts are pre-verified — do not re-investigate them:
 - **`docker *` is allow-listed.** Testcontainers itself talks to the Docker daemon directly from
   the JVM (not through the Bash tool) — this allowlist entry only covers the preflight/diagnostic
   commands below, not the actual acceptance-test execution.
+- **This session is one-shot and non-resumable — nothing will ever re-invoke it.** A long-running
+  Bash command (this hits Step 4/5's `./mvnw` invocations, which run 10+ minutes with an
+  Elasticsearch testcontainer) may be auto-converted into a background task. If a Bash result says
+  something like "running in background... you will be notified when it completes," do NOT trust
+  that notification and do NOT end your turn expecting to be woken up later — there is no external
+  process that will ever resume this session. `ScheduleWakeup` is disallowed for this exact reason
+  and calling it will fail. Instead, poll the backgrounded task to completion synchronously, inside
+  this same turn, using `TaskOutput(task_id, block: true, timeout: <bounded>)` (or `Monitor`) —
+  issuing several sequential poll calls in a row is normal and does NOT end the turn — until the
+  task completes, before reading/classifying its output.
 
 ---
 

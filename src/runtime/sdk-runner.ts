@@ -11,7 +11,7 @@
  *      deterministically by the runner, not by the node itself.
  */
 
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
 import {
   appendFileSync,
   mkdirSync,
@@ -81,6 +81,42 @@ export function selectPermissionMode(
   nightMode?: boolean,
 ): "bypassPermissions" | "acceptEdits" {
   return nightMode === true ? "bypassPermissions" : "acceptEdits";
+}
+
+// ---------------------------------------------------------------------------
+// buildBaseQueryOptions
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the base SDK `query()` options shared by every node session.
+ *
+ * `disallowedTools: ["ScheduleWakeup"]` is unconditional, for every node —
+ * not just verify, not gated by node.allowedTools. Every dagrunner node
+ * session is a single one-shot `query()` call (see the module-level comment
+ * above): `applyNodeEnv` → `query({ prompt, options })` → `for await` drains
+ * the stream to completion → the caller returns. Nothing external ever
+ * resumes a node's session. ScheduleWakeup persists a durable wakeup for an
+ * EXTERNAL scheduler to fire the /loop skill later — a mechanism dagrunner
+ * never wires up and never will. Real-run evidence (run 54177-1, verify
+ * node): the SDK auto-backgrounds a long-running Bash command, the model
+ * called ScheduleWakeup expecting to be "notified" and ended its turn —
+ * query() just returned, burning ~28 minutes/~$4.58 with no artifacts ever
+ * written (see DECISIONS.md § verify-scheduleawakeup-incompatibility). Confirmed
+ * via node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts: disallowedTools
+ * "removes [the tool] from the model's context" (not a mere permission-prompt
+ * denial) and wins over allowedTools.
+ */
+export function buildBaseQueryOptions(
+  worktreePath: string,
+  nightMode?: boolean,
+): Options {
+  return {
+    cwd: worktreePath,
+    permissionMode: selectPermissionMode(nightMode),
+    settingSources: ["project"],
+    systemPrompt: { type: "preset", preset: "claude_code" },
+    disallowedTools: ["ScheduleWakeup"],
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -155,12 +191,9 @@ export function makeSDKRunner(
     // The safety boundary (Bash allow/deny list + deny-guard hook) is enforced
     // by the seeded settings.json written at run-start — it is independent of
     // permissionMode and is NOT weakened by night-mode bypass.
-    const options: Parameters<typeof query>[0]["options"] = {
-      cwd: worktreePath,
-      permissionMode: selectPermissionMode(nightMode),
-      settingSources: ["project"],
-      systemPrompt: { type: "preset", preset: "claude_code" },
-    };
+    // disallowedTools (ScheduleWakeup) is baked into every node's base options
+    // by buildBaseQueryOptions — see that function's comment for why.
+    const options = buildBaseQueryOptions(worktreePath, nightMode);
 
     if (node.model === "haiku") {
       options.model = "claude-haiku-4-5-20251001";

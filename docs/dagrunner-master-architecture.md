@@ -254,6 +254,17 @@ nothing and is not part of the autonomous run.
 **Scope boundary — what verify explicitly does NOT do:** CI's dist/packaging/cross-storage matrix.
 verify is acceptance-level verification of THIS change, not a CI re-run.
 
+**One-shot session vs. auto-backgrounded long commands (run `54177-1`):** Step 4/5's `./mvnw`
+invocations can run 10+ minutes (an `@MultiDbTest` acceptance test provisions its own Elasticsearch
+testcontainer), long enough that the SDK auto-converts the Bash call into a background task. In
+`54177-1`, `verify` read that as "come back later," called `ScheduleWakeup`, and ended its turn —
+but nothing ever resumes a node's session (see §6's `disallowedTools` note), so the run just idled
+until the harness killed the backgrounded Maven task, never reaching a PASS/FAIL verdict.
+`ScheduleWakeup` is now mechanically disallowed for every node (§6); `payload/commands/verify.md`'s
+"Known environment constraints" section also tells the model explicitly to poll a backgrounded task
+to completion synchronously via `TaskOutput`/`Monitor`, within the same turn, rather than trust the
+"you will be notified" message. See `DECISIONS.md § verify-scheduleawakeup-incompatibility`.
+
 ---
 
 ## 3b. Validation — smoke:mock (per-plan gate) and smoke:live (occasional)
@@ -319,6 +330,7 @@ Goal: free inside the worktree, read anywhere, mutation outside hard-blocked, no
 - `allow`/`deny` (`src/config/settings-seed.ts`): `./mvnw *`/`mvn *`/`git *`/`npm *`/`curl *`/`jq *`/`docker *` etc. allow-listed; `rm -rf`, `sudo`, force-push, `.env`/secrets read+write, `Write(.claude/**)` deny-listed. This allow/deny list, plus the PreToolUse deny-guard hook, IS the enforced mutation boundary — there is no filesystem sandbox underneath it (see below).
 - **Two contexts, do not conflate:** the agent BUILDING dagrunner runs `bypassPermissions` + the fail-closed deny-guard hook; dagrunner RUNTIME nodes run `acceptEdits`/`bypassPermissions` (see the two-posture rule below) + the same deny-guard hook.
 - **Two-posture permission rule (night-mode):** runtime nodes have two SDK `permissionMode` settings — `acceptEdits` for attended runs (human is present and can answer prompts) and `bypassPermissions` for night-mode (`--night` flag). The safety boundary — the Bash allow/deny list + fail-closed deny-guard hook — is written by `buildSeededSettings` independently of `permissionMode` and is never weakened by night-mode. Bypassing prompts (night) means "don't hang waiting for a human at 3am"; it does NOT remove the hook-enforced mutation fence. `selectPermissionMode(nightMode?)` in `sdk-runner.ts` is the single decision point, exported and unit-tested.
+- **Every node session unconditionally sets `disallowedTools: ["ScheduleWakeup"]`** (`buildBaseQueryOptions` in `sdk-runner.ts`, mirroring `selectPermissionMode`'s extraction pattern). A dagrunner node session is a single one-shot SDK `query()` call — `applyNodeEnv` → `query({ prompt, options })` → drain the message stream to completion → return — with no external mechanism that ever resumes or re-invokes it later. `ScheduleWakeup` persists a durable wakeup for an EXTERNAL scheduler to fire the `/loop` skill later; dagrunner never wires up that scheduler and never will, so the tool is categorically incompatible with every node, not just `verify` (see `DECISIONS.md § verify-scheduleawakeup-incompatibility` for the run-54177-1 evidence that motivated this).
 
 > **History — there used to be a filesystem sandbox here; it's gone, not just disabled.** Earlier design (`phase2b-verify-guide` in `DECISIONS.md`) had runtime nodes wrapped in a macOS Seatbelt sandbox (`sandbox.enabled: true` + `autoAllowBashIfSandboxed` + network `allowedDomains`), with `gh`/`git push` failing inside it (TLS cert mismatch with the sandbox's network proxy) — which is why the `pr` node still pushes/opens the PR via Node.js **outside the agent's own session** rather than via an in-session `gh` call (see `runPrPostProcess` in `run-engine.ts`). Commit `3015634` set `sandbox.enabled: false` (it was blocking Maven writes to `**/target/`), and the verify-autonomy change (§3d, `DECISIONS.md § verify-autonomy-remove-election`) removed the `sandbox` key from `buildSeededSettings` entirely, since a permanently-`false` toggle with no code path to re-enable it was dead config, not a real security posture — see `DECISIONS.md § night-mode-permission-posture` for the fuller history. The `gh`/`git push`-outside-session design was kept (pushing deterministically from Node.js rather than trusting the agent's own command construction is still good practice on its own merits) but the original TLS-under-proxy rationale for it no longer applies and has not been re-verified against the current deny-guard-only boundary.
 

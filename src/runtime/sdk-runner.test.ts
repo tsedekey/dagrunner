@@ -13,7 +13,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { selectPermissionMode } from "./sdk-runner.js";
+import { selectPermissionMode, buildBaseQueryOptions } from "./sdk-runner.js";
 import { buildSeededSettings } from "../config/settings-seed.js";
 
 // ---------------------------------------------------------------------------
@@ -52,6 +52,46 @@ const minimalSettings = () =>
     tmpDir: "/tmp",
     passthrough: { env: {}, mcpServers: undefined },
   }) as Record<string, unknown>;
+
+// ---------------------------------------------------------------------------
+// buildBaseQueryOptions — pure branch, deterministic
+//
+// Teeth-check: every node session unconditionally disallows ScheduleWakeup.
+// Real-run evidence (run 54177-1, verify node): the SDK auto-backgrounds a
+// long-running Bash command and the model reached for ScheduleWakeup to
+// "resume later" — a durable wakeup meant for an EXTERNAL scheduler dagrunner
+// never wires up, since every node session is a single one-shot query() call
+// (see CLAUDE.md's "one-shot sessions" gotcha and DECISIONS.md §
+// verify-scheduleawakeup-incompatibility). This must hold for every node, not
+// just verify — any node's Bash call could in principle auto-background.
+// ---------------------------------------------------------------------------
+
+test("buildBaseQueryOptions: ScheduleWakeup is always disallowed (attended)", () => {
+  const options = buildBaseQueryOptions("/tmp/dagrunner-test-worktree", false);
+  assert.ok(
+    options.disallowedTools?.includes("ScheduleWakeup"),
+    `ScheduleWakeup must be disallowed; got: ${JSON.stringify(options.disallowedTools)}`,
+  );
+});
+
+test("buildBaseQueryOptions: ScheduleWakeup is always disallowed (night mode)", () => {
+  const options = buildBaseQueryOptions("/tmp/dagrunner-test-worktree", true);
+  assert.ok(
+    options.disallowedTools?.includes("ScheduleWakeup"),
+    `ScheduleWakeup must be disallowed; got: ${JSON.stringify(options.disallowedTools)}`,
+  );
+});
+
+test("buildBaseQueryOptions: cwd/permissionMode/settingSources/systemPrompt still set", () => {
+  const options = buildBaseQueryOptions("/tmp/dagrunner-test-worktree", false);
+  assert.equal(options.cwd, "/tmp/dagrunner-test-worktree");
+  assert.equal(options.permissionMode, "acceptEdits");
+  assert.deepEqual(options.settingSources, ["project"]);
+  assert.deepEqual(options.systemPrompt, {
+    type: "preset",
+    preset: "claude_code",
+  });
+});
 
 test("teeth-check: seeded settings always wire the deny-guard (stop-verifier) hook", () => {
   const s = minimalSettings();

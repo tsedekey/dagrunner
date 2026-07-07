@@ -56,6 +56,14 @@ must export `DEVHARNESS_SRC`, `DAGRUN_ARTIFACTS` (per-node), `DAGRUN_RUN_ID`, `D
 the SessionStart sync, artifact writes, and the SessionEnd reflection-capture hook. Also: the SDK does NOT load `.claude/settings.json` (hooks/deny rules) unless
 `settingSources: ["project"]` is set in `query()` options.
 
+## The one-shot session gotcha (do not get this wrong)
+
+Every dagrunner node session is a single, non-resumable SDK `query()` call — nothing external ever
+resumes or re-invokes it later. `ScheduleWakeup` is therefore disallowed for all nodes (`sdk-runner.ts`,
+`disallowedTools`) — it persists a wakeup for an external scheduler dagrunner never wires up. A Bash
+command that auto-backgrounds (e.g. a long Maven build) must be polled to completion synchronously,
+within the same turn, via `TaskOutput`/`Monitor` — never treated as "come back later."
+
 ## Grill Me / sibling walkthrough sessions
 
 When walking through a sibling (seed-data, ci-babysit, pr-triage) step by step with the user,
