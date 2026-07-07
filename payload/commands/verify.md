@@ -52,15 +52,20 @@ These facts are pre-verified — do not re-investigate them:
   the JVM (not through the Bash tool) — this allowlist entry only covers the preflight/diagnostic
   commands below, not the actual acceptance-test execution.
 - **This session is one-shot and non-resumable — nothing will ever re-invoke it.** A long-running
-  Bash command (this hits Step 4/5's `./mvnw` invocations, which run 10+ minutes with an
-  Elasticsearch testcontainer) may be auto-converted into a background task. If a Bash result says
-  something like "running in background... you will be notified when it completes," do NOT trust
-  that notification and do NOT end your turn expecting to be woken up later — there is no external
-  process that will ever resume this session. `ScheduleWakeup` is disallowed for this exact reason
-  and calling it will fail. Instead, poll the backgrounded task to completion synchronously, inside
-  this same turn, using `TaskOutput(task_id, block: true, timeout: <bounded>)` (or `Monitor`) —
-  issuing several sequential poll calls in a row is normal and does NOT end the turn — until the
-  task completes, before reading/classifying its output.
+  Bash command (this hits Step 4's test-suite run and Step 5's acceptance-test run, both of which
+  can run 10+ minutes with an Elasticsearch testcontainer) may be auto-converted into a background
+  task. If a Bash result says something like "running in background... you will be notified when it
+  completes," do NOT trust that notification and do NOT end your turn expecting to be woken up
+  later — there is no external process that will ever resume this session. `ScheduleWakeup` is
+  disallowed for this exact reason and calling it will fail. Instead, poll the backgrounded task
+  synchronously, inside this same turn, using `TaskOutput(task_id, block: true, timeout: <bounded>)`
+  (or `Monitor`) — issuing several sequential poll calls in a row is normal and does NOT end the
+  turn — **until the task completes OR the stall threshold below is hit, whichever comes first.**
+  Polling is not unbounded: on the same launch, once you've spent ~20 minutes of wall-clock time
+  with no terminal status (however you polled — repeated `TaskOutput` calls or `Monitor`), stop
+  polling and follow "Stall detection and recovery" below instead of issuing another poll. This
+  matters because a hung process can look identical to a slow-but-healthy one from the poll loop's
+  perspective — see that section for why "poll forever" is not actually safe.
 
 ---
 
@@ -290,10 +295,98 @@ before Rule 3 existed.
 - Acceptance-stage self-heal: at most **1** fix-and-retry cycle (i.e. up to 2 total acceptance runs:
   the original plus 1 retry) — each cycle re-provisions a fresh testcontainer/ES stack and can take
   10+ minutes; do not loop expensively.
+- **A stall-and-recover sequence (see "Stall detection and recovery" below) shares this SAME
+  budget — it is never a separate, stacked counter.** Read the cap above as a cap on total `./mvnw`
+  launches per stage (build/test: up to 3 launches; acceptance: up to 2 launches), regardless of
+  why any one launch ended — a clean pass/fail, a self-healed fix-and-retry, or a stall recovered
+  via a report found after termination. Recovering a usable report from a stalled launch does not,
+  by itself, burn an extra cycle beyond the launch it already was — it is simply how that launch
+  concluded, and the resulting pass/fail signal feeds the normal self-heal decision above with the
+  remaining budget untouched. What actually consumes budget is issuing another `./mvnw` invocation
+  (a genuine retry launch). If a _retry_ launch itself stalls and no usable report is found, do not
+  attempt yet another launch on the strength of remaining budget — treat the stage as exhausted and
+  stop. A stall with NO usable report, on ANY launch, is never retried on the spot regardless of
+  remaining budget — it is `ERROR_INFRA`, and `ERROR_INFRA` is never self-heal territory at any
+  stage (see above); the human reruns the whole node, not just the stalled stage.
 - If a stage exhausts its retry cap still failing, write the normal `FAIL_*` outcome exactly as
   before this change, but the `detail` field must narrate what was attempted — what was diagnosed,
-  what was changed, why the retry still failed — not just the final raw failure output. A human
-  resuming the run should not have to start diagnosis from zero.
+  what was changed, why the retry still failed (including whether a stall-and-recovery was part of
+  that history) — not just the final raw failure output. A human resuming the run should not have
+  to start diagnosis from zero.
+
+---
+
+## Stall detection and recovery (read before Step 4/5 — bounded, shares the retry budget above)
+
+**Why this exists:** "poll until the task completes" (see "Known environment constraints" above) has
+no upper bound if "completes" never actually arrives. This was observed live, three consecutive
+times, on run `54177-1`'s Step 5 acceptance-test launch: `jstack` on the live JVM showed the main
+thread parked forever in `CamundaMultiDBExtension.afterAll` → `TestApplication.close()` →
+`Broker.close()` → `CompletableActorFuture.join()`, waiting on the Zeebe actor scheduler to signal
+shutdown-complete — a signal that never arrived, even though the actor threads themselves were idle
+(not processing the close task) and the test body itself had already finished well before the hang.
+This is a pre-existing broker/test-harness teardown issue, confirmed unrelated to any given diff via
+`git diff --stat origin/main` (no broker/lifecycle code touched) — not something any one change
+introduces, and not something worth trusting a person to notice by watching a terminal. Applies to
+BOTH places this node backgrounds a long `./mvnw` invocation and polls it via `TaskOutput`: Step 4's
+test-suite run (`./mvnw test -pl <module>`) and Step 5's acceptance-test run (`./mvnw verify
+-Dit.test=<ClassName>`) — not Step 4's build/compile command, which is fast and not a realistic
+stall candidate.
+
+**1. Stall threshold.** If a single `TaskOutput(task_id, block: true, timeout: 600000)` call on the
+SAME background task (i.e. the same launch — not across separate launches) returns `status: running`
+a **second time in a row** — roughly 20 minutes of wall-clock elapsed on this one launch with no
+terminal status — do not poll a third time on this launch. Treat it as stalled and move to step 2
+immediately.
+
+**2. Terminate the stalled task.** Call the `TaskStop` tool with `{task_id}`. `TaskStop` is a
+first-class tool in this session's toolset — ground this before relying on it by checking the
+session's own `system: init` event's `tools` array, which includes `TaskStop` alongside
+`TaskOutput`. If `TaskStop` itself errors or is unavailable for some reason, fall back to
+identifying and killing the underlying OS process via `ps`/`kill -TERM` in Bash — but prefer
+`TaskStop` as the primary path.
+
+**3. Look for a durably-written report — do NOT trust the killed task's own final status/exit
+code.** Wait a few seconds after termination, then check the stage-appropriate report directory
+directly:
+
+- **Step 4** (unit/integration test stage, `./mvnw test -pl <module>`):
+  `<module>/target/surefire-reports/`
+- **Step 5** (acceptance stage, `./mvnw verify -Dit.test=<ClassName>`):
+  `qa/acceptance-tests/target/failsafe-reports/` — look for `<ClassName>.txt` and
+  `TEST-<fully.qualified.ClassName>.xml`.
+
+This is deliberate: JVM shutdown hooks and Surefire/Failsafe's own report-flush timing mean the real
+result is very often already durably on disk as soon as the test methods + regular JUnit lifecycle
+finish — independent of whether the _extension's_ `afterAll` teardown hangs afterward. The killed
+task's own reported exit code/status, by contrast, is NOT a reliable signal — on run `54177-1`, two
+kills of the identical hang produced inconsistent results (one `status: completed, exit_code: 0`,
+the other `status: failed, exit_code: 144`) — this is an artifact of how the shell wraps a killed
+process, not a trustworthy pass/fail signal either way. Never treat a "completed"/exit-0 status from
+a task you JUST force-killed as meaningful on its own.
+
+**4. Act on what you find:**
+
+- **A complete, readable report exists for the relevant test(s):** parse it directly for the real
+  result and proceed exactly as if the command itself had returned that result normally — feed it
+  into the existing Step 4/5 pass/fail logic and self-heal decision, unaffected by this recovery
+  path having been needed. Record in the stage's `detail` field, briefly, that a stall was hit on
+  this launch and recovered via a report found after termination. Do NOT weaken this to "a report is
+  present" — it must be complete (the test class's result is actually recorded, not a partial/
+  in-progress file) before you trust it; an incomplete or missing report falls through to the next
+  bullet.
+- **No usable report is found even after the kill:** this launch is a wash with no real signal about
+  correctness. Do NOT classify `FAIL_TEST`/`FAIL_ASSERTION` — that would imply a code-correctness
+  signal that does not exist here. Classify `ERROR_INFRA` instead, with a clear, actionable `detail`
+  that names the observed pattern explicitly: a broker/environment teardown hang in
+  `CamundaMultiDBExtension.afterAll` → `Broker.close()` → `CompletableActorFuture.join()`,
+  pre-existing and unrelated to this diff (cite the `54177-1` precedent above), and instructs the
+  human to rerun the node.
+
+**5. Budget:** a stall-and-recover sequence consumes one of the EXISTING retry-cycle budget slots
+for that stage (2 for build/test, 1 for acceptance) — see the "Retry caps" bullet above for exactly
+how launches, self-heal retries, and stalls share that one counter. Do not add a separate,
+independently-uncapped stall-retry counter.
 
 ---
 
@@ -327,6 +420,10 @@ origin/main`):
    ```bash
    ./mvnw test -pl <touched-module(s)> -q
    ```
+   - **If this backgrounds and the poll stalls** (returns `status: running` a second time in a row
+     on the same launch): follow "Stall detection and recovery" above — terminate via `TaskStop`,
+     check `<module>/target/surefire-reports/` for a complete report, and proceed from there rather
+     than polling a third time.
    - **If this fails and the failure is a lint/style/format violation** (e.g. checkstyle enforced
      during the test-phase compile) in a test-path file: same self-heal procedure as the build
      stage — up to 2 fix-and-retry cycles, Rule 1 directory check on every attempt.
@@ -352,6 +449,12 @@ Run the specific AT class (the one authored in Step 3 or reused in Step 2):
 ./mvnw verify -pl qa/acceptance-tests -Dit.test=<AcceptanceTestClassName> -q
 ```
 
+**If this backgrounds and the poll stalls** (returns `status: running` a second time in a row on the
+same launch — this is the stage where the stall was actually observed live, on run `54177-1`, three
+consecutive times): follow "Stall detection and recovery" above — terminate via `TaskStop`, check
+`qa/acceptance-tests/target/failsafe-reports/` for a complete `<ClassName>.txt`/`TEST-*.xml`, and
+proceed from there rather than polling a third time.
+
 Classify the result into exactly ONE of:
 
 - **`PASS`** — the AT ran and all assertions passed. Proceed to Step 6.
@@ -359,8 +462,10 @@ Classify the result into exactly ONE of:
   be wrong, or the test itself may be stale). Do not write this outcome yet — first work the
   self-heal decision below.
 - **`ERROR_INFRA`** — the AT could not even start/run due to an environment problem (testcontainer
-  failed to provision, ES never became healthy, port conflict, etc.) — **never** read this as a
-  green pass, and never self-heal it (see "Self-heal authority and boundary" above). Docker being
+  failed to provision, ES never became healthy, port conflict, etc.), OR the task stalled and had to
+  be killed with no usable report recovered afterward (see "Stall detection and recovery" above) —
+  **never** read this as a green pass, and never self-heal it (see "Self-heal authority and
+  boundary" above). Docker being
   reachable at Step 0 does not guarantee the ES container itself starts cleanly; distinguish "my
   container never came up" (ERROR_INFRA) from "my container came up and the assertion failed"
   (FAIL_ASSERTION) by reading the actual failure — a testcontainer provisioning exception looks
@@ -461,6 +566,10 @@ Rules:
   `detail` must narrate the diagnosis, what was changed, and the result, not just the final raw
   log/output. This applies even on a self-healed `PASS`: a human reading the report later should be
   able to tell a self-heal happened without re-deriving it from the worktree diff.
+- The same narration requirement applies if a stall-and-recovery sequence happened at any stage (see
+  "Stall detection and recovery" above), regardless of whether it recovered a usable report or ended
+  in `ERROR_INFRA` — `detail` must say a stall was hit, that the task was terminated, and what (if
+  anything) was recovered from the report directory.
 
 ### 6b — `$DAGRUN_ARTIFACTS/verify-plan.md`
 

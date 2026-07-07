@@ -223,6 +223,29 @@ single agent session, the same way the undocumented checkstyle fix in `54177-1` 
    and, when authoring happened, `verify-plan.md` (which flow it covers, why, and the self-check
    verdict).
 
+**Bounded stall-recovery (added by the verify-stall-recovery change — see `DECISIONS.md §
+verify-stall-recovery`):** the `ScheduleWakeup`-incompatibility fix above (`payload/commands/
+verify.md`'s "poll the backgrounded task synchronously via `TaskOutput`/`Monitor`" instruction) had
+its own gap: "poll until done" has no upper bound if "done" never actually arrives. Real-run
+evidence (run `54177-1`, observed live) showed exactly this — Step 5's acceptance-test JVM hung
+identically on three consecutive attempts, confirmed via `jstack` to be parked in
+`CamundaMultiDBExtension.afterAll` → `Broker.close()` → `CompletableActorFuture.join()`, waiting on
+a Zeebe actor-scheduler shutdown signal that never arrived (a pre-existing broker/test-harness
+teardown issue, confirmed unrelated to any given diff via `git diff --stat origin/main` — not
+something this or any other feature change introduces). Without a human manually killing the JVM
+each time, the poll loop would have continued indefinitely. verify.md now bounds this: if the same
+background launch returns `status: running` on two consecutive `TaskOutput(block: true, timeout:
+600000)` polls (~20 minutes with no terminal status), treat it as stalled, terminate it via
+`TaskStop` (falling back to `ps`/`kill -TERM` if `TaskStop` errors), and check the stage's report
+directory directly (`<module>/target/surefire-reports/` for Step 4, `qa/acceptance-tests/target/
+failsafe-reports/` for Step 5) rather than trusting the killed task's own exit code/status — which
+run `54177-1` observed to be inconsistent across two kills of the identical hang (`completed`/exit 0
+vs. `failed`/exit 144). A complete report found this way is fed into the normal pass/fail/self-heal
+logic unchanged; no usable report means `ERROR_INFRA` (never `FAIL_TEST`/`FAIL_ASSERTION` — there is
+no code-correctness signal to report). This folds into the SAME retry-cycle budget the bounded
+self-heal above already uses (2 for build/test, 1 for acceptance) — a stall-and-recover sequence is
+just one way a launch can conclude, not a second, independently-uncapped counter.
+
 **The new engine mechanism — `outcomeGate`:** node status in dagrunner was previously derived only
 from SDK success/failure + `produces` file-existence — nothing read the CONTENT of a produced
 artifact. A new optional `Node` field, `outcomeGate: { file, field, passValues }` (`src/core/types.ts`),
