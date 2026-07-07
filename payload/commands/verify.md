@@ -210,8 +210,13 @@ verify has no human review, which is exactly why this boundary is mechanical, no
 **Rule 1 — directory-scoped hard rule (mechanically enforced, not just an instruction):** you may
 only ever edit files under test paths — `**/src/test/**`, `qa/acceptance-tests/**`, and their
 resource/fixture subdirectories. NEVER edit anything under `**/src/main/**` or any other production
-source path. If a failure's root cause lives in production code, self-heal is categorically not an
-option — write the appropriate `FAIL_*` outcome and stop.
+source path. **`**/src/main/**` is a deny that always wins, even when nested under an
+otherwise-allowed prefix** — e.g. a hypothetical `qa/acceptance-tests/src/main/**` (shared test-
+harness code some modules keep in a `src/main` directory) is still production-shaped code, not test
+code, and is still off-limits; `qa/acceptance-tests/**` is only an allow for the parts of that tree
+that are themselves under `src/test` or a resource/fixture directory. If a failure's root cause
+lives in production code, self-heal is categorically not an option — write the appropriate
+`FAIL_*` outcome and stop.
 
 Enforce this mechanically, every time, using this exact procedure (identical at both stages):
 
@@ -222,13 +227,16 @@ Enforce this mechanically, every time, using this exact procedure (identical at 
    ```bash
    cd "$DAGRUN_WORKTREE" && git add -A
    ```
-2. Apply your candidate fix (edit the file(s) you diagnosed).
+2. Apply your candidate fix (edit the file(s) you diagnosed). Only edit existing files you have
+   already read — do not create a new file as part of a self-heal fix; if the fix genuinely
+   requires a new file, that is outside self-heal's scope, not a workaround for it.
 3. **Check what you actually changed** — this is the mechanical gate, not a prose self-check:
    ```bash
    cd "$DAGRUN_WORKTREE" && git diff --name-only
    ```
-   Every path printed must match a test path (`**/src/test/**`, `qa/acceptance-tests/**`, or a
-   resource/fixture subdirectory of either). If even one path does not match:
+   Every path printed must match a test path (`**/src/test/**`, `qa/acceptance-tests/**` outside
+   any nested `src/main`, or a resource/fixture subdirectory of either) and must NOT match
+   `**/src/main/**` under any prefix. If even one path does not match:
    ```bash
    cd "$DAGRUN_WORKTREE" && git checkout -- .
    ```
