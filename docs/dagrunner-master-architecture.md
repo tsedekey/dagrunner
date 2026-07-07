@@ -140,6 +140,51 @@ sandbox rationale gone, verify was redesigned to be fully autonomous — it auth
 proof, rather than handing a human a manual-test document and pausing (see DECISIONS.md §
 verify-autonomy-remove-election for the full judgment-call log).
 
+**Bounded self-heal (added by the verify-bounded-self-heal change — see `DECISIONS.md §
+verify-bounded-self-heal`):** verify is no longer a pure classify-and-stop judge. Real-run evidence
+(run `54177-1`) showed the original design's actual gap: verify's independent rebuild hit a
+checkstyle `DeclarationOrder` violation in a _test_ file and fixed it inline, undocumented — the
+prompt never authorized this — while, in the same run, its acceptance-test failure investigation
+did rigorous root-cause tracing (read the RDBMS SQL, the ES/OS filter/aggregation transformer
+chain, cited file:line evidence that `processDefinitionKey` scoping was correct on both backends)
+and _still_ just wrote `FAIL_ASSERTION` and stopped, despite having already proven the fix belonged
+in test code it was allowed to touch (a stale expected-value list in the AT, relative to unrelated
+`zeebe:output`/`zeebe:input` io-mappings baked into a shared BPMN fixture 9 other test files also
+depend on). That inconsistency — self-heals on whim for build, never for acceptance, with no
+explicit authority or boundary either way — is what this change formalizes, not a new capability
+invented from scratch.
+
+verify now has narrow, bounded, _mechanically gated_ authority to fix test-side issues and retry,
+rather than failing immediately:
+
+- **Build/test-stage self-heal** — lint/style/format violations only (checkstyle, spotless), never
+  a genuine compile error or behavioral test-assertion failure. No isolated proof subagent needed —
+  a style violation isn't a behavioral question. Capped at 2 fix-and-retry cycles per stage.
+- **Acceptance-stage self-heal** — an assertion failure may be self-healed only after an isolated
+  `verify-production-correctness-checker` subagent (new, mirrors the existing D3
+  `verify-diff-grounding-checker` pattern) independently confirms, with file:line citations, that
+  the production code is correct and the failure's root cause can only be test-side. verify's own
+  same-session conclusion is never sufficient — this is the same self-grading-bias concern D3
+  already exists to guard against, applied to the companion question that only comes up on a
+  failure. Capped at 1 fix-and-retry cycle (each cycle re-provisions a fresh testcontainer/ES stack
+  and can take 10+ minutes).
+
+Three mechanical rules bound every self-heal, checked by verify itself before any fix is kept, not
+left to prompt-only discipline: (1) **directory-scoped** — a `git add -A` baseline before the fix,
+`git diff --name-only` after it, asserting every changed path is under a test path
+(`**/src/test/**`, `qa/acceptance-tests/**`); any production-path edit is reverted with
+`git checkout -- .` and treated as "not self-heal-able," (2) **shared-fixture** — before editing any
+test fixture, `grep -rl` counts how many test files reference it; more than one dependent means the
+fixture is off-limits and the fix belongs in the dependent AT's own assertions instead, (3)
+**proof-before-fix** (acceptance only) — the isolated subagent gate above. If a stage exhausts its
+retry cap still failing, or self-heal was never authorized for the failure, verify writes the same
+`FAIL_*`/`ERROR_INFRA` outcome it always did — the only difference is the `detail` field now
+narrates what was diagnosed and attempted, not just the raw failure. The node's five-value
+`outcome` enum, `outcomeGate` mechanics, and ungated/autonomous terminal-classifier framing are
+**unchanged** — no new human gate was reintroduced; LoopConfig/loop-back-to-`fix` was explicitly
+considered and rejected as out of scope (the self-heal loop runs entirely within verify's own
+single agent session, the same way the undocumented checkstyle fix in `54177-1` already did).
+
 **What verify does now (both workflows, same `payload/commands/verify.md`):**
 
 1. **Docker preflight** — `docker info`; fails loud with an actionable message (never a raw
@@ -160,18 +205,23 @@ verify-autonomy-remove-election for the full judgment-call log).
    self-assessment. This guards against a vacuous AT that would pass without touching the feature —
    the same self-grading-bias problem the plan flags for why `implement` shouldn't author its own
    acceptance test. A failed self-check halts before the (expensive) build/test/acceptance stages.
-5. **Independent build + test rerun** — verify does not trust `implement`/`fix`'s self-reported
-   status; it reruns the build and the touched module's test suite itself. Fail-fast ladder:
-   build → test suite → acceptance test. A broken build or failing suite stops before the
-   acceptance run.
-6. **Run + classify** — executes the AT via the existing `@MultiDbTest` framework (starts
-   `TestStandaloneBroker`/`TestSimpleCamundaApplication` in-process, provisions its own ES
-   testcontainer, injects `CamundaClient` — dagrunner reimplements none of this) and classifies the
-   result into exactly one of `PASS` / `FAIL_ASSERTION` / `FAIL_BUILD` / `FAIL_TEST` /
-   `ERROR_INFRA`.
+5. **Independent build + test rerun, with bounded style/lint self-heal** — verify does not trust
+   `implement`/`fix`'s self-reported status; it reruns the build and the touched module's test suite
+   itself. Fail-fast ladder: build → test suite → acceptance test. A broken build or failing suite
+   stops before the acceptance run — unless the failure is a lint/style/format violation in a test
+   file, in which case verify may fix it and retry (capped, directory-gated; see "Bounded self-heal"
+   above).
+6. **Run + classify, with bounded proof-gated self-heal** — executes the AT via the existing
+   `@MultiDbTest` framework (starts `TestStandaloneBroker`/`TestSimpleCamundaApplication` in-process,
+   provisions its own ES testcontainer, injects `CamundaClient` — dagrunner reimplements none of
+   this) and classifies the result into exactly one of `PASS` / `FAIL_ASSERTION` / `FAIL_BUILD` /
+   `FAIL_TEST` / `ERROR_INFRA`. An assertion failure is not written as `FAIL_ASSERTION` immediately —
+   verify first works the self-heal decision (isolated production-correctness proof, directory/
+   shared-fixture rules, one retry) before falling back to the classification.
 7. **Evidence + gate** — writes `$DAGRUN_ARTIFACTS/verify-report.json` (per-stage status +
-   the single outcome classification + truncated logs) and, when authoring happened,
-   `verify-plan.md` (which flow it covers, why, and the self-check verdict).
+   the single outcome classification + truncated logs, now also narrating any self-heal attempted)
+   and, when authoring happened, `verify-plan.md` (which flow it covers, why, and the self-check
+   verdict).
 
 **The new engine mechanism — `outcomeGate`:** node status in dagrunner was previously derived only
 from SDK success/failure + `produces` file-existence — nothing read the CONTENT of a produced

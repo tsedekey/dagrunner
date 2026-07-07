@@ -1,10 +1,21 @@
-# /verify — Autonomous Acceptance-Test Author, Runner, and Judge
+# /verify — Autonomous Acceptance-Test Author, Runner, Bounded Self-Healer, and Judge
 
 You are running the **verify node** of a dagrunner pipeline. Your job: author (or, on the bugfix
 workflow, reuse) an `@MultiDbTest` acceptance test that proves the promised user flow works,
 independently rerun the build and test suite, run the acceptance test, classify the result, and
 write `$DAGRUN_ARTIFACTS/verify-report.json` — the artifact that gates `pr`. **No human reviews
 this node. It runs to a terminal classification on its own.**
+
+When a build/test/acceptance failure's root cause is genuinely test-side, you have narrow, bounded
+authority to fix it yourself and retry, instead of failing immediately — e.g. a checkstyle/spotless
+violation in a test file, or (only after independently proving production code is correct) a stale
+assertion or fixture in the acceptance test itself. This is NOT license to patch anything that gets
+in your way: you may only ever touch files under test paths, never production source; every
+self-heal is capped at a small retry budget; and acceptance-test self-heal specifically requires an
+isolated-context subagent to confirm production correctness before you touch anything — your own
+say-so is never sufficient for that one. See "Self-heal authority and boundary" below, which Step 4
+and Step 5 both reference. If a failure's root cause lives in production code, self-heal is
+categorically off the table — write the matching `FAIL_*` outcome and stop, exactly as before.
 
 You have access to the following env vars:
 
@@ -176,7 +187,99 @@ to Step 4.
 
 ---
 
-## Step 4 — Independent build + test rerun (fail-fast ladder)
+## Self-heal authority and boundary (read before Step 4/5)
+
+verify has no human review, which is exactly why this boundary is mechanical, not a matter of
+"use good judgment." It applies every time a self-heal is considered in Step 4 or Step 5 below.
+
+**What qualifies as self-heal-able, per stage:**
+
+- **Build/test-stage (Step 4):** ONLY a lint/style/format violation (checkstyle, spotless, or
+  equivalent) — never a genuine compile error or a genuine behavioral test-assertion failure. A
+  style violation is not a behavioral question, so same-session judgment is sufficient; no isolated
+  subagent is required for this stage.
+- **Acceptance-stage (Step 5):** an assertion failure MAY be self-healed, but only after the
+  isolated `verify-production-correctness-checker` subagent independently confirms the production
+  code is correct (see Rule 3 below). Never self-heal on your own conclusion alone, no matter how
+  rigorous your own tracing felt — same-session self-grading has a known bias problem in this
+  codebase, which is exactly why D3 (`verify-diff-grounding-checker`) already exists as an isolated
+  dispatch elsewhere in this command.
+- `ERROR_INFRA` is never self-heal territory at any stage — an infra problem isn't a code defect to
+  fix.
+
+**Rule 1 — directory-scoped hard rule (mechanically enforced, not just an instruction):** you may
+only ever edit files under test paths — `**/src/test/**`, `qa/acceptance-tests/**`, and their
+resource/fixture subdirectories. NEVER edit anything under `**/src/main/**` or any other production
+source path. If a failure's root cause lives in production code, self-heal is categorically not an
+option — write the appropriate `FAIL_*` outcome and stop.
+
+Enforce this mechanically, every time, using this exact procedure (identical at both stages):
+
+1. **Before attempting any fix this session**, snapshot a baseline so your own edit can be isolated
+   from `implement`/`fix`'s legitimate production changes and the AT itself (do this even if Step 3
+   already ran `git add -A` — it is idempotent and guarantees the baseline exists regardless of
+   whether Step 2's reuse path skipped Step 3):
+   ```bash
+   cd "$DAGRUN_WORKTREE" && git add -A
+   ```
+2. Apply your candidate fix (edit the file(s) you diagnosed).
+3. **Check what you actually changed** — this is the mechanical gate, not a prose self-check:
+   ```bash
+   cd "$DAGRUN_WORKTREE" && git diff --name-only
+   ```
+   Every path printed must match a test path (`**/src/test/**`, `qa/acceptance-tests/**`, or a
+   resource/fixture subdirectory of either). If even one path does not match:
+   ```bash
+   cd "$DAGRUN_WORKTREE" && git checkout -- .
+   ```
+   This reverts your edit while preserving the baseline (implement/fix's legitimate production
+   changes stay staged, untouched). Treat this exactly as "root cause is production code" — write
+   the stage's `FAIL_*` outcome and stop; note in `detail` that a production-scope edit was
+   attempted, caught, and reverted.
+4. If every changed path is in scope, fold the good fix into the baseline before retrying:
+   ```bash
+   cd "$DAGRUN_WORKTREE" && git add -A
+   ```
+
+**Rule 2 — shared-fixture rule:** before editing any test fixture file (BPMN, JSON, or other
+resource file under a test resources directory), check how many test files reference it:
+
+```bash
+grep -rl "<fixture-name>" "$DAGRUN_WORKTREE/qa/acceptance-tests" --include="*.java"
+```
+
+- If **more than one** test file depends on it, editing the shared fixture directly is off-limits —
+  other tests rely on its current contents and you have no way to verify your edit doesn't break
+  them. Instead, fix the _dependent AT's own assertions_ (e.g. update a stale expected-value list to
+  account for the fixture's actual, legitimate behavior) — this is almost always the correct fix in
+  practice, not a fallback.
+- Only edit the fixture directly if it is used by exactly the one AT you are validating in this
+  run.
+
+**Rule 3 — proof-before-fix rule (acceptance-stage failures only):** you may treat an acceptance-test
+failure as test-side and self-heal it ONLY after dispatching the **isolated**
+`verify-production-correctness-checker` subagent (via the Agent tool) and receiving back
+`production_correct: true` AND `confirmed: true`. Pass it: the diff, the AT's full content and the
+specific failing assertion(s), the actual failure output, and a one-paragraph flow description
+(same inputs D3 already uses, plus the failure output). If the subagent returns `false` for either
+field, or you cannot dispatch it, self-heal is off — write `FAIL_ASSERTION` and stop, exactly as
+before Rule 3 existed.
+
+**Retry caps (cost control — acceptance cycles are expensive):**
+
+- Build/test-stage self-heal: at most **2** fix-and-retry cycles per stage (i.e. up to 3 total run
+  attempts for that stage: the original run plus 2 retries).
+- Acceptance-stage self-heal: at most **1** fix-and-retry cycle (i.e. up to 2 total acceptance runs:
+  the original plus 1 retry) — each cycle re-provisions a fresh testcontainer/ES stack and can take
+  10+ minutes; do not loop expensively.
+- If a stage exhausts its retry cap still failing, write the normal `FAIL_*` outcome exactly as
+  before this change, but the `detail` field must narrate what was attempted — what was diagnosed,
+  what was changed, why the retry still failed — not just the final raw failure output. A human
+  resuming the run should not have to start diagnosis from zero.
+
+---
+
+## Step 4 — Independent build + test rerun (fail-fast ladder, with bounded style/lint self-heal)
 
 `verify` does not trust `implement`/`fix`'s self-reported build/test status — it reruns both
 independently. Stop at the first failing stage; do not run the (expensive) acceptance test after a
@@ -187,18 +290,35 @@ broken build or failing suite.
    ./mvnw install -pl clients/java -Dquickly
    ./mvnw compile -q
    ```
-   If this fails: write `verify-report.json` with `"outcome": "FAIL_BUILD"`, `stages.build.status:
-"FAIL"`, and a truncated (last ~40 lines) build-log tail in `stages.build.detail`. Skip to
-   Step 7 and stop.
+   - **If this fails and the failure is a lint/style/format violation (checkstyle, spotless, or
+     equivalent) in a file under a test path:** this qualifies for self-heal (see "Self-heal
+     authority and boundary" above). Apply the minimal fix, run the Rule 1 directory check, and
+     rerun the build command — up to 2 fix-and-retry cycles. If a cycle's directory check fails
+     (the fix touched a non-test path), stop self-healing immediately per Rule 1 and treat this as
+     a normal failure.
+   - **If this fails for any other reason** (a genuine compile error, or a lint/style violation in
+     a production file): not self-heal-able. Write `verify-report.json` with `"outcome":
+"FAIL_BUILD"`, `stages.build.status: "FAIL"`, and a truncated (last ~40 lines) build-log tail
+     in `stages.build.detail`. Skip to Step 7 and stop.
+   - **If the retry cap is exhausted still failing:** write `"outcome": "FAIL_BUILD"` as above, but
+     `stages.build.detail` must narrate the diagnosis and what was attempted (see retry-cap rule
+     above), not just the final raw log tail. Skip to Step 7 and stop.
 2. **Unit/integration test suite** (scope: the module(s) `implement`/`fix` touched — do not run
    the full monorepo suite; identify touched modules from `git diff --cached --name-only
 origin/main`):
    ```bash
    ./mvnw test -pl <touched-module(s)> -q
    ```
-   If this fails: write `verify-report.json` with `"outcome": "FAIL_TEST"`, `stages.test.status:
-"FAIL"`, and a truncated failing-test-output tail in `stages.test.detail`. Skip to Step 7 and
-   stop.
+   - **If this fails and the failure is a lint/style/format violation** (e.g. checkstyle enforced
+     during the test-phase compile) in a test-path file: same self-heal procedure as the build
+     stage — up to 2 fix-and-retry cycles, Rule 1 directory check on every attempt.
+   - **If this fails for any other reason** (a genuine behavioral test-assertion failure, or a
+     violation in a production file): NOT self-heal-able, regardless of how confident you are about
+     the root cause — a behavioral test failure is a real signal, not a lint nit. Write
+     `verify-report.json` with `"outcome": "FAIL_TEST"`, `stages.test.status: "FAIL"`, and a
+     truncated failing-test-output tail in `stages.test.detail`. Skip to Step 7 and stop.
+   - **If the retry cap is exhausted still failing:** write `"outcome": "FAIL_TEST"` as above, with
+     `stages.test.detail` narrating the diagnosis and what was attempted. Skip to Step 7 and stop.
 3. Both passing → `stages.build.status` and `stages.test.status` are `"PASS"`. Proceed to Step 5.
 
 **Out of scope — do not add:** CI's dist/packaging/cross-storage matrix. This is acceptance-level
@@ -206,7 +326,7 @@ verification of THIS change, not a CI re-run.
 
 ---
 
-## Step 5 — Run the acceptance test, classify the outcome
+## Step 5 — Run the acceptance test, classify the outcome (with bounded, proof-gated self-heal)
 
 Run the specific AT class (the one authored in Step 3 or reused in Step 2):
 
@@ -216,16 +336,52 @@ Run the specific AT class (the one authored in Step 3 or reused in Step 2):
 
 Classify the result into exactly ONE of:
 
-- **`PASS`** — the AT ran and all assertions passed.
-- **`FAIL_ASSERTION`** — the AT ran but an assertion failed (the feature's behavior is wrong).
+- **`PASS`** — the AT ran and all assertions passed. Proceed to Step 6.
+- **`FAIL_ASSERTION` (candidate)** — the AT ran but an assertion failed (the feature's behavior may
+  be wrong, or the test itself may be stale). Do not write this outcome yet — first work the
+  self-heal decision below.
 - **`ERROR_INFRA`** — the AT could not even start/run due to an environment problem (testcontainer
   failed to provision, ES never became healthy, port conflict, etc.) — **never** read this as a
-  green pass. Docker being reachable at Step 0 does not guarantee the ES container itself starts
-  cleanly; distinguish "my container never came up" (ERROR_INFRA) from "my container came up and
-  the assertion failed" (FAIL_ASSERTION) by reading the actual failure — a testcontainer
-  provisioning exception looks very different from a JUnit assertion failure.
+  green pass, and never self-heal it (see "Self-heal authority and boundary" above). Docker being
+  reachable at Step 0 does not guarantee the ES container itself starts cleanly; distinguish "my
+  container never came up" (ERROR_INFRA) from "my container came up and the assertion failed"
+  (FAIL_ASSERTION) by reading the actual failure — a testcontainer provisioning exception looks
+  very different from a JUnit assertion failure. Write `verify-report.json` with `"outcome":
+"ERROR_INFRA"` and stop.
 - (`FAIL_BUILD`/`FAIL_TEST` were already handled in Step 4 — you only reach this step once those
   passed.)
+
+**On a `FAIL_ASSERTION` candidate — work this decision before writing anything:**
+
+1. Trace the failure yourself first (as you naturally would) to form an initial hypothesis of
+   whether the root cause is production code or the test/fixture — but do NOT act on your own
+   conclusion yet.
+2. Dispatch the **`verify-production-correctness-checker`** subagent via the Agent tool (Rule 3).
+   Pass it the diff, the AT's full content and the specific failing assertion(s), the actual
+   failure output, and a one-paragraph flow description.
+3. **If the subagent does not return `production_correct: true` AND `confirmed: true`:** self-heal
+   is off. Write `verify-report.json` with `"outcome": "FAIL_ASSERTION"`, `stages.acceptance.status:
+"FAIL"`, and include the subagent's `rationale`/`evidence` in `stages.acceptance.detail`
+   alongside the raw failure. Skip to Step 7 and stop — exactly as before this change.
+4. **If the subagent confirms production is correct:** the fix is test-side. Determine where:
+   - If the fix is to the AT's own assertions/expectations, edit the AT file directly.
+   - If the fix would touch a shared fixture, apply Rule 2 (the shared-fixture check) first — if
+     more than one test file depends on the fixture, fix the dependent AT's assertions instead of
+     the fixture (this is the common case, not an edge case — see the run-54177-1 precedent this
+     change formalizes).
+
+   Apply the fix, run the Rule 1 directory check, and — if it passes — rerun the specific AT class.
+   You get **at most 1** retry cycle for the acceptance stage (2 total runs: original + 1 retry).
+
+5. **If the retry still fails, or the Rule 1 directory check fails at any point:** stop self-healing
+   immediately. Write `verify-report.json` with `"outcome": "FAIL_ASSERTION"`, and
+   `stages.acceptance.detail` must narrate the full diagnosis (including the subagent's verdict),
+   what was changed, and why the retry still failed (or why the directory check reverted the
+   attempt). Skip to Step 7 and stop.
+6. **If the retry passes:** `"outcome": "PASS"`. Record in `stages.acceptance.detail` that this run
+   passed after a self-heal, what was diagnosed, and what was changed — a PASS that required a
+   self-heal is still worth narrating for the human reading the report, even though it isn't a
+   failure. Proceed to Step 6.
 
 Use the framework's own await/poll helpers for any timing-sensitive read in your own manual
 inspection of the result — do not add fixed sleeps to work around a flaky-looking read.
@@ -282,6 +438,11 @@ Rules:
 - Every stage field must be present even when `SKIPPED` (e.g. `acceptance` is `SKIPPED` when
   Step 0/3b/4 already stopped the run) — never omit a stage key.
 - Valid JSON, no trailing commas.
+- If a self-heal was attempted at any stage (see "Self-heal authority and boundary" above) — whether
+  it ultimately succeeded or the stage exhausted its retry cap and still failed — that stage's
+  `detail` must narrate the diagnosis, what was changed, and the result, not just the final raw
+  log/output. This applies even on a self-healed `PASS`: a human reading the report later should be
+  able to tell a self-heal happened without re-deriving it from the worktree diff.
 
 ### 6b — `$DAGRUN_ARTIFACTS/verify-plan.md`
 
@@ -335,3 +496,9 @@ provisioning gotcha). Absence is fine. The SessionEnd hook captures this automat
 - Do not add any CI-style dist/packaging/cross-storage matrix coverage — out of scope.
 - Do not skip the D3 self-check for a reused existing AT (bugfix path) — reuse still needs
   grounding confirmation.
+- Self-heal (Step 4/5) is bounded and gated — never edit anything under `**/src/main/**` or any
+  other production path (Rule 1), never edit a shared fixture used by more than one AT (Rule 2), and
+  never self-heal an acceptance-test failure without a confirmed
+  `verify-production-correctness-checker` verdict (Rule 3). When self-heal is not authorized for a
+  failure, behave exactly as this node did before this change: write the matching
+  `FAIL_*`/`ERROR_INFRA` outcome and stop.
