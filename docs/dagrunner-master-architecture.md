@@ -230,10 +230,17 @@ its own gap: "poll until done" has no upper bound if "done" never actually arriv
 evidence (run `54177-1`, observed live) showed exactly this — Step 5's acceptance-test JVM hung
 identically on three consecutive attempts, confirmed via `jstack` to be parked in
 `CamundaMultiDBExtension.afterAll` → `Broker.close()` → `CompletableActorFuture.join()`, waiting on
-a Zeebe actor-scheduler shutdown signal that never arrived (a pre-existing broker/test-harness
-teardown issue, confirmed unrelated to any given diff via `git diff --stat origin/main` — not
-something this or any other feature change introduces). Without a human manually killing the JVM
-each time, the poll loop would have continued indefinitely. verify.md now bounds this: if the same
+a Zeebe actor-scheduler shutdown signal that never arrived — confirmed unrelated to any given diff
+via `git diff --stat origin/main` (not something this or any other feature change introduces).
+**Root cause, reclassified after further investigation (`DECISIONS.md § verify-stall-recovery`,
+dated follow-up entry):** not a genuine upstream Camunda/Zeebe product bug, but local `~/.m2`
+transitive-dependency version skew from an incomplete install step in `verify.md`/`implement.md`'s
+own instructions, which silently deadlocks the embedded broker's `Broker.internalStart()` — the
+`Broker.close()` hang above is the downstream symptom of a broker that never finished starting
+cleanly. Fixed by the `-am`-scoped `./mvnw install -pl qa/acceptance-tests -am -Dquickly -T1C`
+(same commit); this class of hang should now be rare. Without a human manually killing the JVM
+each time, the poll loop would have continued indefinitely. Stall-recovery is retained regardless,
+as general defense-in-depth for other/future stalls. verify.md now bounds this: if the same
 background launch returns `status: running` on two consecutive `TaskOutput(block: true, timeout:
 600000)` polls (~20 minutes with no terminal status), treat it as stalled, terminate it via
 `TaskStop` (falling back to `ps`/`kill -TERM` if `TaskStop` errors), and check the stage's report

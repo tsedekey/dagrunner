@@ -17,15 +17,22 @@ These facts are pre-verified — do not re-investigate them:
   ```bash
   grep '^java ' "$DEVHARNESS_SRC/.tool-versions" >> "$DAGRUN_WORKTREE/.tool-versions"
   ```
-- **`qa/acceptance-tests` module isolation:** this module resolves `clients/java` from
-  `~/.m2`, NOT from the source tree. When writing or modifying ITs in `qa/acceptance-tests`
-  that depend on `clients/java`, install the client snapshot first before any compile or test
-  run in the acceptance module:
+- **`qa/acceptance-tests` module isolation:** this module resolves its ENTIRE dependency chain
+  from `~/.m2`, NOT from the source tree — not just `clients/java`. When writing or modifying
+  ITs in `qa/acceptance-tests`, install the full transitive closure first, before any compile or
+  test run in the acceptance module:
   ```bash
-  ./mvnw install -pl clients/java -Dquickly
+  ./mvnw install -pl qa/acceptance-tests -am -Dquickly -T1C
   ```
-  Skipping this step causes compile failures that look like missing classes but are really
-  stale jars. Run this install step once per session before touching `qa/acceptance-tests`.
+  Skipping this step, or installing only a narrower subset (e.g. `clients/java` alone), leaves
+  `~/.m2` holding stale/skewed transitive jars after a rebase or any multi-module production
+  change. This does not just cause visible compile failures — a version-mismatched transitive
+  class can also break the actor scheduler's future-chain in a way that never resolves, causing
+  the embedded broker to **hang silently and indefinitely in `Broker.internalStart()`**, with no
+  error and no timeout. `-am` ("also make") has Maven compute and install the full transitive
+  dependency closure `qa/acceptance-tests` actually needs, so it structurally can't
+  under-enumerate the way a hand-picked module list can. Run this install step once per session
+  before touching `qa/acceptance-tests`.
 
 ---
 

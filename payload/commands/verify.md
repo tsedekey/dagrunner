@@ -40,14 +40,21 @@ These facts are pre-verified — do not re-investigate them:
   ```bash
   grep '^java ' "$DEVHARNESS_SRC/.tool-versions" >> "$DAGRUN_WORKTREE/.tool-versions"
   ```
-- **`qa/acceptance-tests` module isolation:** this module resolves `clients/java` from `~/.m2`,
-  NOT from the source tree. Install the client snapshot before any compile/test run in this
-  module:
+- **`qa/acceptance-tests` module isolation:** this module resolves its ENTIRE dependency chain
+  from `~/.m2`, NOT from the source tree — not just `clients/java`. Install the full transitive
+  closure before any compile/test run in this module:
   ```bash
-  ./mvnw install -pl clients/java -Dquickly
+  ./mvnw install -pl qa/acceptance-tests -am -Dquickly -T1C
   ```
-  Skipping this step causes compile failures that look like missing classes but are really stale
-  jars. Run this once per session before touching `qa/acceptance-tests`.
+  Skipping this step, or installing only a narrower subset (e.g. `clients/java` alone), leaves
+  `~/.m2` holding stale/skewed transitive jars after a rebase or any multi-module production
+  change. This does not just cause visible compile failures — a version-mismatched transitive
+  class can also break the actor scheduler's future-chain in a way that never resolves, causing
+  the embedded broker to **hang silently and indefinitely in `Broker.internalStart()`**, with no
+  error and no timeout. `-am` ("also make") has Maven compute and install the full transitive
+  dependency closure `qa/acceptance-tests` actually needs, so it structurally can't under-enumerate
+  the way a hand-picked module list can. Run this once per session before touching
+  `qa/acceptance-tests`.
 - **`docker *` is allow-listed.** Testcontainers itself talks to the Docker daemon directly from
   the JVM (not through the Bash tool) — this allowlist entry only covers the preflight/diagnostic
   commands below, not the actual acceptance-test execution.
@@ -325,9 +332,17 @@ thread parked forever in `CamundaMultiDBExtension.afterAll` → `TestApplication
 `Broker.close()` → `CompletableActorFuture.join()`, waiting on the Zeebe actor scheduler to signal
 shutdown-complete — a signal that never arrived, even though the actor threads themselves were idle
 (not processing the close task) and the test body itself had already finished well before the hang.
-This is a pre-existing broker/test-harness teardown issue, confirmed unrelated to any given diff via
-`git diff --stat origin/main` (no broker/lifecycle code touched) — not something any one change
-introduces, and not something worth trusting a person to notice by watching a terminal. Applies to
+This is confirmed unrelated to any given diff via `git diff --stat origin/main` (no broker/lifecycle
+code touched) — not something any one feature change introduces. **Root cause, reclassified after
+further investigation (see `DECISIONS.md § verify-stall-recovery` for the full correction):** not a
+genuine upstream Camunda product bug, but local `~/.m2` transitive-dependency version skew — an
+incomplete install step left stale jars in place, which caused the embedded broker's _startup_
+future-chain to deadlock silently (`Broker.internalStart()` hangs with no error, no timeout); the
+`Broker.close()` hang `jstack` caught is the downstream symptom of a broker that never finished
+starting cleanly. The "`qa/acceptance-tests` module isolation" install fix above (the `-am`-scoped
+`./mvnw install`) addresses this specific root cause, so this exact hang pattern should now be rare.
+Stall-recovery below is retained regardless, as general defense-in-depth for other/future stalls —
+it is not something worth trusting a person to notice by watching a terminal. Applies to
 BOTH places this node backgrounds a long `./mvnw` invocation and polls it via `TaskOutput`: Step 4's
 test-suite run (`./mvnw test -pl <module>`) and Step 5's acceptance-test run (`./mvnw verify
 -Dit.test=<ClassName>`) — not Step 4's build/compile command, which is fast and not a realistic
@@ -398,7 +413,7 @@ broken build or failing suite.
 
 1. **Build:**
    ```bash
-   ./mvnw install -pl clients/java -Dquickly
+   ./mvnw install -pl qa/acceptance-tests -am -Dquickly -T1C
    ./mvnw compile -q
    ```
    - **If this fails and the failure is a lint/style/format violation (checkstyle, spotless, or

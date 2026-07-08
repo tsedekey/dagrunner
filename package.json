@@ -1,6 +1,6 @@
 {
   "name": "dagrunner",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "description": "A thin DAG runner that orchestrates Claude Code (Agent SDK) across git worktrees, with checkpoint-and-exit conversation-led gates. Owns only what has no native Claude Code primitive that survives across processes/worktrees; reuses Claude Code for everything else.",
   "type": "module",
   "engines": {
