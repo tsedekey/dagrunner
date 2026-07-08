@@ -78,9 +78,15 @@ These facts are pre-verified — do not re-investigate them:
 
 ## Step 0 — Docker daemon preflight (mandatory, first, fail loud)
 
-`@MultiDbTest` provisions its own Elasticsearch testcontainer. If the Docker daemon is not
-reachable, the acceptance-test run degrades into an opaque testcontainer stack trace ten minutes
-in — check for this NOW, before doing any authoring work:
+`@MultiDbTest` only auto-provisions its own Elasticsearch testcontainer for `DatabaseType.LOCAL`.
+For the `ES`/`OS` database types — which Step 5 selects via
+`-Dtest.integration.camunda.database.type=ES|OS` — `CamundaMultiDBExtension` does NOT start
+anything itself: it hardcodes the connection to `http://localhost:9200` and polls it for up to 3
+minutes (`TIMEOUT_DATABASE_READINESS`) before failing with `ConditionTimeout`. If no container is
+listening on `:9200` yet, this reads exactly like a hang, not a fast failure — Step 5 has the exact
+`docker run` command you must issue yourself before an `ES`/`OS` invocation. Separately, if the
+Docker daemon itself is not reachable, neither the `LOCAL` testcontainer path nor a manual `ES`/`OS`
+container start in Step 5 can work — check for that NOW, before doing any authoring work:
 
 ```bash
 docker info > /dev/null 2>&1
@@ -300,8 +306,9 @@ before Rule 3 existed.
 - Build/test-stage self-heal: at most **2** fix-and-retry cycles per stage (i.e. up to 3 total run
   attempts for that stage: the original run plus 2 retries).
 - Acceptance-stage self-heal: at most **1** fix-and-retry cycle (i.e. up to 2 total acceptance runs:
-  the original plus 1 retry) — each cycle re-provisions a fresh testcontainer/ES stack and can take
-  10+ minutes; do not loop expensively.
+  the original plus 1 retry) — each cycle re-provisions a fresh testcontainer for `LOCAL` (or
+  re-exercises the manually-started `ES`/`OS` container from Step 5) and can take 10+ minutes; do
+  not loop expensively.
 - **A stall-and-recover sequence (see "Stall detection and recovery" below) shares this SAME
   budget — it is never a separate, stacked counter.** Read the cap above as a cap on total `./mvnw`
   launches per stage (build/test: up to 3 launches; acceptance: up to 2 launches), regardless of
@@ -458,11 +465,58 @@ verification of THIS change, not a CI re-run.
 
 ## Step 5 — Run the acceptance test, classify the outcome (with bounded, proof-gated self-heal)
 
-Run the specific AT class (the one authored in Step 3 or reused in Step 2):
+The module's default Maven profile EXCLUDES `@Tag("multi-db-test")` classes — which every
+`@MultiDbTest`/`@HistoryMultiDbTest` class carries. Running WITHOUT `-Pmulti-db-test` silently
+selects 0 tests (`BUILD SUCCESS`, `Tests run: 0`) — a false green, not a real pass. Always include
+`-Pmulti-db-test` for the AT class (the one authored in Step 3 or reused in Step 2):
 
 ```bash
-./mvnw verify -pl qa/acceptance-tests -Dit.test=<AcceptanceTestClassName> -q
+./mvnw verify -pl qa/acceptance-tests -Pmulti-db-test -Dit.test=<AcceptanceTestClassName> \
+  -Dtest.integration.camunda.database.type=<TYPE> -q
 ```
+
+`<TYPE>` selects the secondary-storage backend (`CamundaMultiDBExtension#DatabaseType`):
+
+- **`RDBMS_H2`** — embedded, no setup required. Use this as the default/fastest verification
+  backend unless the diff specifically touches the ES/OS-only read path (e.g. a terms-aggregation
+  reader, index mappings), in which case also run `ES` (and/or `OS`) below.
+- **`ES` / `OS`** — NOT auto-provisioned by testcontainers (only the internal `LOCAL` type is — see
+  Step 0). You must start the container yourself on `:9200` and confirm it actually answers BEFORE
+  launching `mvnw`, or the run silently burns its full 3-minute `TIMEOUT_DATABASE_READINESS` budget
+  polling a closed port and fails with `ConditionTimeout` inside `CamundaMultiDBExtension` — this is
+  a setup omission on your part, not testcontainer/infra flakiness, and must not be classified or
+  narrated as `ERROR_INFRA` without first confirming the container really was up (see the
+  `ERROR_INFRA` note below).
+
+  ```bash
+  # ES — image/version kept in sync with zeebe/test-util/.../TestSearchContainers.java
+  # (which itself tracks version.elasticsearch.container in parent/pom.xml)
+  docker run -d --name dagrun-verify-es -p 9200:9200 \
+    -e discovery.type=single-node \
+    -e xpack.security.enabled=false \
+    -e xpack.watcher.enabled=false \
+    -e xpack.ml.enabled=false \
+    -e action.auto_create_index=true \
+    -e action.destructive_requires_name=false \
+    -e ES_JAVA_OPTS="-Xms512m -Xmx512m" \
+    docker.elastic.co/elasticsearch/elasticsearch:8.19.16
+
+  # OS — see docs/testing/acceptance.md for the maintained flags/version
+  docker run -d --name dagrun-verify-os -p 9200:9200 -p 9600:9600 \
+    -e discovery.type=single-node \
+    -e OPENSEARCH_INITIAL_ADMIN_PASSWORD=yourStrongPassword123! \
+    -e DISABLE_SECURITY_PLUGIN=true \
+    opensearchproject/opensearch:2.19.5
+
+  # wait for it to actually answer before invoking mvnw — bounded, fails loud, never a fixed sleep
+  i=0; until curl -sf http://localhost:9200 > /dev/null 2>&1; do
+    i=$((i+1)); if [ "$i" -ge 45 ]; then echo "ES did not answer on :9200 within 90s" >&2; exit 1; fi
+    sleep 2
+  done
+  ```
+
+  Remove the container once Step 5/6 are done (`docker rm -f dagrun-verify-es`) — it is scoped to
+  this node's own run, not left behind for the next one.
 
 **If this backgrounds and the poll stalls** (returns `status: running` a second time in a row on the
 same launch — this is the stage where the stall was actually observed live, on run `54177-1`, three
@@ -476,16 +530,20 @@ Classify the result into exactly ONE of:
 - **`FAIL_ASSERTION` (candidate)** — the AT ran but an assertion failed (the feature's behavior may
   be wrong, or the test itself may be stale). Do not write this outcome yet — first work the
   self-heal decision below.
-- **`ERROR_INFRA`** — the AT could not even start/run due to an environment problem (testcontainer
-  failed to provision, ES never became healthy, port conflict, etc.), OR the task stalled and had to
-  be killed with no usable report recovered afterward (see "Stall detection and recovery" above) —
-  **never** read this as a green pass, and never self-heal it (see "Self-heal authority and
-  boundary" above). Docker being
-  reachable at Step 0 does not guarantee the ES container itself starts cleanly; distinguish "my
-  container never came up" (ERROR_INFRA) from "my container came up and the assertion failed"
-  (FAIL_ASSERTION) by reading the actual failure — a testcontainer provisioning exception looks
-  very different from a JUnit assertion failure. Write `verify-report.json` with `"outcome":
-"ERROR_INFRA"` and stop.
+- **`ERROR_INFRA`** — the AT could not even start/run due to a genuine environment problem: a
+  `LOCAL`-type testcontainer failed to provision, a manually-started `ES`/`OS` container (Step 5)
+  came up but `CamundaMultiDBExtension` still never reported it healthy, a port conflict, etc. — OR
+  the task stalled and had to be killed with no usable report recovered afterward (see "Stall
+  detection and recovery" above). **Never** read this as a green pass, and never self-heal it (see
+  "Self-heal authority and boundary" above). IMPORTANT — before writing this outcome for an `ES`/`OS`
+  run: confirm you actually started the container per Step 5 and that it answered on `:9200`. A
+  `ConditionTimeout` from `CamundaMultiDBExtension` when no container was ever started is a Step-5
+  setup omission, not infra flakiness — go back, start the container, confirm it answers, and rerun
+  before writing any outcome at all. Docker being reachable at Step 0 does not guarantee a
+  `LOCAL`-type testcontainer starts cleanly either; distinguish "my container never came up"
+  (ERROR_INFRA) from "my container came up and the assertion failed" (FAIL_ASSERTION) by reading the
+  actual failure — a container-health/connection exception looks very different from a JUnit
+  assertion failure. Write `verify-report.json` with `"outcome": "ERROR_INFRA"` and stop.
 - (`FAIL_BUILD`/`FAIL_TEST` were already handled in Step 4 — you only reach this step once those
   passed.)
 

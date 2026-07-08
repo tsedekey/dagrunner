@@ -213,8 +213,12 @@ single agent session, the same way the undocumented checkstyle fix in `54177-1` 
    above).
 6. **Run + classify, with bounded proof-gated self-heal** — executes the AT via the existing
    `@MultiDbTest` framework (starts `TestStandaloneBroker`/`TestSimpleCamundaApplication` in-process,
-   provisions its own ES testcontainer, injects `CamundaClient` — dagrunner reimplements none of
-   this) and classifies the result into exactly one of `PASS` / `FAIL_ASSERTION` / `FAIL_BUILD` /
+   injects `CamundaClient` — dagrunner reimplements none of this). The framework only
+   auto-provisions its own ES testcontainer for the internal `LOCAL` database type; for the `ES`/`OS`
+   types verify actually runs against (`-Dtest.integration.camunda.database.type=ES|OS`), it expects
+   a container already listening on `:9200` — verify starts one itself via `docker run` before
+   invoking `mvnw` (see `payload/commands/verify.md` Step 5) — and classifies the result into exactly
+   one of `PASS` / `FAIL_ASSERTION` / `FAIL_BUILD` /
    `FAIL_TEST` / `ERROR_INFRA`. An assertion failure is not written as `FAIL_ASSERTION` immediately —
    verify first works the self-heal decision (isolated production-correctness proof, directory/
    shared-fixture rules, one retry) before falling back to the classification.
@@ -285,8 +289,10 @@ nothing and is not part of the autonomous run.
 verify is acceptance-level verification of THIS change, not a CI re-run.
 
 **One-shot session vs. auto-backgrounded long commands (run `54177-1`):** Step 4/5's `./mvnw`
-invocations can run 10+ minutes (an `@MultiDbTest` acceptance test provisions its own Elasticsearch
-testcontainer), long enough that the SDK auto-converts the Bash call into a background task. In
+invocations can run 10+ minutes (an `@MultiDbTest` acceptance test either provisions its own
+`LOCAL`-type Elasticsearch testcontainer, or — for `ES`/`OS` — talks to the container verify started
+manually against `:9200`), long enough that the SDK auto-converts the Bash call into a background
+task. In
 `54177-1`, `verify` read that as "come back later," called `ScheduleWakeup`, and ended its turn —
 but nothing ever resumes a node's session (see §6's `disallowedTools` note), so the run just idled
 until the harness killed the backgrounded Maven task, never reaching a PASS/FAIL verdict.
