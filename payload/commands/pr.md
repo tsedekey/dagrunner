@@ -6,16 +6,6 @@ produce the artifacts.
 
 ## Step 0 — Confirm output directory
 
-Run each line separately and note the paths printed:
-
-```bash
-echo "$DAGRUN_ARTIFACTS"
-```
-
-```bash
-echo "$DAGRUN_RUN_DIR"
-```
-
 ```bash
 mkdir -p "$DAGRUN_ARTIFACTS"
 ```
@@ -23,11 +13,16 @@ mkdir -p "$DAGRUN_ARTIFACTS"
 The value of `$DAGRUN_ARTIFACTS` is the **only** directory you may write to.
 It ends with the node name (`pr/`), not `artifacts/`.
 
-**If you use the Write tool:** substitute the exact printed value of
-`$DAGRUN_ARTIFACTS` as the directory — the Write tool does not expand shell
-variables. For example, if `$DAGRUN_ARTIFACTS` printed
-`/home/user/.local/share/dagrunner/runs/53857-1/pr`, write to
-`/home/user/.local/share/dagrunner/runs/53857-1/pr/body.md`.
+**Do not try to print or discover the literal value of `$DAGRUN_ARTIFACTS`**
+(e.g. via `echo "$DAGRUN_ARTIFACTS"`, `printenv`, or `env`) — this sandbox's
+Bash tool blocks bare variable-expansion/introspection commands outright,
+before any approval prompt. Using the variable inline inside a real command
+(`mkdir -p "$DAGRUN_ARTIFACTS"`, or a heredoc redirect as in Step 2/3) works
+fine — the shell expands it as part of that command's own side effect. It is
+only _printing_ a variable's bare value that gets rejected. Because of this,
+write every artifact via heredoc (see Step 2/3), never via the Write tool —
+the Write tool needs a literal path string, and there is no reliable way to
+obtain one in this sandbox.
 
 All output files go to `$DAGRUN_ARTIFACTS/`.
 `$DAGRUN_RUN_DIR` is read-only in this session — never write there.
@@ -45,10 +40,10 @@ Read each of these inputs:
 
 ## Step 2 — Compose the PR body
 
-Follow the Camunda PR template exactly. Write to the path printed in Step 0:
+Follow the Camunda PR template exactly:
 
 ```bash
-# Use the resolved path — never write to $DAGRUN_RUN_DIR
+# $DAGRUN_ARTIFACTS expands inline here — never write to $DAGRUN_RUN_DIR
 cat > "$DAGRUN_ARTIFACTS/body.md" << 'BODY'
 ## Description
 
@@ -73,7 +68,7 @@ BODY
 
 ## Step 3 — Write metadata
 
-Write to the resolved path from Step 0. Use the Write tool or a heredoc — your choice, but the file must land at `$DAGRUN_ARTIFACTS/pr-meta.json`:
+Use a heredoc (not the Write tool — see Step 0) to write `$DAGRUN_ARTIFACTS/pr-meta.json`:
 
 The `title` field must follow [Conventional Commits](https://www.conventionalcommits.org/) format
 as required by the Camunda monorepo:
@@ -88,16 +83,31 @@ as required by the Camunda monorepo:
 - **short description** — lowercase, imperative mood, no period, ≤60 chars after the prefix.
   Example: `feat: add retry logic to job activation` ✓ `feat: Added Retry Logic` ✗
 
-```json
+First, run this to get the branch name (a real command, not a bare variable print —
+this one is not blocked):
+
+```bash
+cd "$DAGRUN_WORKTREE" && git rev-parse --abbrev-ref HEAD
+```
+
+Then write the heredoc yourself with that branch name and the other computed values
+(`title`, `verifyRan`, `createdAt`) substituted in as literal text. Leave
+`$DAGRUN_RUN_ID`/`$DAGRUN_WORKTREE`/`$DAGRUN_ARTIFACTS` as shell variables — the shell
+expands those safely as part of the heredoc's own redirect, you don't need to know
+their bare values:
+
+```bash
+cat > "$DAGRUN_ARTIFACTS/pr-meta.json" << META
 {
-  "runId": "<DAGRUN_RUN_ID>",
-  "branch": "<branch from: cd $DAGRUN_WORKTREE && git rev-parse --abbrev-ref HEAD>",
-  "worktreePath": "<DAGRUN_WORKTREE>",
-  "bodyPath": "<resolved DAGRUN_ARTIFACTS>/body.md",
+  "runId": "$DAGRUN_RUN_ID",
+  "branch": "<branch name from the command above — literal text, not a variable>",
+  "worktreePath": "$DAGRUN_WORKTREE",
+  "bodyPath": "$DAGRUN_ARTIFACTS/body.md",
   "title": "<type>: <short description>",
   "verifyRan": <true|false>,
   "createdAt": "<ISO timestamp>"
 }
+META
 ```
 
 Note: `prNumber` is NOT written here — dagrunner fills it after `gh pr create` returns. Leave

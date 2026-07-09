@@ -173,6 +173,13 @@ job, already done. You are proving the end-to-end user-facing contract, not re-t
    via the REST API." Write the test to deploy/start/act/assert that flow using the existing
    `@MultiDbTest` framework primitives (`TestStandaloneBroker`/`TestSimpleCamundaApplication`
    started in-process, injected `CamundaClient`) — do not reimplement any part of that framework.
+   **A promised flow with an authorization/security-boundary case does not have to live in the
+   same file as the rest of the coverage.** If a dedicated `*AuthorizationIT` class already exists
+   for this resource type with the fixture (multi-user auth setup, `@Authenticated` client) the
+   auth case needs, bolting one method onto it is usually the right call — duplicating that
+   fixture in the new file just to keep everything in one place is not required and often worse.
+   Whichever files end up covering the guide's promised flow, list all of them in `verify-plan.md`
+   (Step 6b) and carry every one of them into Step 3b — do not let D3 see only the new file.
 3. Use the framework's own await/poll semantics for timing-sensitive assertions (e.g. its existing
    `Awaitility`-style helpers, if the reference tests use one) — **no fixed `Thread.sleep`**.
 4. Run the formatter after writing the file:
@@ -199,8 +206,13 @@ Pass it in the prompt:
    — this covers both staged and unstaged changes, i.e. everything `implement`/`fix`/you have
    changed so far; this is a self-check input ONLY, never an authoring input — you already
    authored from the guide in Step 1/3).
-2. The full content of the acceptance test file (whether newly authored in Step 3, or the existing
-   file identified as a reuse match in Step 2).
+2. The full content of **every** acceptance-test file/method that covers the guide's promised
+   flow — whether newly authored in Step 3, an existing file identified as a reuse match in
+   Step 2, or an existing `*AuthorizationIT`-style class you added a method to per the note above.
+   Coverage for one promised flow is frequently split across more than one file (e.g. the happy
+   path in a new class, the unauthorized-caller case bolted onto an existing auth IT) — grounding
+   only the file you happened to author first will miss real coverage that lives elsewhere. Use
+   the file list you recorded in Step 3/verify-plan.md, not just the newest file.
 3. A one-paragraph description of the flow it's supposed to cover.
 
 **If the subagent returns `grounded: false`:** do NOT proceed to Step 4/5. Write
