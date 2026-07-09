@@ -31,6 +31,7 @@ export const bugfixWorkflow: Workflow = {
       command: "/reproduce",
       model: "opus",
       produces: ["guide.md"],
+      noPlaceholders: ["guide.md"],
       gate: { maxIterations: 10, onReject: "revise-self" },
     },
     {

@@ -601,6 +601,7 @@ import {
   MAX_INTERRUPT_RETRIES,
   runDag,
   checkOutcomeGate,
+  checkNoPlaceholders,
 } from "../core/dag.js";
 import { acquireLock, releaseLock } from "../core/lock.js";
 import { makeSDKRunner } from "./sdk-runner.js";
@@ -926,20 +927,35 @@ export async function startRun(opts: {
         return;
       }
 
-      // Auto-approve: log to gateHistory with night-mode basis.
+      // Auto-approve: log to gateHistory with night-mode basis. A mechanical
+      // noPlaceholders violation still fails the node even after auto-approval
+      // — gated nodes (define/reproduce) always return awaiting-gate, never
+      // 'done', from the executor itself (sdk-runner.ts), so this approve
+      // transition — not runDag's done-branch — is the only place their
+      // noPlaceholders check is ever reachable. See DECISIONS.md
+      // § no-placeholders-gate-approve-wiring.
       const autoTs = new Date().toISOString();
       const basis = "no concerns flagged";
       const nightArtifacts = (gateNode?.produces ?? [])
         .map((f) => join(runDir, gateNodeId, f))
         .filter((p) => existsSync(p));
+      const nightPlaceholderCheck =
+        gateNode !== undefined
+          ? checkNoPlaceholders(runDir, gateNodeId, gateNode)
+          : { ok: true as const };
       nightState = {
         ...nightState,
         nodes: {
           ...nightState.nodes,
           [gateNodeId]: {
             ...gateNodeState,
-            status: "done",
-            artifacts: nightArtifacts,
+            ...(nightPlaceholderCheck.ok
+              ? { status: "done" as const, artifacts: nightArtifacts }
+              : {
+                  status: "failed" as const,
+                  error: nightPlaceholderCheck.error,
+                  endedAt: autoTs,
+                }),
             gateHistory: [
               ...gateNodeState.gateHistory,
               {
@@ -955,9 +971,15 @@ export async function startRun(opts: {
         updatedAt: autoTs,
       };
       writeState(stateFile, nightState);
-      process.stdout.write(
-        `dagrun: [night] auto-approved "${gateNodeId}" — ${basis}\n`,
-      );
+      if (nightPlaceholderCheck.ok) {
+        process.stdout.write(
+          `dagrun: [night] auto-approved "${gateNodeId}" — ${basis}\n`,
+        );
+      } else {
+        process.stdout.write(
+          `dagrun: [night] auto-approved "${gateNodeId}" but noPlaceholders check failed — ${nightPlaceholderCheck.error}\n`,
+        );
+      }
 
       // Re-run the DAG from the newly approved gate. verify (when present) now
       // runs fully autonomously — no verify-election park here (see D1 of the
@@ -1143,32 +1165,54 @@ export async function resumeRun(opts: {
           `dagrun: rejected — node "${gateNodeId}" will revise (iteration ${n})\n`,
         );
       } else if (opts.approve === true) {
-        // Approve: mark done, collect artifacts from disk, continue.
+        // Approve: mark done, collect artifacts from disk, continue. A
+        // mechanical noPlaceholders violation still fails the node even after
+        // human approval — gated nodes (define/reproduce) always return
+        // awaiting-gate, never 'done', from the executor itself
+        // (sdk-runner.ts), so this approve transition — not runDag's
+        // done-branch — is the only place their noPlaceholders check is ever
+        // reachable. See DECISIONS.md § no-placeholders-gate-approve-wiring.
         const approvedArtifacts = (gateNode?.produces ?? [])
           .map((f) => join(artifactsDir, f))
           .filter((p) => existsSync(p));
+        const approvePlaceholderCheck =
+          gateNode !== undefined
+            ? checkNoPlaceholders(runDir, gateNodeId, gateNode)
+            : { ok: true as const };
+        const approveTs = new Date().toISOString();
         state = {
           ...state,
           nodes: {
             ...state.nodes,
             [gateNodeId]: {
               ...gateNodeState,
-              status: "done",
-              artifacts: approvedArtifacts,
+              ...(approvePlaceholderCheck.ok
+                ? { status: "done" as const, artifacts: approvedArtifacts }
+                : {
+                    status: "failed" as const,
+                    error: approvePlaceholderCheck.error,
+                    endedAt: approveTs,
+                  }),
               gateHistory: [
                 ...gateNodeState.gateHistory,
                 {
                   decision: "approve",
-                  timestamp: new Date().toISOString(),
+                  timestamp: approveTs,
                 },
               ],
             },
           },
           status: "running",
-          updatedAt: new Date().toISOString(),
+          updatedAt: approveTs,
         };
         writeState(stateFile, state);
-        process.stdout.write(`dagrun: approved — continuing run\n`);
+        if (approvePlaceholderCheck.ok) {
+          process.stdout.write(`dagrun: approved — continuing run\n`);
+        } else {
+          process.stdout.write(
+            `dagrun: approved, but noPlaceholders check failed — ${approvePlaceholderCheck.error}\n`,
+          );
+        }
       } else {
         // Interactive gate UX — spawn a fresh Claude Code session for review dialogue.
         //
@@ -1601,14 +1645,24 @@ export async function rerunNode(opts: {
           endedAt: now,
         };
       } else {
-        newStatus = "done";
-        updates = {
-          status: newStatus,
-          artifacts: result.artifacts,
-          cost: result.cost,
-          sessionId: result.sessionId,
-          endedAt: now,
-        };
+        const placeholderCheck = checkNoPlaceholders(runDir, nodeId, node);
+        if (!placeholderCheck.ok) {
+          newStatus = "failed";
+          updates = {
+            status: newStatus,
+            error: placeholderCheck.error,
+            endedAt: now,
+          };
+        } else {
+          newStatus = "done";
+          updates = {
+            status: newStatus,
+            artifacts: result.artifacts,
+            cost: result.cost,
+            sessionId: result.sessionId,
+            endedAt: now,
+          };
+        }
       }
     }
   } else if (result.status === "awaiting-gate") {

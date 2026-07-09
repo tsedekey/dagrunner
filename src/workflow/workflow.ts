@@ -109,6 +109,23 @@ export function loadWorkflow(def: Workflow): Workflow {
     }
   }
 
+  // 4c. noPlaceholders shape: when present, must be a non-empty array of
+  //     non-empty strings — same "typed at load" reasoning as outcomeGate
+  //     above (an empty array is a no-op that misleadingly reads as "checked").
+  for (const node of def.nodes) {
+    const np: unknown = node.noPlaceholders;
+    if (np === undefined) continue;
+    if (
+      !Array.isArray(np) ||
+      np.length === 0 ||
+      !np.every((v) => typeof v === "string" && v !== "")
+    ) {
+      throw new Error(
+        `loadWorkflow: node "${node.id}" noPlaceholders must be a non-empty array of non-empty strings`,
+      );
+    }
+  }
+
   // 5. Cycle detection via Kahn's algorithm
   //    Build adjacency list (dep → dependents) and in-degree map.
   const inDegree = new Map<string, number>();
@@ -252,6 +269,22 @@ export const FIXTURE_BAD_OUTCOME_GATE: Workflow = {
       command: "/step-a",
       produces: ["report.json"],
       outcomeGate: { file: "report.json", field: "outcome", passValues: [] },
+    },
+  ],
+};
+
+/**
+ * Invalid: "step-a" declares noPlaceholders as an empty array — a no-op that
+ * would misleadingly read as "this file is checked" when nothing is scanned.
+ */
+export const FIXTURE_BAD_NO_PLACEHOLDERS: Workflow = {
+  name: "fixture-bad-no-placeholders",
+  nodes: [
+    {
+      id: "step-a",
+      command: "/step-a",
+      produces: ["guide.md"],
+      noPlaceholders: [],
     },
   ],
 };

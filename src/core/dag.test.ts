@@ -1036,3 +1036,217 @@ test("outcomeGate: missing declared file degrades to failed via the existing pro
     "missing outcomeGate file must produce a non-empty error, not a silent pass",
   );
 });
+
+// ---------------------------------------------------------------------------
+// noPlaceholders — mechanical scan for unresolved placeholder markers
+// (item 4 of the "structural upgrades" build: define/reproduce guide.md
+// mechanically scanned for TBD/TODO/FIXME/XXX after fenced code is stripped)
+// ---------------------------------------------------------------------------
+
+test("checkNoPlaceholders: clean file with no markers passes", async () => {
+  const { checkNoPlaceholders } = (await import(DAG_MODULE)) as {
+    checkNoPlaceholders: (
+      runDir: string,
+      nodeId: string,
+      node: Node,
+    ) => { ok: true } | { ok: false; error: string };
+  };
+
+  const tmpDir = mkdtempSync(join(tmpdir(), "dr-no-placeholders-clean-"));
+  const nodeDir = join(tmpDir, "define");
+  const { mkdirSync } = await import("node:fs");
+  mkdirSync(nodeDir, { recursive: true });
+  writeFileSync(
+    join(nodeDir, "guide.md"),
+    "# Guide\n\nEverything here is fully specified. No open items remain.\n",
+    "utf8",
+  );
+
+  const node: Node = {
+    id: "define",
+    command: "/define",
+    produces: ["guide.md"],
+    noPlaceholders: ["guide.md"],
+  };
+
+  const result = checkNoPlaceholders(tmpDir, "define", node);
+  assert.deepEqual(result, { ok: true });
+});
+
+test("checkNoPlaceholders: a TODO quoted inside a fenced code block is NOT a false positive", async () => {
+  const { checkNoPlaceholders } = (await import(DAG_MODULE)) as {
+    checkNoPlaceholders: (
+      runDir: string,
+      nodeId: string,
+      node: Node,
+    ) => { ok: true } | { ok: false; error: string };
+  };
+
+  const tmpDir = mkdtempSync(join(tmpdir(), "dr-no-placeholders-fenced-"));
+  const nodeDir = join(tmpDir, "define");
+  const { mkdirSync } = await import("node:fs");
+  mkdirSync(nodeDir, { recursive: true });
+  writeFileSync(
+    join(nodeDir, "guide.md"),
+    [
+      "# Guide",
+      "",
+      "The existing handler already has this comment, unrelated to this guide:",
+      "",
+      "```java",
+      "// TODO: revisit this once the v2 API ships",
+      "public void handle() {}",
+      "```",
+      "",
+      "No further action needed here.",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const node: Node = {
+    id: "define",
+    command: "/define",
+    produces: ["guide.md"],
+    noPlaceholders: ["guide.md"],
+  };
+
+  const result = checkNoPlaceholders(tmpDir, "define", node);
+  assert.deepEqual(
+    result,
+    { ok: true },
+    "a TODO quoted inside a fenced code block must not fail the node",
+  );
+});
+
+test("checkNoPlaceholders: a real placeholder in prose fails with the token and line", async () => {
+  const { checkNoPlaceholders } = (await import(DAG_MODULE)) as {
+    checkNoPlaceholders: (
+      runDir: string,
+      nodeId: string,
+      node: Node,
+    ) => { ok: true } | { ok: false; error: string };
+  };
+
+  const tmpDir = mkdtempSync(join(tmpdir(), "dr-no-placeholders-real-"));
+  const nodeDir = join(tmpDir, "define");
+  const { mkdirSync } = await import("node:fs");
+  mkdirSync(nodeDir, { recursive: true });
+  writeFileSync(
+    join(nodeDir, "guide.md"),
+    [
+      "# Guide",
+      "",
+      "## Validation commands",
+      "",
+      "TBD — figure out the exact test command later.",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const node: Node = {
+    id: "define",
+    command: "/define",
+    produces: ["guide.md"],
+    noPlaceholders: ["guide.md"],
+  };
+
+  const result = checkNoPlaceholders(tmpDir, "define", node);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(
+      result.error.includes("guide.md"),
+      `expected filename in error, got: ${result.error}`,
+    );
+    assert.ok(
+      result.error.includes("TBD"),
+      `expected matched token in error, got: ${result.error}`,
+    );
+    assert.ok(
+      result.error.includes("line 5"),
+      `expected line number in error, got: ${result.error}`,
+    );
+  }
+});
+
+test("checkNoPlaceholders: absent when node.noPlaceholders is undefined (no expectation to violate)", async () => {
+  const { checkNoPlaceholders } = (await import(DAG_MODULE)) as {
+    checkNoPlaceholders: (
+      runDir: string,
+      nodeId: string,
+      node: Node,
+    ) => { ok: true } | { ok: false; error: string };
+  };
+
+  const tmpDir = mkdtempSync(join(tmpdir(), "dr-no-placeholders-absent-"));
+  const node: Node = {
+    id: "define",
+    command: "/define",
+    produces: ["guide.md"],
+  };
+
+  const result = checkNoPlaceholders(tmpDir, "define", node);
+  assert.deepEqual(result, { ok: true });
+});
+
+test("checkNoPlaceholders: wired end-to-end through runDag — a placeholder fails the node even though produces + outcomeGate would have passed", async () => {
+  const { runDag } = (await import(DAG_MODULE)) as {
+    runDag: (
+      workflow: Workflow,
+      executor: NodeExecutor,
+      state: RunState,
+      opts: { ctx: Ctx; stateFile: string },
+    ) => Promise<RunState>;
+  };
+
+  const tmpDir = mkdtempSync(join(tmpdir(), "dr-no-placeholders-rundag-"));
+  const node: Node = {
+    id: "define",
+    command: "/define",
+    produces: ["guide.md"],
+    noPlaceholders: ["guide.md"],
+  };
+  const stateFile = join(tmpDir, "state.json");
+  const executor: NodeExecutor = async (_id, n, ctx) => {
+    const { mkdirSync, writeFileSync: wfs } = await import("node:fs");
+    mkdirSync(ctx.artifactsDir, { recursive: true });
+    for (const f of n.produces ?? []) {
+      wfs(
+        join(ctx.artifactsDir, f),
+        "# Guide\n\nFIXME: not done yet.\n",
+        "utf8",
+      );
+    }
+    return {
+      status: "done",
+      artifacts: [],
+      cost: 0,
+      sessionId: "mock-session-abc123",
+    };
+  };
+  const workflow: Workflow = { name: "no-placeholders-fixture", nodes: [node] };
+  const state = makeOutcomeGateState(tmpDir, "no-placeholders-rundag");
+  const ctx: Ctx = {
+    json: () => ({}),
+    read: () => "",
+    dir: (id) => join(tmpDir, id),
+  };
+  // makeOutcomeGateState seeds a "verify" node id by default — override to "define".
+  const stateWithDefine: RunState = {
+    ...state,
+    nodes: { define: makeNodeState({ status: "pending" }) },
+  };
+
+  const result = await runDag(workflow, executor, stateWithDefine, {
+    ctx,
+    stateFile,
+  });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.nodes["define"]?.status, "failed");
+  assert.ok(
+    (result.nodes["define"]?.error ?? "").includes("FIXME"),
+    `expected FIXME token in error, got: ${result.nodes["define"]?.error}`,
+  );
+});

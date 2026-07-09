@@ -841,11 +841,106 @@ console.log(
 );
 
 // ---------------------------------------------------------------------------
+// RUN G — noPlaceholders: a placeholder left in define/guide.md fails the
+//          node on the GATE-APPROVE transition, not runDag's own done-branch
+//          (define always returns awaiting-gate from the executor — see
+//          sdk-runner.ts — so the approve path in resumeRun is the only place
+//          this check is reachable for a gated node; see DECISIONS.md
+//          § no-placeholders-gate-approve-wiring).
+// ---------------------------------------------------------------------------
+
+const HOME_G = `/tmp/dagrun-smoke-mock-g-${BASE_TS + 6}`;
+mkdirSync(join(HOME_G, "runs"), { recursive: true });
+mkdirSync(join(HOME_G, "worktrees"), { recursive: true });
+const PLAN_G = makePlanPath(HOME_G, BASE_TS + 6);
+
+const placeholderFactory = (
+  _config: DagrunnerConfig,
+  _runId: string,
+  _runDir: string,
+  _worktreePath: string,
+  _storeDir: string,
+) =>
+  createMockExecutor({
+    define: "gate-pause-with-placeholder", // guide.md contains an unresolved TODO
+    implement: "success",
+    review: "success",
+    fix: "gate-pause",
+    verify: "success",
+    pr: "success",
+  });
+
+await startRun({
+  workflow: featureWorkflow,
+  planPath: PLAN_G,
+  homeDir: HOME_G,
+  config,
+  executorFactory: placeholderFactory,
+});
+
+const runsG = readdirSync(join(HOME_G, "runs")).filter((d) =>
+  existsSync(join(HOME_G, "runs", d, "state.json")),
+);
+assert.ok(runsG.length > 0, "G: at least one run must exist");
+const RUN_ID_G = runsG[0] as string;
+const runDirG = join(HOME_G, "runs", RUN_ID_G);
+
+{
+  const state = readState(runDirG);
+  assert.strictEqual(
+    state.nodes["define"]?.status,
+    "awaiting-gate",
+    `G1: define must be awaiting-gate, got ${String(state.nodes["define"]?.status)}`,
+  );
+}
+console.log(
+  "step G1 passed: startRun -> define awaiting-gate, guide.md written with a placeholder",
+);
+
+await resumeRunCapturingExit({
+  runId: RUN_ID_G,
+  homeDir: HOME_G,
+  config,
+  approve: true, // Gate 1 (define) — noPlaceholders must fail define here, not silently pass
+  executorFactory: placeholderFactory,
+});
+
+{
+  const state = readState(runDirG);
+  assert.strictEqual(
+    state.nodes["define"]?.status,
+    "failed",
+    `G2: define must be failed by the noPlaceholders check on approval, got ${String(state.nodes["define"]?.status)}`,
+  );
+  const defineGate = state.nodes["define"]?.gateHistory?.at(-1) as
+    { decision?: string } | undefined;
+  assert.strictEqual(
+    defineGate?.decision,
+    "approve",
+    "G2: the human decision (approve) is still recorded in gateHistory even though the engine failed the node afterward",
+  );
+  assert.strictEqual(
+    state.nodes["implement"]?.status,
+    "skipped",
+    `G2: implement must never run — its required dep (define) failed, got ${String(state.nodes["implement"]?.status)}`,
+  );
+  assert.strictEqual(
+    state.status,
+    "failed",
+    `G2: run must end failed (noPlaceholders halt semantics match a produces violation), got ${state.status}`,
+  );
+}
+console.log(
+  "step G2 passed: approve -> noPlaceholders check fails define (unresolved TODO) -> implement blocked -> run failed",
+);
+
+// ---------------------------------------------------------------------------
 // Done
 // ---------------------------------------------------------------------------
 
 console.log(
   "\nall smoke-mock steps passed (Run A: feature happy path, Run B: bugfix happy path, " +
     "Run C: night clean unattended, Run D: night flagged, Run E: stale gate auto-skip, " +
-    "Run F: outcomeGate blocks pr on non-PASS)",
+    "Run F: outcomeGate blocks pr on non-PASS, Run G: noPlaceholders blocks a gate-approved " +
+    "guide.md containing an unresolved placeholder)",
 );

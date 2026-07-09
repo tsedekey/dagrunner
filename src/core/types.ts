@@ -119,6 +119,15 @@ export type Node = {
    * the produces-existence check passes. See OutcomeGateConfig.
    */
   outcomeGate?: OutcomeGateConfig;
+  /**
+   * Filenames (relative to the node's artifact dir) to mechanically scan for
+   * unresolved placeholder markers (`TBD`, `TODO`, `FIXME`, `XXX`, whole-word,
+   * case-sensitive) after fenced code blocks are stripped (a guide may
+   * legitimately quote an existing `// TODO` from the codebase it's
+   * describing). Checked after the produces-existence and outcomeGate checks
+   * pass; any match fails the node loud. See `checkNoPlaceholders` in dag.ts.
+   */
+  noPlaceholders?: string[];
   /** Human-review gate config. */
   gate?: GateConfig;
   /** Autonomous loop config (stop-hook driven). */

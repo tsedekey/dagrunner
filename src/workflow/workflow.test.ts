@@ -19,6 +19,7 @@ import {
   FIXTURE_BAD_DEPENDS,
   FIXTURE_DUPLICATE_ID,
   FIXTURE_BAD_OUTCOME_GATE,
+  FIXTURE_BAD_NO_PLACEHOLDERS,
   FIXTURE_CYCLE,
 } from "./workflow.js";
 
@@ -136,6 +137,43 @@ test("loadWorkflow: a valid outcomeGate does not throw", () => {
     ],
   };
   assert.doesNotThrow(() => loadWorkflow(withGate));
+});
+
+// ---------------------------------------------------------------------------
+// loadWorkflow — noPlaceholders shape validation
+// ---------------------------------------------------------------------------
+
+test('loadWorkflow: FIXTURE_BAD_NO_PLACEHOLDERS throws with node name "step-a" and "noPlaceholders"', () => {
+  assert.throws(
+    () => loadWorkflow(FIXTURE_BAD_NO_PLACEHOLDERS),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.ok(
+        err.message.includes("step-a"),
+        `Expected "step-a" in message: ${err.message}`,
+      );
+      assert.ok(
+        err.message.includes("noPlaceholders"),
+        `Expected "noPlaceholders" in message: ${err.message}`,
+      );
+      return true;
+    },
+  );
+});
+
+test("loadWorkflow: a valid noPlaceholders does not throw", () => {
+  const withNoPlaceholders: import("../core/types.js").Workflow = {
+    name: "fixture-valid-no-placeholders",
+    nodes: [
+      {
+        id: "step-a",
+        command: "/step-a",
+        produces: ["guide.md"],
+        noPlaceholders: ["guide.md"],
+      },
+    ],
+  };
+  assert.doesNotThrow(() => loadWorkflow(withNoPlaceholders));
 });
 
 // ---------------------------------------------------------------------------

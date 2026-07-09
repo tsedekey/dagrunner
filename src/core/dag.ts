@@ -152,6 +152,76 @@ export function checkOutcomeGate(
 }
 
 // ---------------------------------------------------------------------------
+// noPlaceholders — mechanical scan for unresolved placeholder markers
+// ---------------------------------------------------------------------------
+
+/** Whole-word, case-sensitive placeholder markers a finished guide must not contain. */
+const PLACEHOLDER_RE = /\b(TBD|TODO|FIXME|XXX)\b/;
+
+/**
+ * Checked AFTER the produces-file-existence check and checkOutcomeGate pass.
+ * When `node.noPlaceholders` is absent or empty, always ok (no expectation to
+ * violate). When present, for each named filename (relative to the node's
+ * artifact dir): reads the file, blanks out fenced code-block content (a
+ * guide may legitimately quote an existing `// TODO` from the codebase it
+ * describes — that is not an unresolved placeholder authored by the guide),
+ * then scans the remaining text for a whole-word match of TBD/TODO/FIXME/XXX.
+ * A missing/unreadable file, or any match, fails loud with the filename,
+ * matched token, and offending line — never a silent pass. Sibling to
+ * checkOutcomeGate; same failure shape, same call site.
+ */
+export function checkNoPlaceholders(
+  runDir: string,
+  nodeId: string,
+  node: Node,
+): { ok: true } | { ok: false; error: string } {
+  const files = node.noPlaceholders;
+  if (files === undefined || files.length === 0) return { ok: true };
+
+  for (const filename of files) {
+    const fullPath = join(runDir, nodeId, filename);
+    if (!existsSync(fullPath)) {
+      return {
+        ok: false,
+        error: `noPlaceholders check failed — ${filename} not found`,
+      };
+    }
+
+    let content: string;
+    try {
+      content = readFileSync(fullPath, "utf8");
+    } catch {
+      return {
+        ok: false,
+        error: `noPlaceholders check failed — ${filename} could not be read`,
+      };
+    }
+
+    // Blank fenced code-block content while preserving line numbers/newlines
+    // (so the reported line number below matches the file on disk exactly).
+    const stripped = content.replace(/```[\s\S]*?```/g, (block) =>
+      block.replace(/[^\n]/g, " "),
+    );
+
+    const lines = stripped.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] ?? "";
+      const match = PLACEHOLDER_RE.exec(line);
+      if (match !== null) {
+        return {
+          ok: false,
+          error:
+            `noPlaceholders check failed — ${filename} contains placeholder ` +
+            `marker "${match[1] ?? ""}" at line ${String(i + 1)}: "${line.trim()}"`,
+        };
+      }
+    }
+  }
+
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
 // Interrupt-retry cap
 // ---------------------------------------------------------------------------
 
@@ -382,13 +452,22 @@ export async function runDag(
               endedAt: now,
             });
           } else {
-            updateNode(id, {
-              status: "done",
-              artifacts: result.artifacts,
-              cost: result.cost,
-              sessionId: result.sessionId,
-              endedAt: now,
-            });
+            const placeholderCheck = checkNoPlaceholders(runDir, id, node);
+            if (!placeholderCheck.ok) {
+              updateNode(id, {
+                status: "failed",
+                error: placeholderCheck.error,
+                endedAt: now,
+              });
+            } else {
+              updateNode(id, {
+                status: "done",
+                artifacts: result.artifacts,
+                cost: result.cost,
+                sessionId: result.sessionId,
+                endedAt: now,
+              });
+            }
           }
         }
       } else {

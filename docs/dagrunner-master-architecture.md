@@ -272,6 +272,36 @@ code path was added: the distinction between "this feature is broken" and "the e
 broken" lives in the artifact's `outcome` field for the human to read on resume, not in different
 control flow.
 
+**Sibling mechanism — `noPlaceholders` (added by the structural-upgrades change, 2026-07-09 — see
+`DECISIONS.md § structural-upgrades-2026-07-09`):** a second content-level check, `noPlaceholders:
+string[]` (`src/core/types.ts`), lists produced filenames to mechanically scan for unresolved
+`TBD`/`TODO`/`FIXME`/`XXX` markers (whole-word, case-sensitive) after fenced code blocks are blanked
+(a guide may legitimately quote an existing `// TODO` from the codebase it describes — that is not
+an authored placeholder). Checked by `src/core/dag.ts`'s `checkNoPlaceholders`, immediately after
+`checkOutcomeGate`, same failure shape (`"failed"` with a clear message, never a silent pass). Wired
+as `noPlaceholders: ["guide.md"]` on `define` (feature) and `reproduce` (bugfix) — Eddie chose the
+mechanical check over a prompt self-check specifically because it is verifiable, unlike the
+RED-evidence declaration below.
+
+**Why this check needed FOUR wiring sites, not one:** `define`/`reproduce` are gated nodes, and
+`sdk-runner.ts` guarantees a gated node's executor call ALWAYS returns `awaiting-gate`, never
+`done` — so `runDag`'s own done-branch (where `checkOutcomeGate` already lived, and where the
+originating brief for this change said to add the sibling check) is never actually reached by the
+two nodes `noPlaceholders` targets. The only two places a gated node's status ever flips to `done`
+are `run-engine.ts`'s two gate-approve transitions: `resumeRun`'s manual `--approve` branch and
+`startRun`'s night-mode auto-approve loop. `checkNoPlaceholders` is wired into all four done-
+transition sites (`runDag`, `rerunNode` — mirroring `checkOutcomeGate`'s existing dual-wiring — plus
+both gate-approve branches). On a gate-approve failure, the human/night-mode "approve" decision is
+still recorded in `gateHistory` (it genuinely happened) but the node's `status` is written `"failed"`
+with the check's error instead of `"done"` — the mechanical check overrides the approval outcome,
+not the audit trail of what was decided. Proven end-to-end (not just via the pure-function unit
+tests) by `smoke:mock` Run G: a `gate-pause-with-placeholder` mock-executor scenario writes an
+unresolved `TODO` into `define/guide.md`, then the real `startRun`/`resumeRun` approve path is
+exercised and asserted to end `define` `"failed"` (not `"done"`), block `implement`, and fail the
+run — the wiring gap the advisor's review caught before this shipped, and the thing a `runDag`-only
+wiring would have made invisible (the mock guide.md content contains no placeholder token, so
+"check passed" and "check never ran" would have looked identical on the happy path alone).
+
 **What was removed:** the verify-election micro-gate (the "run runtime verification? [y/n]"
 pause after Gate 2, and night-mode's mandatory park at it — verify-election was the ONE thing
 night-mode could never auto-decide) is gone entirely, along with `RunState.verifyElection`, the
@@ -307,7 +337,7 @@ to completion synchronously via `TaskOutput`/`Monitor`, within the same turn, ra
 
 `npm run verify-baseline` = `npm ci && typecheck && unit tests && smoke:mock`. The standing gate: run on every plan change.
 
-**smoke:mock** (`test/smoke/smoke-mock.ts`) drives both gated workflows in-process using the mock executor — zero API calls, deterministic. Asserts: gate pauses, produces-contract (and, since the verify-autonomy change, `outcomeGate`) at every relevant node, state transitions (awaiting-gate → paused → done), night-mode auto-approvals. Six runs: **A** (feature workflow, full happy path — define/fix gates approved, `verify` runs autonomously to a `PASS` outcome, `pr` runs, run done — no election anywhere); **B** (bugfix workflow, same shape, proving the amendment's conditional-but-required `verify` on that workflow too); **C** (night-mode, clean plan — Gate 1 + Gate 2 auto-approved AND `verify` runs autonomously to `done`, the run completes fully unattended with no park, unlike the old verify-election design which always parked here); **D** (night-mode, seeded concern → parked at Gate 1, unchanged); **E** (stale gate from a prior workflow version auto-skipped on resume); **F** (a non-`PASS` `verify-report.json` outcome fails `verify` via `outcomeGate` and blocks `pr` — proven end-to-end through the real `startRun`/`resumeRun`/`runDag` path, with `resumeRun`'s intentional `process.exit(1)` on a failed run temporarily intercepted so the in-process smoke script can inspect the resulting `state.json` instead of dying with it). Does NOT assert model output quality or exact session IDs.
+**smoke:mock** (`test/smoke/smoke-mock.ts`) drives both gated workflows in-process using the mock executor — zero API calls, deterministic. Asserts: gate pauses, produces-contract (and, since the verify-autonomy change, `outcomeGate`) at every relevant node, state transitions (awaiting-gate → paused → done), night-mode auto-approvals. Seven runs: **A** (feature workflow, full happy path — define/fix gates approved, `verify` runs autonomously to a `PASS` outcome, `pr` runs, run done — no election anywhere); **B** (bugfix workflow, same shape, proving the amendment's conditional-but-required `verify` on that workflow too); **C** (night-mode, clean plan — Gate 1 + Gate 2 auto-approved AND `verify` runs autonomously to `done`, the run completes fully unattended with no park, unlike the old verify-election design which always parked here); **D** (night-mode, seeded concern → parked at Gate 1, unchanged); **E** (stale gate from a prior workflow version auto-skipped on resume); **F** (a non-`PASS` `verify-report.json` outcome fails `verify` via `outcomeGate` and blocks `pr` — proven end-to-end through the real `startRun`/`resumeRun`/`runDag` path, with `resumeRun`'s intentional `process.exit(1)` on a failed run temporarily intercepted so the in-process smoke script can inspect the resulting `state.json` instead of dying with it); **G** (added by the structural-upgrades change — `noPlaceholders`: `define`'s `guide.md` contains an unresolved `TODO`, approved at Gate 1, and the mechanical scan fails the node on the gate-approve transition itself — not `runDag`'s done-branch, since a gated node never reaches `done` there — blocking `implement` and failing the run; this is the load-bearing proof that `checkNoPlaceholders` is wired where a gated node's status actually flips to `done`, not just where the analogous `checkOutcomeGate` happens to already live). Does NOT assert model output quality or exact session IDs.
 
 **smoke:live** (`test/smoke/smoke.ts`) runs the real 8-step pipeline with the SDK — requires `ANTHROPIC_API_KEY`, ~35 min. Proves API auth, real session-resume, structured output from live model, worktree diff. Run when node prompts change (`payload/commands/*.md`) or when `sdk-runner.ts` changes. A bad prompt that passes mock but breaks model behaviour won't surface until the next smoke:live — that is the accepted tradeoff. **Reflection wiring (step 6):** smoke seeds a known `reflections.md` into `pr/` before the resume call so the SessionEnd hook has a deterministic file to capture — this proves hook wiring + env propagation in a real session without gating on spontaneous model output. The hook logic is separately proven by the unit test (`src/hooks/session-end.test.ts`).
 
