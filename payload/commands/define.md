@@ -46,6 +46,15 @@ For every concrete claim identified in Step 1:
   for X") — confirm with `grep`/`find` before repeating them. Do not propagate an
   unverified negative claim; it is exactly the kind of thing that later gets
   disproved and has to be walked back.
+- **Count/enumeration claims** ("exactly N implementers," "only used in M
+  places," "the only caller of X") — use a word-boundary-safe search
+  (`grep -w`, or a `\bSymbolName\b` regex) rather than a bare substring match.
+  A naive `grep "VariableReader {"` silently also matches
+  `ClusterVariableReader {`, inflating the count by counting an unrelated,
+  differently-named class as an implementer. The same substring trap can
+  happen with any symbol name where one identifier is a prefix/suffix
+  compound of another — common in this codebase — so verify the pattern
+  actually isolates the intended symbol before trusting the count.
 - **Mutable/shared-state hazards** — if the plan's approach adds a new call that
   reads or iterates a data structure (column family, cache, shared buffer, static
   field) that other code paths also touch, trace who else holds a reference to
