@@ -18,6 +18,16 @@ If there are no actionable findings (the list is empty after filtering), write a
 
 ## Step 2 — Apply fixes
 
+> **⚠️ Maven flag footgun — read before running any Maven command below.** `-Dquickly` silently
+> skips ALL tests — even when combined with `-DskipUTs` or `-Dit.test=...` — unless you also pass
+> `-DskipTests=false`. The tell-tale symptom is a clean exit with "Tests are skipped." and no
+> Failsafe report file (or a report file with a stale timestamp from an earlier run) — that is a
+> false-green, not a real pass. If you see it, the tests did not run; do not report the fix as
+> verified. Stick to the exact commands prescribed below (`-q` for quiet output) rather than
+> substituting an "optimized" variant like `-Dquickly` to save time — if a build genuinely needs to
+> be faster, check `AGENTS.md`'s module-scoped-build snippet in the repo (`$DEVHARNESS_SRC`) for the
+> exact required flag combination before your first test run, not after a false-green result.
+
 For each actionable finding in order:
 
 1. Read the cited file at the cited line to understand the context.
