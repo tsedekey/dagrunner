@@ -81,6 +81,13 @@ the plan got wrong or missed, before the implementer builds on it.
 
 ## Step 3 — Write the implementation guide
 
+**guide.md is mechanically scanned for placeholder markers after you write it** — a `TBD`, `TODO`,
+`FIXME`, or `XXX` left anywhere outside a fenced code block fails this node outright (`dag.ts`'s
+`checkNoPlaceholders`, no human review saves it). Any gap Step 2's verification didn't fully resolve
+must be resolved before writing the guide, not deferred with a placeholder — if something genuinely
+can't be resolved yet, say so in prose ("the exact retry count is not yet decided; default to 3
+pending review") rather than leaving a placeholder token.
+
 Write to $DAGRUN_ARTIFACTS/guide.md. The guide is **additive**, not a summary: the
 implementer reads guide.md instead of plan.md, so anything decision-relevant in
 the plan that you drop is gone, not just shortened. Carry forward and elaborate on:

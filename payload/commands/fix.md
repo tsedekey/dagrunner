@@ -31,6 +31,21 @@ For each actionable finding in order:
 
 ## Step 3 — Self-verification
 
+### Step 3.0 — Read this node's own round history (before doing anything else)
+
+`$DAGRUN_ARTIFACTS` survives across gate revise-self iterations (only `dagrun rerun` wipes it —
+this session resumes with the same artifacts dir every round). Check for a prior history:
+
+```bash
+cat "$DAGRUN_ARTIFACTS/fix-history.log" 2>/dev/null
+```
+
+If it exists, this tells you which round you're on (one line per prior round) and how many
+**consecutive trailing `FAIL`** rounds immediately precede this one (a `PASS` anywhere breaks the
+streak — only count consecutive `FAIL` lines counting backward from the most recent line). Keep
+this number in mind for Step 3b below — if it is currently 2, THIS round's build/test result, if it
+also fails, is the 3rd consecutive failure and triggers the escalation in Step 4.
+
 After all fixes are applied, run this checklist:
 
 **a) Addressed-each-finding check:**
@@ -52,6 +67,25 @@ Run the project's tests to confirm nothing is broken:
 - For any other project type: run the standard test command from the README
 
 If tests fail, attempt one fix per failing test. If tests still fail after the fix attempt, note it in the summary — do NOT silently skip.
+
+### Step 3c — Record this round's outcome (always, every round)
+
+Append exactly one line to `$DAGRUN_ARTIFACTS/fix-history.log` (create the file if it doesn't
+exist yet) recording this round's build/test result from Step 3b:
+
+```
+round <N>: build/test <PASS|FAIL> — <one-line reason>
+```
+
+`<N>` is one more than however many lines are already in the file (round 1 if the file didn't
+exist). `<one-line reason>` should be specific enough to be useful later — e.g. "3 assertion
+failures in DiscountServiceTest" or "checkstyle violation in NewHandler.java" — not just "tests
+failed." `fix-history.log` is scratch state for this node's own cross-round bookkeeping; it is not
+declared in `produces` and is not meant to reach the worktree or the PR.
+
+**A `PASS` this round resets the consecutive-fail streak to 0**, even if the human later rejects
+this round for an unrelated reason (style, scope, etc.) — the streak measures build/test
+convergence, not human satisfaction with the result.
 
 ---
 
@@ -83,6 +117,41 @@ Write `$DAGRUN_ARTIFACTS/summary.md`:
 <PASSED / FAILED — include the test output tail if FAILED>
 ```
 
+### Step 4b — Escalation: 3 consecutive failed rounds (mandatory when triggered)
+
+**Check the trigger condition using Step 3.0's count plus this round's own Step 3b/3c result:** if
+this round's build/test check FAILED and it is the **3rd consecutive** `FAIL` (i.e. Step 3.0 found 2
+consecutive trailing `FAIL`s already in `fix-history.log`, and this round makes 3), do NOT just note
+it in the "Build/test result" line as usual. Instead, append a prominent section to `summary.md`:
+
+```markdown
+## ⚠️ Architecture in question
+
+This finding/test has now failed 3 consecutive fix rounds: <name the specific finding(s)/test(s)>.
+
+### What was tried each round
+
+- Round 1: <pull from fix-history.log line 1 + feedback-1.md if present — what was attempted, why it failed>
+- Round 2: <pull from fix-history.log line 2 + feedback-2.md if present>
+- Round 3 (this round): <what was attempted this round, why it still failed>
+
+### Recommendation
+
+Three consecutive fix attempts on the same finding, each producing a different (or the same)
+failure, is a signal that the underlying approach may be wrong — not that a 4th attempt is more
+likely to succeed than the first three were. **Consider rejecting this round** with an instruction
+to reconsider the underlying approach rather than requesting another fix attempt — e.g. send the
+run back to `/define` (feature) or `/reproduce` (bugfix) for a revised guide, rather than continuing
+to iterate on `fix`.
+```
+
+This is a mandatory section when the trigger condition is met — do not talk yourself out of writing
+it because "the next attempt will probably work" (see the red-flag table below). This is a
+same-`summary.md`-file addition, not a new gate: `run-engine.ts`'s gate-context builder already
+embeds the full `summary.md` content verbatim into `gate-context.md` for the human review dialogue
+(`gate-review.md`'s existing "present the full artifact content, do not truncate" instruction), so
+this section surfaces to the human automatically — no other action is required of you here.
+
 ---
 
 ## Step 5 — Write reflections.md
@@ -105,6 +174,17 @@ Otherwise document any of the following:
 Do not recap the summary — that is already in summary.md.
 The SessionEnd hook captures reflections.md automatically — you do not need to call any CLI command.
 
+## Red flags — talk yourself out of these, don't act on them
+
+| Red flag phrase (in your own reasoning)                              | What to do instead                                                                                                                               |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| "While I'm in this file, I'll also clean up X"                       | Scope is the cited finding, nothing more. Defer or flag X separately — do not fold it into this fix.                                             |
+| "This other test failure is probably flaky, unrelated to my change"  | Rerun it before dismissing it. "Probably flaky" without a rerun is a guess, not a finding.                                                       |
+| "The next fix attempt will probably work, I'll skip the escalation"  | If this is the 3rd consecutive `FAIL` (Step 3.0), write the "Architecture in question" section — it is mandatory, not optional, at that trigger. |
+| "This finding is basically the same as one I already fixed nearby"   | Verify against the cited (file, line) and `claim` text — do not assume adjacency means the same root cause.                                      |
+| "I'll widen the fix to cover a case the finding didn't mention"      | That is scope creep. Fix exactly what the finding describes; note anything broader as a deferred finding.                                        |
+| "Tests pass locally in my head, I don't need to actually rerun them" | Rerun the actual command (Step 3b) every round — a round without a real rerun cannot honestly log PASS in `fix-history.log`.                     |
+
 ---
 
 ## Constraints
@@ -112,5 +192,5 @@ The SessionEnd hook captures reflections.md automatically — you do not need to
 - Fix ONLY findings with `confidence: "high"` AND `severity` of `"blocker"` or `"major"`. Defer everything else.
 - Do not make speculative improvements beyond what the findings require.
 - Do not modify `$DAGRUN_ARTIFACTS/../review/findings.json` — it is the read-only input.
-- Write all artifacts to `$DAGRUN_ARTIFACTS/` (summary.md, reflections.md).
+- Write all artifacts to `$DAGRUN_ARTIFACTS/` (summary.md, reflections.md, fix-history.log).
 - If a build or test step is unavailable (no build tool found), note it in the summary and continue.

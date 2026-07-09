@@ -412,6 +412,22 @@ independently-uncapped stall-retry counter.
 
 ---
 
+## Red flags — talk yourself out of these, don't act on them
+
+This does not repeat the Rule 1/2/3 mechanics above — it's a short reinforcement of judgment calls
+that lead TO the boundary being tested in the first place.
+
+| Red flag phrase (in your own reasoning)                                        | What to do instead                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "This is basically a lint issue" (when it isn't)                               | Only checkstyle/spotless/format tooling actually flagging it counts as lint. A genuine compile error or behavioral assertion failure dressed up as "basically style" is still not self-heal-able (Step 4).                                            |
+| "This assertion failure looks stale, I'll just update it"                      | Not without the `verify-production-correctness-checker` subagent's `production_correct: true` AND `confirmed: true` (Rule 3). Your own read of "looks stale" is exactly the self-grading bias Rule 3 exists to guard against.                         |
+| "I'll just tweak this shared fixture once, it's a small change"                | Run the Rule 2 `grep -rl` count first. More than one dependent test means the fixture is off-limits — fix the dependent AT's assertions instead.                                                                                                      |
+| "The directory check is a formality, I know my edit was test-only"             | Run `git diff --name-only` anyway (Rule 1) — it is the mechanical gate, not your own confidence.                                                                                                                                                      |
+| "This has already taken a while, I'll skip the isolated subagent to save time" | The isolated subagent dispatch (D3, and Rule 3 for acceptance self-heal) is what makes verify's judgment trustworthy with no human reviewing it. Skipping it to save time removes the one check that exists precisely because there is no human here. |
+| "Docker/testcontainer flakiness, I'll just call it ERROR_INFRA"                | Confirm the container was actually started and answered (Step 0 / Step 5's `ES`/`OS` note) before writing `ERROR_INFRA` — a setup omission on your part is not infra flakiness.                                                                       |
+
+---
+
 ## Step 4 — Independent build + test rerun (fail-fast ladder, with bounded style/lint self-heal)
 
 `verify` does not trust `implement`/`fix`'s self-reported build/test status — it reruns both

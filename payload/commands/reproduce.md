@@ -18,6 +18,12 @@ If the test passes (bug appears already fixed), or cannot be found, or the test 
 
 ## Step 3 — Write the reproduction guide
 
+**guide.md is mechanically scanned for placeholder markers after you write it** — a `TBD`, `TODO`,
+`FIXME`, or `XXX` left anywhere outside a fenced code block fails this node outright (`dag.ts`'s
+`checkNoPlaceholders`, no human review saves it). Any gap Step 2's reproduction didn't fully resolve
+must be resolved before writing the guide, not deferred with a placeholder — if something genuinely
+can't be resolved yet, say so in prose rather than leaving a placeholder token.
+
 Write to $DAGRUN_ARTIFACTS/guide.md. Cover:
 
 1. **Confirmed root cause** — what you found when reproducing the failure

@@ -36,7 +36,8 @@ These facts are pre-verified — do not re-investigate them:
 
 ---
 
-Read the implementation guide. Check these paths in order and use the first one that exists:
+Read the implementation guide. Check these paths in order and use the first one that exists —
+**remember which one it was**, it decides whether the RED-step below applies:
 
 1. `$DAGRUN_ARTIFACTS/../define/guide.md` (feature workflow)
 2. `$DAGRUN_ARTIFACTS/../reproduce/guide.md` (bugfix workflow)
@@ -49,6 +50,46 @@ reviewer requests that were not fully addressed in the guide itself.
 precedent", "similar to ExistingClass"): read that reference file before writing any new interface
 or class. Only then implement, matching the structural shape of the reference. Do not design a new
 interface without first reading the reference — interface shape mismatches require full rewrites.
+
+---
+
+## Step — Verified-RED before implementation (feature workflow ONLY — `define/guide.md` path)
+
+**Skip this entire step if you read `reproduce/guide.md` (bugfix workflow) — go straight to "Write
+a brief implementation summary" below.** The bugfix workflow already proves red at the bug-symptom
+level in `reproduce.md` Step 2 (the reproducing test/validation command is run and confirmed to
+currently fail, before any guide is written) — repeating that proof here would duplicate work `fix`
+and `verify` already build on. This step exists ONLY to close the equivalent gap on the feature
+path, which has no such proof today.
+
+If you read `define/guide.md`, before writing any implementation code:
+
+1. **Identify the test(s) the guide's acceptance criteria imply**, at the unit/integration level —
+   NOT an `@MultiDbTest` acceptance test. Authoring the acceptance test is `verify`'s job, done later
+   in isolated context specifically so it isn't graded by the same session that wrote the feature
+   (see `payload/commands/verify.md`); duplicating that here would blur the split and buy nothing.
+   Pick the smallest test (or small group of tests) that would fail today because the described
+   behavior doesn't exist yet, and would pass once it does.
+2. **Write that test first.** Run it. Confirm it fails, and — this is the part that actually
+   matters — confirm it fails **for the right reason**: missing feature/behavior, not an unrelated
+   compile error, a typo in the test itself, or a wrong import. Capture the actual failure output
+   (the assertion/error text, not just "it failed").
+3. **Only then write the implementation** that makes the test pass.
+4. **Rerun the test to confirm it now passes (GREEN).** If it doesn't, keep iterating — do not move
+   on with a still-red test.
+5. **Write `$DAGRUN_ARTIFACTS/red-evidence.md`** containing:
+   - Which test file and method/case this covers.
+   - The captured RED failure output (step 2), with a one-line note on why it failed for the right
+     reason.
+   - Confirmation of the GREEN rerun (step 4) after implementation, with the passing output.
+
+**Be honest with yourself about what this proves.** `red-evidence.md`'s presence and content prove
+a plausible RED→GREEN narrative existed — they do not cryptographically prove the ordering actually
+happened session-side. That is an accepted, known ceiling; do not try to engineer around it (e.g. by
+inventing timestamps or hashes) — just do the actual RED→GREEN work honestly and record it
+accurately.
+
+---
 
 Write a brief implementation summary to $DAGRUN_ARTIFACTS/summary.md describing:
 
@@ -94,6 +135,17 @@ git status --short
 ```
 
 If the working tree is already clean, note it in summary.md and skip.
+
+## Red flags — talk yourself out of these, don't act on them
+
+| Red flag phrase (in your own reasoning)                           | What to do instead                                                                                                                            |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| "This should work, I don't need to run the test first"            | Run it anyway. A test you didn't watch fail cannot prove it was ever testing the right thing.                                                 |
+| "I'll write the test after — same effect, saves a step"           | Order matters, not just presence. Write-then-implement can silently write a test shaped to already pass.                                      |
+| "This is obviously correct, RED is a formality here"              | The RED step exists precisely for the cases that feel obvious — that's when a wrong-reason pass hides.                                        |
+| "The guide didn't ask for a test here, I'll skip red-evidence.md" | The RED step is scoped to the guide's acceptance criteria, not to an explicit guide instruction — infer the test from the criteria and do it. |
+| "One more file while I'm in here — small scope creep"             | If it's not in the guide's deliverable list, defer it or flag it in summary.md; don't fold it in silently.                                    |
+| "Close enough, I'll leave a stub / TODO for the rest"             | An incomplete deliverable is a failed one, not a known omission — finish it or explicitly flag it, don't stub it.                             |
 
 ## Reflections (optional, do this last)
 

@@ -333,6 +333,68 @@ to completion synchronously via `TaskOutput`/`Monitor`, within the same turn, ra
 
 ---
 
+## 3e. Verified-RED TDD, the 3-failed-fix-rounds escalation, and red-flag tables
+
+Three prompt-level hardening changes landed together (2026-07-09, alongside the `noPlaceholders`
+engine change in §3d — see `DECISIONS.md § structural-upgrades-2026-07-09` for the full log):
+
+**Verified-RED TDD on feature `implement` (feature workflow only):** `payload/commands/implement.md`
+is shared by both workflows, but the RED-proof gap it closes is real only on the feature side —
+`reproduce.md` Step 2 already proves red at the bug-symptom level (runs the reproducing
+test/validation command, confirms it currently fails) before any guide is written. `implement.md`
+now has a step, gated on which guide.md path was read (`define/guide.md` vs `reproduce/guide.md` —
+the same detection pattern `verify.md` Step 1 already uses), that on the feature path: identifies
+the unit/integration test(s) the guide's acceptance criteria imply (explicitly NOT an `@MultiDbTest`
+acceptance test — that stays `verify`'s job, authored later in isolated context), writes that test
+first, runs it, confirms it fails for the right reason (captures the output), only then writes the
+implementation, reruns to confirm GREEN, and writes `$DAGRUN_ARTIFACTS/red-evidence.md` with the
+test identity, captured RED output, and GREEN confirmation. `red-evidence.md` is declared in
+`implement`'s `produces` array in `feature-workflow.ts` ONLY (not `bugfix-workflow.ts`'s `implement`
+node) — this reuses the existing produces-contract engine mechanism (`dag.ts`'s
+`missing = (node.produces ?? []).filter(...)`) rather than any new hook; `.claude/hooks/
+session-end.sh` was explicitly considered and rejected for this because it is fail-soft/
+observability-only and cannot enforce anything. **Known, accepted ceiling:** this proves existence +
+a plausible RED→GREEN narrative, not a cryptographically-verified ordering — an agent could still
+fabricate `red-evidence.md`'s content. That is intentional; over-engineering around it was
+explicitly rejected.
+
+**3-failed-fix-rounds escalation (`fix.md`, shared by both workflows — one edit covers both):** `fix`
+already checkpoint-exits to a human gate on every round, and `run-engine.ts`'s gate-context builder
+already embeds the full `summary.md` content verbatim into `gate-context.md` for the human review
+dialogue — so this needed NO new engine/gate mechanism, just richer `summary.md` content at round 3.
+Confirmed via `sdk-runner.ts` that a gated node's `$DAGRUN_ARTIFACTS` directory is NOT wiped between
+revise-self gate iterations (only `dagrun rerun`, the manual CLI command, wipes artifacts), so
+`fix.md` persists its own cross-round state in `$DAGRUN_ARTIFACTS/fix-history.log` (one
+`round <N>: build/test <PASS|FAIL> — <reason>` line per round, appended at the end of Step 3's
+self-verification; read back at the start of Step 3 to count consecutive trailing `FAIL`s).
+`fix-history.log` is deliberately NOT in `produces` — it is scratch cross-round bookkeeping for
+`fix` itself, never meant to reach the worktree or PR. When a round's build/test check fails for the
+3rd consecutive time, `fix.md` writes a mandatory `## ⚠️ Architecture in question` section into
+`summary.md` (which finding/test has failed 3 rounds running, a per-round reconstruction pulled from
+`fix-history.log` + `feedback-*.md`, and an explicit recommendation to reject and send the run back
+to `/define`/`/reproduce` for a revised guide rather than requesting a 4th fix attempt). A `PASS`
+resets the streak to 0 regardless of a later human rejection for unrelated reasons (style, scope) —
+the streak measures build/test convergence, not human satisfaction. `gate-review.md` is untouched —
+its existing "present the full artifact content, do not truncate" instruction already surfaces the
+new section with no edit needed.
+
+**Red-flag / rationalization tables** were added to `implement.md`, `fix.md`, and `verify.md` — a
+short (5-8 row) two-column table per node ("red flag phrase" → "what to do instead"), each tailored
+to that node's actual failure modes (skipping the new RED step, scope creep, and leaving work
+half-done for `implement`; scope creep beyond the cited finding, dismissing a still-failing test as
+"probably flaky" without rerunning, and talking oneself out of the round-3 escalation for `fix`;
+reinforcing — not duplicating — the existing Rule 1/2/3 self-heal boundary language for `verify`).
+These are deliberately cheap, skimmable red-flag recognition aids, not new procedural steps.
+
+**Testing note:** these three changes are prompt-only (no unit-testable engine surface beyond
+confirming `smoke:mock` still passes and the new `red-evidence.md` produces entry doesn't break
+anything — both confirmed). `smoke:live` was deferred for all three, consistent with this file's
+established precedent for prompt-only changes whose new branches (a genuinely-red test, a 3rd
+consecutive fix failure, a red-flag table being consulted) aren't reachable by a toy mock fixture —
+see `DECISIONS.md § structural-upgrades-smoke-live-deferred`.
+
+---
+
 ## 3b. Validation — smoke:mock (per-plan gate) and smoke:live (occasional)
 
 `npm run verify-baseline` = `npm ci && typecheck && unit tests && smoke:mock`. The standing gate: run on every plan change.
