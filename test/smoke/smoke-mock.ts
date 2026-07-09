@@ -779,6 +779,26 @@ async function resumeRunCapturingExit(
   }
 }
 
+/**
+ * startRun's own night-mode auto-approve loop (and its attended-mode tail)
+ * also calls process.exit(1) unconditionally when a run ends "failed" — same
+ * CLI-exit-code contract, same problem for an in-process smoke script. Used
+ * by Run H, whose whole point is a night-mode run that auto-approves into a
+ * failure.
+ */
+async function startRunCapturingExit(
+  opts: Parameters<typeof startRun>[0],
+): Promise<void> {
+  const realExit = process.exit.bind(process);
+  (process as unknown as { exit: (code?: number) => void }).exit = () =>
+    undefined;
+  try {
+    await startRun(opts);
+  } finally {
+    process.exit = realExit;
+  }
+}
+
 await startRun({
   workflow: featureWorkflow,
   planPath: PLAN_F,
@@ -935,12 +955,84 @@ console.log(
 );
 
 // ---------------------------------------------------------------------------
+// RUN H — noPlaceholders on the NIGHT-MODE auto-approve path (startRun's own
+//          auto-approve loop, distinct from resumeRun's manual --approve
+//          branch Run G exercises). A placeholder-laden guide.md with no
+//          "Concerns / plan challenges" heading auto-approves (hasConcerns
+//          returns false) and must still be caught by checkNoPlaceholders on
+//          THIS code path too — this is the other of the two gate-approve
+//          sites named in DECISIONS.md § no-placeholders-gate-approve-wiring,
+//          and the highest-risk one to leave unexercised (night-mode runs
+//          fully unattended, no human eyes on the artifact at all).
+// ---------------------------------------------------------------------------
+
+const HOME_H = `/tmp/dagrun-smoke-mock-h-${BASE_TS + 7}`;
+mkdirSync(join(HOME_H, "runs"), { recursive: true });
+mkdirSync(join(HOME_H, "worktrees"), { recursive: true });
+const PLAN_H = makePlanPath(HOME_H, BASE_TS + 7);
+
+await startRunCapturingExit({
+  workflow: featureWorkflow,
+  planPath: PLAN_H,
+  homeDir: HOME_H,
+  config,
+  executorFactory: placeholderFactory,
+  nightMode: true,
+});
+
+const runsH = readdirSync(join(HOME_H, "runs")).filter((d) =>
+  existsSync(join(HOME_H, "runs", d, "state.json")),
+);
+assert.ok(runsH.length > 0, "H: at least one run must exist");
+const RUN_ID_H = runsH[0] as string;
+const runDirH = join(HOME_H, "runs", RUN_ID_H);
+
+{
+  const state = readState(runDirH);
+  assert.strictEqual(
+    state.nodes["define"]?.status,
+    "failed",
+    `H: define must be failed by the noPlaceholders check on the night-mode auto-approve path (no concerns heading, so it auto-approved rather than parking), got ${String(state.nodes["define"]?.status)}`,
+  );
+  const defineGate = state.nodes["define"]?.gateHistory?.at(-1) as
+    { decision?: string; mode?: string; basis?: string } | undefined;
+  assert.strictEqual(
+    defineGate?.decision,
+    "approve",
+    "H: the night-mode auto-approval decision is still recorded in gateHistory even though the engine failed the node afterward",
+  );
+  assert.strictEqual(
+    defineGate?.mode,
+    "night",
+    "H: gateHistory entry must still carry mode=night on this path",
+  );
+  assert.strictEqual(
+    defineGate?.basis,
+    "no concerns flagged",
+    "H: gateHistory entry must still carry the night-mode basis on this path",
+  );
+  assert.strictEqual(
+    state.nodes["implement"]?.status,
+    "skipped",
+    `H: implement must never run — its required dep (define) failed, got ${String(state.nodes["implement"]?.status)}`,
+  );
+  assert.strictEqual(
+    state.status,
+    "failed",
+    `H: run must end failed, got ${state.status}`,
+  );
+}
+console.log(
+  "step H passed: night-mode auto-approve -> noPlaceholders check fails define (unresolved TODO, no concerns heading) -> implement blocked -> run failed",
+);
+
+// ---------------------------------------------------------------------------
 // Done
 // ---------------------------------------------------------------------------
 
 console.log(
   "\nall smoke-mock steps passed (Run A: feature happy path, Run B: bugfix happy path, " +
     "Run C: night clean unattended, Run D: night flagged, Run E: stale gate auto-skip, " +
-    "Run F: outcomeGate blocks pr on non-PASS, Run G: noPlaceholders blocks a gate-approved " +
-    "guide.md containing an unresolved placeholder)",
+    "Run F: outcomeGate blocks pr on non-PASS, Run G: noPlaceholders blocks a manually-approved " +
+    "gate, Run H: noPlaceholders blocks a night-mode auto-approved gate)",
 );
