@@ -33,6 +33,14 @@ These facts are pre-verified — do not re-investigate them:
   dependency closure `qa/acceptance-tests` actually needs, so it structurally can't
   under-enumerate the way a hand-picked module list can. Run this install step once per session
   before touching `qa/acceptance-tests`.
+- **Maven output volume:** this session runs many `./mvnw` invocations while iterating, and every
+  one's stdout persists in context and gets re-read on every subsequent turn — verbose build/test
+  output compounds across all of them into a large chunk of this session's token cost. Suffix Maven
+  invocations with `-q` by default (e.g. `./mvnw compile -q`,
+  `./mvnw test -pl <module> -Dtest=<ClassName> -q`). On failure, do not re-run verbose to see
+  what broke — pipe the failing invocation's output through something like `tail -n 100` or
+  `grep -A20 -B5 -i 'error\|failure'` to extract just the relevant failure text before deciding
+  next steps.
 
 ---
 
