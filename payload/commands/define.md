@@ -29,6 +29,9 @@ Read plan.md carefully. Identify:
 - Every concrete, checkable claim the plan makes about the codebase: named files,
   classes, methods, "no helper exists for X," line numbers, "this field is only
   written by Y." These are exactly the claims Step 2 must verify.
+- Whether the plan proposes adding or changing a REST endpoint (new/changed
+  `@Path`/`@GET`/`@POST`/etc., request/response DTOs, pagination). If so, Step 2's
+  REST guideline check applies.
 
 ## Step 2 — Verify the plan's claims against the current codebase (mandatory)
 
@@ -53,6 +56,20 @@ For every concrete claim identified in Step 1:
 - **Consistency** — if the plan's own steps are internally ambiguous or
   inconsistent about how a value is passed between two of its own steps, resolve
   it explicitly in the guide (pick one representation, state it once).
+- **REST API guideline conformance** — if the plan proposes adding or changing a
+  REST endpoint (per Step 1), run `cat docs/rest-api-endpoint-guidelines.md`
+  (worktree-relative — this file is git-tracked in the target repo, so it is
+  already present) and check the plan's _proposed design_ against it: resource
+  naming, HTTP verb choice, pagination shape, error-response format, and any
+  other rule the guideline states. This is a design-level check — no diff exists
+  yet, so it catches what the plan intends, not what gets implemented;
+  `reviewer-api-stability` still re-checks the actual code against the same
+  guideline at review time. Fold any violation directly into the guide as a
+  corrected constraint (Step 3), the same way any other Step 2 correction is
+  handled. If the plan touches REST endpoints but the guideline doc can't be
+  read, do not silently skip this check — add a **"Concerns / plan challenges"**
+  entry (Step 4) stating conformance could not be verified, rather than letting
+  the guide look like conformance was confirmed.
 
 If the plan contains a GitHub issue URL, use WebFetch to read it and compare:
 does the plan faithfully capture the requirement, and does its proposed
