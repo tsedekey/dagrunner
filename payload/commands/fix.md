@@ -35,7 +35,15 @@ For each actionable finding in order:
 3. After each fix, verify the file still compiles / parses (run `npx tsc --noEmit` for TypeScript files in the `ts/` directory; run `cd java && ./mvnw compile -q` for Java files if a `java/pom.xml` is present).
 4. If the fix added a new test file, run it immediately to confirm it passes before moving to the next finding:
    - New `*Test.java`: `cd java && ./mvnw test -pl <module> -Dtest=<ClassName> -q`
-   - New `*IT.java`: `cd java && ./mvnw verify -pl <module> -Dit.test=<ClassName> -q`
+   - New `*IT.java`: these are Testcontainers-backed. Before your _first_ `*IT.java` execution attempt
+     this session (once per session, not per finding), check Docker reachability:
+     `docker info > /dev/null 2>&1; echo "docker_reachable=$?"`. If `docker_reachable` is `0`:
+     `cd java && ./mvnw verify -pl <module> -Dit.test=<ClassName> -q`, same as always. If it is not
+     `0`: do NOT run `./mvnw verify`/`-Dit.test=...` — only compile it
+     (`cd java && ./mvnw test-compile -pl <module> -q`) and note in `summary.md` that this IT
+     compiled but execution was blocked because Docker is unreachable in this environment. That is
+     an honest, known limitation — report it as "compiled, execution blocked (Docker unavailable)",
+     never as "verified" or a fix failure.
 
 ---
 
@@ -71,7 +79,13 @@ Run the project's tests to confirm nothing is broken:
 
 - If a `ts/package.json` is present: `npm --prefix ts test`
 - If a `java/pom.xml` is present: check whether any `*IT.java` files were added or modified in this run.
-  - If yes: `cd java && ./mvnw verify -q` (runs both Surefire unit tests and Failsafe ITs)
+  - If yes: reuse this session's Docker reachability check from Step 2 item 4 if already run;
+    otherwise run it now (`docker info > /dev/null 2>&1; echo "docker_reachable=$?"`). If
+    reachable: `cd java && ./mvnw verify -q` (runs both Surefire unit tests and Failsafe ITs), same
+    as always. If not reachable: run `cd java && ./mvnw test -q` (Surefire only) plus
+    `./mvnw test-compile -q` to confirm the IT(s) still compile, and record in `summary.md`'s
+    Build/test result that IT execution was skipped — Docker unreachable in this environment
+    (compiled, not executed; this is a known limitation, not a fix failure).
   - If no: `cd java && ./mvnw test -q` (Surefire only; this pattern is allow-listed)
 - If a root `package.json` is present with a `test` script: `npm test`
 - For any other project type: run the standard test command from the README
