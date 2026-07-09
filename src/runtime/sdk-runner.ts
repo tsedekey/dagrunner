@@ -120,6 +120,53 @@ export function buildBaseQueryOptions(
 }
 
 // ---------------------------------------------------------------------------
+// applyNodeOptions
+// ---------------------------------------------------------------------------
+
+/**
+ * Map a Node's declarative config onto an already-built base `Options`
+ * object, mutating and returning it. Pure and side-effect-free (no ctx/config
+ * dependency) — deliberately extracted from `sdkRunner`'s closure so the
+ * node→options mapping (model/allowedTools/maxBudget/outputSchema/effort) is
+ * unit-testable without mocking the SDK's `query()`, mirroring the existing
+ * `buildBaseQueryOptions` extraction pattern.
+ *
+ * `resume`, `mcpServers`, and env/process.env side effects are deliberately
+ * NOT here — they depend on `ctx`/`config` and stay in `sdkRunner` itself.
+ *
+ * exactOptionalPropertyTypes-safe: only ever assigns a key when the source
+ * value is defined — never `key: undefined`.
+ */
+export function applyNodeOptions(options: Options, node: Node): Options {
+  if (node.model === "haiku") {
+    options.model = "claude-haiku-4-5-20251001";
+  } else if (node.model === "sonnet") {
+    options.model = "claude-sonnet-5";
+  } else if (node.model === "opus") {
+    options.model = "claude-opus-4-8";
+  }
+  // else: omit model → SDK default (unpinned)
+
+  if (node.allowedTools !== undefined) {
+    options.allowedTools = node.allowedTools;
+  }
+  if (node.maxBudget !== undefined) {
+    options.maxBudgetUsd = node.maxBudget;
+  }
+  if (node.outputSchema !== undefined) {
+    options.outputFormat = {
+      type: "json_schema",
+      schema: node.outputSchema,
+    };
+  }
+  if (node.effort !== undefined) {
+    options.effort = node.effort;
+  }
+
+  return options;
+}
+
+// ---------------------------------------------------------------------------
 // makeSDKRunner
 // ---------------------------------------------------------------------------
 
@@ -193,29 +240,11 @@ export function makeSDKRunner(
     // permissionMode and is NOT weakened by night-mode bypass.
     // disallowedTools (ScheduleWakeup) is baked into every node's base options
     // by buildBaseQueryOptions — see that function's comment for why.
-    const options = buildBaseQueryOptions(worktreePath, nightMode);
+    const options = applyNodeOptions(
+      buildBaseQueryOptions(worktreePath, nightMode),
+      node,
+    );
 
-    if (node.model === "haiku") {
-      options.model = "claude-haiku-4-5-20251001";
-    } else if (node.model === "sonnet") {
-      options.model = "claude-sonnet-5";
-    } else if (node.model === "opus") {
-      options.model = "claude-opus-4-8";
-    }
-    // else: omit model → SDK default (unpinned)
-
-    if (node.allowedTools !== undefined) {
-      options.allowedTools = node.allowedTools;
-    }
-    if (node.maxBudget !== undefined) {
-      options.maxBudgetUsd = node.maxBudget;
-    }
-    if (node.outputSchema !== undefined) {
-      options.outputFormat = {
-        type: "json_schema",
-        schema: node.outputSchema,
-      };
-    }
     if (ctx.sessionId !== undefined && ctx.sessionId !== "") {
       options.resume = ctx.sessionId;
     }

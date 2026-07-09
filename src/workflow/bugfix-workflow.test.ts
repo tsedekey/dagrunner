@@ -129,3 +129,20 @@ test("bugfixWorkflow: implement and fix have formatCommand", () => {
     );
   }
 });
+
+// ---------------------------------------------------------------------------
+// implement/fix effort — pinned to "medium" (see DECISIONS.md
+// § effort-tuning-implement-fix)
+// ---------------------------------------------------------------------------
+
+test("bugfixWorkflow: implement and fix pin effort to 'medium'", () => {
+  for (const nodeId of ["implement", "fix"] as const) {
+    const node = bugfixWorkflow.nodes.find((n) => n.id === nodeId);
+    assert.ok(node !== undefined, `${nodeId} node must exist`);
+    assert.equal(
+      node.effort,
+      "medium",
+      `${nodeId} must pin effort to "medium"`,
+    );
+  }
+});

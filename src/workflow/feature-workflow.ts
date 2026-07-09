@@ -119,6 +119,7 @@ export const featureWorkflow: Workflow = {
       dependsOn: ["define"],
       command: "/implement",
       model: "sonnet",
+      effort: "medium",
       produces: ["summary.md", "red-evidence.md"],
       formatCommand: "./mvnw spotless:apply --no-transfer-progress",
     },
@@ -134,6 +135,7 @@ export const featureWorkflow: Workflow = {
       dependsOn: ["review"],
       command: "/fix",
       model: "sonnet",
+      effort: "medium",
       produces: ["summary.md"],
       gate: { maxIterations: 8, onReject: "revise-self" },
       revisionInstruction:

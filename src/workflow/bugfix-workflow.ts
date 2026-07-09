@@ -39,6 +39,7 @@ export const bugfixWorkflow: Workflow = {
       dependsOn: ["reproduce"],
       command: "/implement",
       model: "sonnet",
+      effort: "medium",
       produces: ["summary.md"],
       formatCommand: "./mvnw spotless:apply --no-transfer-progress",
     },
@@ -54,6 +55,7 @@ export const bugfixWorkflow: Workflow = {
       dependsOn: ["review"],
       command: "/fix",
       model: "sonnet",
+      effort: "medium",
       produces: ["summary.md"],
       gate: { maxIterations: 5, onReject: "revise-self" },
       revisionInstruction:

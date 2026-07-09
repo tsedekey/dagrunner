@@ -8,6 +8,7 @@
  *   1. No duplicate node IDs
  *   2. All dependsOn references point to known node IDs
  *   3. All model values are in {'haiku','sonnet','opus'} or undefined
+ *   3b. All effort values are in {'low','medium','high','xhigh','max'} or undefined
  *   4. All gate.onReject of form `rerun:<id>` reference known node IDs
  *   5. No cycles (Kahn's algorithm)
  *
@@ -56,6 +57,26 @@ export function loadWorkflow(def: Workflow): Workflow {
     if (m !== undefined && (typeof m !== "string" || !validModels.has(m))) {
       throw new Error(
         `loadWorkflow: node "${node.id}" has invalid model value "${String(m)}" — must be 'haiku' | 'sonnet' | 'opus' or omitted`,
+      );
+    }
+  }
+
+  // 3b. Effort strings must be 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined
+  //     Same "typed at load" reasoning as the model check above: read through
+  //     `unknown` so a bad runtime value (not just a bad compile-time one) is
+  //     caught with a loud load error, never a silent SDK default.
+  const validEfforts: ReadonlySet<string> = new Set([
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+  ]);
+  for (const node of def.nodes) {
+    const e: unknown = node.effort;
+    if (e !== undefined && (typeof e !== "string" || !validEfforts.has(e))) {
+      throw new Error(
+        `loadWorkflow: node "${node.id}" has invalid effort value "${String(e)}" — must be 'low' | 'medium' | 'high' | 'xhigh' | 'max' or omitted`,
       );
     }
   }
@@ -216,6 +237,22 @@ export const FIXTURE_BAD_MODEL: Workflow = {
       id: "step-a",
       command: "/step-a",
       model: "gemini" as unknown as "haiku",
+    },
+  ],
+};
+
+/**
+ * Invalid: node "step-a" declares effort "ultra" which is not an EffortLevel.
+ * Cast through unknown to bypass compile-time narrowing, same rationale as
+ * FIXTURE_BAD_MODEL above.
+ */
+export const FIXTURE_BAD_EFFORT: Workflow = {
+  name: "fixture-bad-effort",
+  nodes: [
+    {
+      id: "step-a",
+      command: "/step-a",
+      effort: "ultra" as unknown as "medium",
     },
   ],
 };

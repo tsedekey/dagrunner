@@ -339,6 +339,23 @@ test("featureWorkflow: all node ids are unique", () => {
   assert.equal(unique.size, ids.length, "Node IDs must be unique");
 });
 
+// ---------------------------------------------------------------------------
+// implement/fix effort — pinned to "medium" (see DECISIONS.md
+// § effort-tuning-implement-fix)
+// ---------------------------------------------------------------------------
+
+test("featureWorkflow: implement and fix pin effort to 'medium'", () => {
+  for (const nodeId of ["implement", "fix"] as const) {
+    const node = featureWorkflow.nodes.find((n) => n.id === nodeId);
+    assert.ok(node !== undefined, `${nodeId} node must exist`);
+    assert.equal(
+      node.effort,
+      "medium",
+      `${nodeId} must pin effort to "medium"`,
+    );
+  }
+});
+
 test("featureWorkflow: all dependsOn references point to known nodes", () => {
   const knownIds = new Set(featureWorkflow.nodes.map((n) => n.id));
   for (const node of featureWorkflow.nodes) {

@@ -13,8 +13,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { selectPermissionMode, buildBaseQueryOptions } from "./sdk-runner.js";
+import {
+  selectPermissionMode,
+  buildBaseQueryOptions,
+  applyNodeOptions,
+} from "./sdk-runner.js";
 import { buildSeededSettings } from "../config/settings-seed.js";
+import type { Node } from "../core/types.js";
 
 // ---------------------------------------------------------------------------
 // selectPermissionMode — pure branch, deterministic
@@ -91,6 +96,68 @@ test("buildBaseQueryOptions: cwd/permissionMode/settingSources/systemPrompt stil
     type: "preset",
     preset: "claude_code",
   });
+});
+
+// ---------------------------------------------------------------------------
+// applyNodeOptions — pure branch, deterministic
+//
+// Mirrors buildBaseQueryOptions's extraction pattern: the node→options
+// mapping (model/allowedTools/maxBudget/outputSchema/effort) lives in a pure
+// function so it's unit-testable without mocking the SDK's query(). Proves
+// node.effort passes through to options.effort when set, and — the
+// exactOptionalPropertyTypes-safe half of the contract — is never assigned
+// as `key: undefined` when omitted (checked via `in`, not `=== undefined`,
+// since the latter would also pass a wrongly-assigned `effort: undefined`).
+// ---------------------------------------------------------------------------
+
+const baseNode = (overrides: Partial<Node> = {}): Node => ({
+  id: "step-a",
+  command: "/step-a",
+  ...overrides,
+});
+
+test("applyNodeOptions: node.effort set → options.effort passes through", () => {
+  const options = applyNodeOptions(
+    buildBaseQueryOptions("/tmp/dagrunner-test-worktree", false),
+    baseNode({ effort: "medium" }),
+  );
+  assert.equal(options.effort, "medium");
+});
+
+test("applyNodeOptions: node.effort omitted → options.effort key is absent entirely", () => {
+  const options = applyNodeOptions(
+    buildBaseQueryOptions("/tmp/dagrunner-test-worktree", false),
+    baseNode(),
+  );
+  assert.ok(
+    !("effort" in options),
+    `effort key must be entirely absent when node.effort is undefined; got: ${JSON.stringify(options)}`,
+  );
+});
+
+test("applyNodeOptions: allowedTools/maxBudget/outputSchema still pass through unchanged", () => {
+  const options = applyNodeOptions(
+    buildBaseQueryOptions("/tmp/dagrunner-test-worktree", false),
+    baseNode({
+      allowedTools: ["Bash"],
+      maxBudget: 5,
+      outputSchema: { type: "object" },
+    }),
+  );
+  assert.deepEqual(options.allowedTools, ["Bash"]);
+  assert.equal(options.maxBudgetUsd, 5);
+  assert.deepEqual(options.outputFormat, {
+    type: "json_schema",
+    schema: { type: "object" },
+  });
+});
+
+test("applyNodeOptions: model tiers still map to pinned model ids", () => {
+  const sonnet = applyNodeOptions(
+    buildBaseQueryOptions("/tmp/dagrunner-test-worktree", false),
+    baseNode({ model: "sonnet" }),
+  );
+  assert.equal(sonnet.model, "claude-sonnet-5");
 });
 
 test("teeth-check: seeded settings always wire the deny-guard (stop-verifier) hook", () => {

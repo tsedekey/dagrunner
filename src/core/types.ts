@@ -12,6 +12,20 @@
 export type ModelTier = "haiku" | "sonnet" | "opus";
 
 // ---------------------------------------------------------------------------
+// Effort levels (validated at load time)
+// ---------------------------------------------------------------------------
+
+/**
+ * Reasoning-effort level passed through to the SDK's `query()` options
+ * (`Options.effort` in `@anthropic-ai/claude-agent-sdk`'s `sdk.d.ts`). When
+ * omitted, the SDK applies its own model-specific default (on Sonnet 5 this
+ * is `"high"` with adaptive thinking on) — see DECISIONS.md
+ * § effort-tuning-implement-fix for why `implement`/`fix` pin `"medium"`
+ * explicitly rather than inherit that silent default.
+ */
+export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
+
+// ---------------------------------------------------------------------------
 // Artifact accessor context (passed to `when` predicates)
 // ---------------------------------------------------------------------------
 
@@ -106,6 +120,12 @@ export type Node = {
   command: string;
   /** Model tier. Omit = unpinned (opusplan chooses). */
   model?: ModelTier;
+  /**
+   * Reasoning-effort level passed through to `Options.effort`. Omit = SDK
+   * default (model-specific; e.g. `"high"` on Sonnet 5 with adaptive
+   * thinking on — see EffortLevel's doc comment).
+   */
+  effort?: EffortLevel;
   /** Tool names auto-allowed for this node's SDK session. */
   allowedTools?: string[];
   /** JSON schema for structured output. */

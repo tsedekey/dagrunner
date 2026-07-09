@@ -16,6 +16,7 @@ import {
   loadWorkflow,
   FIXTURE_VALID,
   FIXTURE_BAD_MODEL,
+  FIXTURE_BAD_EFFORT,
   FIXTURE_BAD_DEPENDS,
   FIXTURE_DUPLICATE_ID,
   FIXTURE_BAD_OUTCOME_GATE,
@@ -48,6 +49,32 @@ test('loadWorkflow: FIXTURE_BAD_MODEL throws with node name "step-a" and value "
       assert.ok(
         err.message.includes("gemini") || err.message.includes("invalid model"),
         `Expected "gemini" or "invalid model" in message: ${err.message}`,
+      );
+      return true;
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// loadWorkflow — bad effort string
+// ---------------------------------------------------------------------------
+
+test('loadWorkflow: FIXTURE_BAD_EFFORT throws with node name "step-a" and value "ultra"', () => {
+  assert.throws(
+    () => loadWorkflow(FIXTURE_BAD_EFFORT),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.ok(
+        err.message.includes("step-a"),
+        `Expected "step-a" in message: ${err.message}`,
+      );
+      assert.ok(
+        err.message.includes("effort"),
+        `Expected "effort" in message: ${err.message}`,
+      );
+      assert.ok(
+        err.message.includes("ultra"),
+        `Expected "ultra" in message: ${err.message}`,
       );
       return true;
     },
