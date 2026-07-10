@@ -15,6 +15,7 @@ import {
   cpSync,
   mkdirSync,
   rmSync,
+  renameSync,
   writeFileSync,
   readFileSync,
   readdirSync,
@@ -1504,6 +1505,51 @@ export function listRuns(
 }
 
 // ---------------------------------------------------------------------------
+// archivePriorAttempt — preserve a node's artifacts across a rerun's wipe
+// ---------------------------------------------------------------------------
+
+/**
+ * Before `rerunNode` wipes `<runDir>/<nodeId>/` to give the new attempt a
+ * clean slate, move whatever is already there to
+ * `<runDir>/<nodeId>-attempts/attempt-<N>/` (N = next sequential number)
+ * instead of deleting it outright.
+ *
+ * Without this, a node's transcript.log/reflections.md/burn.json only ever
+ * reflect the LAST attempt — every prior failure's evidence is destroyed by
+ * the next rerun. On a node that retries repeatedly (e.g. verify against a
+ * flaky external dependency), that's the only record of why earlier attempts
+ * failed, and it was gone by the time anyone went looking. See
+ * DECISIONS.md § rerun-artifact-archiving.
+ *
+ * No-op if `artifactsDir` doesn't exist or is empty — nothing to preserve.
+ */
+export function archivePriorAttempt(
+  runDir: string,
+  nodeId: string,
+  artifactsDir: string,
+): void {
+  if (!existsSync(artifactsDir)) return;
+  if (readdirSync(artifactsDir).length === 0) return;
+
+  const attemptsDir = join(runDir, `${nodeId}-attempts`);
+  mkdirSync(attemptsDir, { recursive: true });
+
+  const existingAttempts = readdirSync(attemptsDir).filter((f) =>
+    /^attempt-\d+$/.test(f),
+  );
+  const nextN =
+    existingAttempts.length > 0
+      ? Math.max(
+          ...existingAttempts.map((f) =>
+            parseInt(f.slice("attempt-".length), 10),
+          ),
+        ) + 1
+      : 1;
+
+  renameSync(artifactsDir, join(attemptsDir, `attempt-${nextN}`));
+}
+
+// ---------------------------------------------------------------------------
 // rerunNode — re-execute a single node against an existing run's worktree
 // ---------------------------------------------------------------------------
 
@@ -1587,6 +1633,11 @@ export async function rerunNode(opts: {
     JSON.stringify(seededSettings, null, 2),
     "utf8",
   );
+
+  // Archive the previous attempt's artifacts (transcript.log/reflections.md/
+  // burn.json/etc) before wiping, so a node that fails repeatedly stays
+  // diagnosable across retries instead of only ever showing the last one.
+  archivePriorAttempt(runDir, nodeId, artifactsDir);
 
   // Wipe previous artifacts so the node starts clean.
   rmSync(artifactsDir, { recursive: true, force: true });

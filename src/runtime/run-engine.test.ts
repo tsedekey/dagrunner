@@ -12,7 +12,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync, mkdirSync } from "node:fs";
+import {
+  mkdtempSync,
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  readdirSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,6 +35,7 @@ import {
   parseGateDecision,
   parseFrontmatter,
   severityForcesPause,
+  archivePriorAttempt,
 } from "./run-engine.js";
 
 // ---------------------------------------------------------------------------
@@ -581,4 +589,89 @@ test("makeBranchName: bugfix workflow → fix/{issueNum}-{slug}", () => {
 
 test("makePrTitlePrefix: bugfix → 'fix:'", () => {
   assert.equal(makePrTitlePrefix("bugfix"), "fix:");
+});
+
+// ---------------------------------------------------------------------------
+// archivePriorAttempt
+// ---------------------------------------------------------------------------
+
+test("archivePriorAttempt: no-op when artifactsDir does not exist", () => {
+  const runDir = mkdtempSync(join(tmpdir(), "dr-archive-"));
+  const artifactsDir = join(runDir, "verify");
+
+  archivePriorAttempt(runDir, "verify", artifactsDir);
+
+  assert.equal(existsSync(join(runDir, "verify-attempts")), false);
+});
+
+test("archivePriorAttempt: no-op when artifactsDir exists but is empty", () => {
+  const runDir = mkdtempSync(join(tmpdir(), "dr-archive-"));
+  const artifactsDir = join(runDir, "verify");
+  mkdirSync(artifactsDir);
+
+  archivePriorAttempt(runDir, "verify", artifactsDir);
+
+  assert.equal(existsSync(join(runDir, "verify-attempts")), false);
+  assert.equal(existsSync(artifactsDir), true); // left untouched, not renamed away
+});
+
+test("archivePriorAttempt: first archive lands at attempt-1 with content preserved", () => {
+  const runDir = mkdtempSync(join(tmpdir(), "dr-archive-"));
+  const artifactsDir = join(runDir, "verify");
+  mkdirSync(artifactsDir);
+  writeFileSync(join(artifactsDir, "transcript.log"), "attempt one log");
+  writeFileSync(join(artifactsDir, "reflections.md"), "ERROR_INFRA: no docker");
+
+  archivePriorAttempt(runDir, "verify", artifactsDir);
+
+  const dest = join(runDir, "verify-attempts", "attempt-1");
+  assert.equal(
+    readFileSync(join(dest, "transcript.log"), "utf8"),
+    "attempt one log",
+  );
+  assert.equal(
+    readFileSync(join(dest, "reflections.md"), "utf8"),
+    "ERROR_INFRA: no docker",
+  );
+  // The original path no longer exists — rerunNode recreates it fresh after.
+  assert.equal(existsSync(artifactsDir), false);
+});
+
+test("archivePriorAttempt: sequential numbering across repeated reruns (mirrors run 54177-1's 7 verify attempts)", () => {
+  const runDir = mkdtempSync(join(tmpdir(), "dr-archive-"));
+  const nodeId = "verify";
+  const artifactsDir = join(runDir, nodeId);
+
+  // Simulate 3 prior attempts, each archived then a fresh artifactsDir recreated
+  // (mirroring exactly what rerunNode does: archive, wipe, mkdir, execute).
+  for (let i = 1; i <= 3; i++) {
+    mkdirSync(artifactsDir, { recursive: true });
+    writeFileSync(join(artifactsDir, "burn.json"), `{"attempt":${i}}`);
+    archivePriorAttempt(runDir, nodeId, artifactsDir);
+  }
+
+  const attemptsDir = join(runDir, `${nodeId}-attempts`);
+  const attempts = readdirSync(attemptsDir).sort();
+  assert.deepEqual(attempts, ["attempt-1", "attempt-2", "attempt-3"]);
+  assert.equal(
+    readFileSync(join(attemptsDir, "attempt-2", "burn.json"), "utf8"),
+    '{"attempt":2}',
+  );
+});
+
+test("archivePriorAttempt: different node ids get independent attempt sequences", () => {
+  const runDir = mkdtempSync(join(tmpdir(), "dr-archive-"));
+
+  const verifyDir = join(runDir, "verify");
+  mkdirSync(verifyDir);
+  writeFileSync(join(verifyDir, "burn.json"), "verify attempt");
+  archivePriorAttempt(runDir, "verify", verifyDir);
+
+  const reviewDir = join(runDir, "review");
+  mkdirSync(reviewDir);
+  writeFileSync(join(reviewDir, "burn.json"), "review attempt");
+  archivePriorAttempt(runDir, "review", reviewDir);
+
+  assert.equal(existsSync(join(runDir, "verify-attempts", "attempt-1")), true);
+  assert.equal(existsSync(join(runDir, "review-attempts", "attempt-1")), true);
 });

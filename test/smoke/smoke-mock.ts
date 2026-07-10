@@ -38,6 +38,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startRun } from "../../src/runtime/run-engine.js";
 import { resumeRun } from "../../src/runtime/run-engine.js";
+import { rerunNode } from "../../src/runtime/run-engine.js";
 import { createMockExecutor } from "../../src/runtime/mock-executor.js";
 import { featureWorkflow } from "../../src/workflow/feature-workflow.js";
 import { bugfixWorkflow } from "../../src/workflow/bugfix-workflow.js";
@@ -861,6 +862,73 @@ console.log(
 );
 
 // ---------------------------------------------------------------------------
+// RUN I — rerunNode archives the failed attempt's artifacts (transcript.log/
+//          reflections.md/burn.json/verify-report.json/etc) to
+//          <runDir>/<nodeId>-attempts/attempt-1/ BEFORE wiping the live dir,
+//          instead of deleting them outright. Reuses Run F's already-failed
+//          run (verify/verify-report.json holds a FAIL_ASSERTION outcome) —
+//          this is exactly the manual-recovery path a human takes after a
+//          verify failure (`dagrun rerun <run-id> verify`), and the ONLY
+//          place a node's artifactsDir is ever wiped between separate CLI
+//          invocations. See DECISIONS.md § rerun-artifact-archiving.
+// ---------------------------------------------------------------------------
+
+const verifyReportBeforeRerun = readFileSync(
+  join(runDirF, "verify", "verify-report.json"),
+  "utf8",
+);
+
+const rerunSuccessFactory = (
+  _config: DagrunnerConfig,
+  _runId: string,
+  _runDir: string,
+  _worktreePath: string,
+  _storeDir: string,
+) =>
+  createMockExecutor({
+    verify: "success", // writes a fresh verify-report.json with outcome: PASS
+  });
+
+await rerunNode({
+  runId: RUN_ID_F,
+  nodeId: "verify",
+  homeDir: HOME_F,
+  config,
+  executorFactory: rerunSuccessFactory,
+});
+
+{
+  const archivedReport = readFileSync(
+    join(runDirF, "verify-attempts", "attempt-1", "verify-report.json"),
+    "utf8",
+  );
+  assert.strictEqual(
+    archivedReport,
+    verifyReportBeforeRerun,
+    "I: verify-attempts/attempt-1/verify-report.json must match Run F's original FAIL_ASSERTION content, not be lost",
+  );
+
+  const newReport = JSON.parse(
+    readFileSync(join(runDirF, "verify", "verify-report.json"), "utf8"),
+  ) as { outcome?: string };
+  assert.strictEqual(
+    newReport.outcome,
+    "PASS",
+    `I: rerun must land a fresh, passing verify-report.json in the live dir, got ${String(newReport.outcome)}`,
+  );
+
+  const state = readState(runDirF);
+  assert.strictEqual(
+    state.nodes["verify"]?.status,
+    "done",
+    `I: state.json must reflect the rerun's outcome, got ${String(state.nodes["verify"]?.status)}`,
+  );
+}
+console.log(
+  "step I passed: rerunNode archives the FAIL_ASSERTION attempt to verify-attempts/attempt-1/ before wiping, rerun writes a fresh PASS",
+);
+
+// ---------------------------------------------------------------------------
 // RUN G — noPlaceholders: a placeholder left in define/guide.md fails the
 //          node on the GATE-APPROVE transition, not runDag's own done-branch
 //          (define always returns awaiting-gate from the executor — see
@@ -1034,5 +1102,6 @@ console.log(
   "\nall smoke-mock steps passed (Run A: feature happy path, Run B: bugfix happy path, " +
     "Run C: night clean unattended, Run D: night flagged, Run E: stale gate auto-skip, " +
     "Run F: outcomeGate blocks pr on non-PASS, Run G: noPlaceholders blocks a manually-approved " +
-    "gate, Run H: noPlaceholders blocks a night-mode auto-approved gate)",
+    "gate, Run H: noPlaceholders blocks a night-mode auto-approved gate, Run I: rerunNode archives " +
+    "the prior failed attempt before wiping)",
 );
