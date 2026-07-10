@@ -18,6 +18,20 @@ If there are no actionable findings (the list is empty after filtering), write a
 
 ## Step 2 — Apply fixes
 
+> **⚠️ This session is one-shot and non-resumable — nothing will ever re-invoke it.** Run the
+> `./mvnw`/`npm` commands in this step and in Step 3b **in the foreground** — do not set
+> `run_in_background: true` on them to "save time" by doing other work (e.g. formatting) while they
+> run; there is no benefit, since you cannot usefully act on partial results, and it only invites
+> the failure below. If a command ends up backgrounded anyway — deliberately or because the harness
+> auto-converts a long-running Bash call — and a result says something like "running in
+> background... you will be notified when it completes," do NOT trust that and do NOT end your turn
+> expecting to be woken up later: there is no external process that will ever resume this session.
+> `ScheduleWakeup` is disallowed for this exact reason and calling it will fail. Instead, poll the
+> backgrounded task synchronously, inside this same turn, using a bounded blocking `TaskOutput`
+> call (or `Monitor`) — issuing several sequential poll calls in a row is normal and does NOT end
+> the turn — until the task reaches a terminal status. Ending the turn while a task is still
+> running leaves `summary.md` unwritten, stranding this node at `awaiting-gate` with no artifacts.
+
 > **⚠️ Maven flag footgun — read before running any Maven command below.** `-Dquickly` silently
 > skips ALL tests — even when combined with `-DskipUTs` or `-Dit.test=...` — unless you also pass
 > `-DskipTests=false`. The tell-tale symptom is a clean exit with "Tests are skipped." and no
