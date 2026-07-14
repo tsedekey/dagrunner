@@ -20,7 +20,9 @@ categorically off the table — write the matching `FAIL_*` outcome and stop, ex
 You have access to the following env vars:
 
 - `$DEVHARNESS_SRC` — permanent camunda/camunda checkout
-- `$DAGRUN_ARTIFACTS` — write `verify-plan.md` and `verify-report.json` here (nowhere else)
+- `$DAGRUN_ARTIFACTS` — write `verify-plan.md` and `verify-report.json` here (nowhere else); a
+  `.verify-launch-marker` scratch file for stall-detection bookkeeping is the one exception, see
+  "Constraints" at the end of this file
 - `$DAGRUN_RUN_ID` — the current dagrunner run ID
 - `$DAGRUN_WORKTREE` — the worktree path (your cwd) — the acceptance test itself is written HERE,
   under `qa/acceptance-tests`, because it is real, committed Camunda test code, not an artifact
@@ -70,9 +72,26 @@ These facts are pre-verified — do not re-investigate them:
   turn — **until the task completes OR the stall threshold below is hit, whichever comes first.**
   Polling is not unbounded: on the same launch, once you've spent ~20 minutes of wall-clock time
   with no terminal status (however you polled — repeated `TaskOutput` calls or `Monitor`), stop
-  polling and follow "Stall detection and recovery" below instead of issuing another poll. This
-  matters because a hung process can look identical to a slow-but-healthy one from the poll loop's
-  perspective — see that section for why "poll forever" is not actually safe.
+  polling blindly and switch to the progress-aware check in "Stall detection and recovery" below
+  before your next poll — reaching this floor is NOT itself a stall verdict, only the point where
+  that check starts applying. This matters because a hung process can look identical to a
+  slow-but-healthy one from `status: running` alone — see that section for what actually
+  distinguishes them past the floor.
+- **A denied or errored `Monitor`/`TaskOutput` SETUP call is NOT "a monitor is now watching."**
+  Run `56962-1` ended its turn on exactly this false premise: two `Monitor` setup attempts were
+  both denied outright by the Bash sandbox (a `Monitor` script combining a variable assignment, a
+  `while` loop, a conditional, and `xargs` trips the sandbox's multi-statement approval policy —
+  see the single-call guidance in Step 0 below for the general shape of this constraint), yet the
+  session still ended its turn saying "I'll wait for the monitor to notify me when the suite
+  completes" — no monitor was ever actually running. Since this session is one-shot and
+  non-resumable (above), nothing ever woke it back up, and `verify-report.json` was never written.
+  Only treat a background task as being watched if the setup call itself returned a genuine,
+  non-denied, non-error tool result confirming it. A denied or errored setup call is identical to
+  having no progress signal at all — fall back to manual, single-command `TaskOutput(task_id,
+block: true, timeout: <bounded>)` polls (never a compound script), or, if no viable polling
+  mechanism exists at all, treat this per "Stall detection and recovery" below. Never end the turn
+  on the assumption that something is watching in the background unless you have that direct
+  confirmation.
 
 ---
 
@@ -88,9 +107,17 @@ listening on `:9200` yet, this reads exactly like a hang, not a fast failure —
 Docker daemon itself is not reachable, neither the `LOCAL` testcontainer path nor a manual `ES`/`OS`
 container start in Step 5 can work — check for that NOW, before doing any authoring work:
 
+Issue this as **one single Bash call** — do not split it into two calls (`docker info ...` then a
+separate `echo "docker_reachable=$?"`): a prior call's shell state, including `$?`, does not
+survive into a separate Bash tool invocation in this sandbox, so the two-call form would silently
+read the wrong exit code. Do not write it as a semicolon-chained two-command line either
+(`docker info ...; echo ...`) — that form has been observed denied outright as "multiple operations
+requiring approval." The single logical `&&`/`||` expression below is self-contained (no
+semicolon, no variable assignment, no reliance on a previous call) and captures the same
+reachable/unreachable signal in one call:
+
 ```bash
-docker info > /dev/null 2>&1
-echo "docker_reachable=$?"
+docker info > /dev/null 2>&1 && echo docker_reachable=0 || echo docker_reachable=1
 ```
 
 If `docker_reachable` is not `0`:
@@ -367,11 +394,57 @@ test-suite run (`./mvnw test -pl <module>`) and Step 5's acceptance-test run (`.
 -Dit.test=<ClassName>`) — not Step 4's build/compile command, which is fast and not a realistic
 stall candidate.
 
-**1. Stall threshold.** If a single `TaskOutput(task_id, block: true, timeout: 600000)` call on the
-SAME background task (i.e. the same launch — not across separate launches) returns `status: running`
-a **second time in a row** — roughly 20 minutes of wall-clock elapsed on this one launch with no
-terminal status — do not poll a third time on this launch. Treat it as stalled and move to step 2
-immediately.
+**1. Stall threshold — progress-aware, not pure wall-clock.** Two consecutive
+`TaskOutput(task_id, block: true, timeout: 600000)` (or `Monitor`) polls on the SAME background
+task (i.e. the same launch — not across separate launches) returning `status: running` is the
+**minimum elapsed floor** (~20 minutes of wall-clock with no terminal status) before this check
+can even trigger — do not evaluate progress before the floor; a fast module's very first poll
+cycle should not be killed prematurely.
+
+Past the floor, `status: running` alone is NOT sufficient to call it stalled. A pure wall-clock
+rule false-positives on any bulk multi-class module run: on run `56962-1`, `./mvnw test -pl
+zeebe/engine` (641 test classes total) produced 149 fresh surefire reports (~23% of the suite) in
+the same ~20-minute window this rule was about to kill it over — steady, healthy progress, not a
+hang. (The original threshold was calibrated entirely from a genuinely different scenario — a
+single acceptance-test class truly parked forever in `Broker.close()` on run `54177-1` — and was
+never validated against a bulk-module run like this one; see `DECISIONS.md §
+verify-run-56962-1-forensics` for the full record.)
+
+Track forward progress via the stage's report directory instead of trusting `status: running`
+alone:
+
+- **Right after issuing the backgrounded launch**, drop a marker file so later polls have a stable
+  reference point. This must be a file, not a shell variable — a variable set during one Bash tool
+  call does NOT survive into the next call in this sandbox:
+  ```bash
+  touch "$DAGRUN_ARTIFACTS/.verify-launch-marker"
+  ```
+  Issue this as its own Bash call, immediately before launching the `./mvnw` command. (Scratch
+  bookkeeping only, not a produces artifact — see "Constraints" at the end of this file.) Re-touch
+  it before every subsequent launch on this stage (a self-heal retry, or a stall-recovery relaunch)
+  so a prior launch's reports don't count as "fresh" for the new one.
+- **At each poll past the floor**, count report files newer than the marker — one self-contained
+  pipeline per call, never chained with the `TaskOutput`/`Monitor` call or anything else:
+  ```bash
+  find <module>/target/surefire-reports/ -name "*.txt" -newer "$DAGRUN_ARTIFACTS/.verify-launch-marker" 2>/dev/null | wc -l
+  ```
+  (Step 5: `qa/acceptance-tests/target/failsafe-reports/` instead of
+  `<module>/target/surefire-reports/`.) `-newer` compares file modification time against the
+  marker, which also correctly counts a report Surefire/Failsafe overwrote in place (same
+  filename, newer mtime) — not just brand-new filenames — so a module re-running an
+  already-seen class still registers as forward progress.
+- Remember the count from your immediately-prior poll in your own reasoning across this turn — no
+  need to persist it anywhere; this is all within the same session.
+
+Only classify as stalled when, across the two most recent polls (both past the floor), **both** are
+true: `status` is still `running`, AND the fresh-report count has NOT increased since the
+immediately-prior poll. If the count is still climbing, that is NOT a stall — keep polling (issuing
+several sequential poll calls in a row remains normal and does NOT end the turn, per "Known
+environment constraints" above). Only once the count is flat across two consecutive polls — no
+forward progress, not just "still running" — do you move to step 2. (This still correctly catches a
+genuine hang: `54177-1`'s teardown-only stall happened AFTER the test body had already finished and
+its report was already flushed, so the count plateaus immediately and the flat-count check fires
+exactly as before.)
 
 **2. Terminate the stalled task.** Call the `TaskStop` tool with `{task_id}`. `TaskStop` is a
 first-class tool in this session's toolset — ground this before relying on it by checking the
@@ -411,9 +484,14 @@ a task you JUST force-killed as meaningful on its own.
   bullet.
 - **No usable report is found even after the kill:** this launch is a wash with no real signal about
   correctness. Do NOT classify `FAIL_TEST`/`FAIL_ASSERTION` — that would imply a code-correctness
-  signal that does not exist here. Classify `ERROR_INFRA` instead, with a clear, actionable `detail`
-  that names the observed pattern explicitly: a broker/environment teardown hang in
-  `CamundaMultiDBExtension.afterAll` → `Broker.close()` → `CompletableActorFuture.join()`,
+  signal that does not exist here. **Bright line: classify `ERROR_INFRA` and stop. Do NOT reissue
+  another `./mvnw` launch for this stage on this path** — the human reruns the whole node (`dagrun
+rerun verify --branch <branch>`), not this session relaunching the suite from scratch. Run
+  `56962-1` did exactly the wrong thing here: after a stall-kill found an incomplete report, the
+  node relaunched the entire test suite instead of writing `ERROR_INFRA`, which then compounded
+  into a separate failure (see `DECISIONS.md § verify-run-56962-1-forensics`). Write a clear,
+  actionable `detail` that names the observed pattern explicitly: a broker/environment teardown
+  hang in `CamundaMultiDBExtension.afterAll` → `Broker.close()` → `CompletableActorFuture.join()`,
   pre-existing and unrelated to this diff (cite the `54177-1` precedent above), and instructs the
   human to rerun the node.
 
@@ -466,14 +544,16 @@ broken build or failing suite.
      above), not just the final raw log tail. Skip to Step 7 and stop.
 2. **Unit/integration test suite** (scope: the module(s) `implement`/`fix` touched — do not run
    the full monorepo suite; identify touched modules from `git diff --cached --name-only
-origin/main`):
+origin/main`). Drop the stall-detection marker first, as its own Bash call, THEN launch:
+   ```bash
+   touch "$DAGRUN_ARTIFACTS/.verify-launch-marker"
+   ```
    ```bash
    ./mvnw test -pl <touched-module(s)> -q
    ```
-   - **If this backgrounds and the poll stalls** (returns `status: running` a second time in a row
-     on the same launch): follow "Stall detection and recovery" above — terminate via `TaskStop`,
-     check `<module>/target/surefire-reports/` for a complete report, and proceed from there rather
-     than polling a third time.
+   - **If this backgrounds and the poll stalls** (per the progress-aware check in "Stall detection
+     and recovery" above — not `status: running` alone): terminate via `TaskStop`, check
+     `<module>/target/surefire-reports/` for a complete report, and proceed from there.
    - **If this fails and the failure is a lint/style/format violation** (e.g. checkstyle enforced
      during the test-phase compile) in a test-path file: same self-heal procedure as the build
      stage — up to 2 fix-and-retry cycles, Rule 1 directory check on every attempt.
@@ -496,7 +576,12 @@ verification of THIS change, not a CI re-run.
 The module's default Maven profile EXCLUDES `@Tag("multi-db-test")` classes — which every
 `@MultiDbTest`/`@HistoryMultiDbTest` class carries. Running WITHOUT `-Pmulti-db-test` silently
 selects 0 tests (`BUILD SUCCESS`, `Tests run: 0`) — a false green, not a real pass. Always include
-`-Pmulti-db-test` for the AT class (the one authored in Step 3 or reused in Step 2):
+`-Pmulti-db-test` for the AT class (the one authored in Step 3 or reused in Step 2). Drop the
+stall-detection marker first, as its own Bash call, THEN launch:
+
+```bash
+touch "$DAGRUN_ARTIFACTS/.verify-launch-marker"
+```
 
 ```bash
 ./mvnw verify -pl qa/acceptance-tests -Pmulti-db-test -Dit.test=<AcceptanceTestClassName> \
@@ -546,11 +631,11 @@ selects 0 tests (`BUILD SUCCESS`, `Tests run: 0`) — a false green, not a real 
   Remove the container once Step 5/6 are done (`docker rm -f dagrun-verify-es`) — it is scoped to
   this node's own run, not left behind for the next one.
 
-**If this backgrounds and the poll stalls** (returns `status: running` a second time in a row on the
-same launch — this is the stage where the stall was actually observed live, on run `54177-1`, three
-consecutive times): follow "Stall detection and recovery" above — terminate via `TaskStop`, check
-`qa/acceptance-tests/target/failsafe-reports/` for a complete `<ClassName>.txt`/`TEST-*.xml`, and
-proceed from there rather than polling a third time.
+**If this backgrounds and the poll stalls** (per the progress-aware check in "Stall detection and
+recovery" above — not `status: running` alone; this is the stage where the stall was actually
+observed live, on run `54177-1`, three consecutive times): follow "Stall detection and recovery"
+above — terminate via `TaskStop`, check `qa/acceptance-tests/target/failsafe-reports/` for a
+complete `<ClassName>.txt`/`TEST-*.xml`, and proceed from there.
 
 Classify the result into exactly ONE of:
 
@@ -717,7 +802,10 @@ provisioning gotcha). Absence is fine. The SessionEnd hook captures this automat
 
 - The acceptance test file is real, committed Camunda test code — it belongs in
   `$DAGRUN_WORKTREE/qa/acceptance-tests`, NOT in `$DAGRUN_ARTIFACTS`.
-- `verify-plan.md` and `verify-report.json` are the ONLY files written to `$DAGRUN_ARTIFACTS`.
+- `verify-plan.md` and `verify-report.json` are the only DECLARED artifacts written to
+  `$DAGRUN_ARTIFACTS`. `.verify-launch-marker` is the one exception — scratch stall-detection
+  bookkeeping for this node's own use (same pattern as `fix.md`'s `fix-history.log`), never a
+  produces artifact, never read by anything outside this session.
 - Never let a testcontainer/infra failure read as `PASS` — when in doubt between `ERROR_INFRA` and
   `FAIL_ASSERTION`, prefer `ERROR_INFRA` only when the failure is clearly provisioning-level (the
   test body itself never ran); otherwise it's a real assertion failure.

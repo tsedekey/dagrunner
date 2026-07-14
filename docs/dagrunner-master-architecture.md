@@ -244,18 +244,53 @@ own instructions, which silently deadlocks the embedded broker's `Broker.interna
 cleanly. Fixed by the `-am`-scoped `./mvnw install -pl qa/acceptance-tests -am -Dquickly -T1C`
 (same commit); this class of hang should now be rare. Without a human manually killing the JVM
 each time, the poll loop would have continued indefinitely. Stall-recovery is retained regardless,
-as general defense-in-depth for other/future stalls. verify.md now bounds this: if the same
-background launch returns `status: running` on two consecutive `TaskOutput(block: true, timeout:
-600000)` polls (~20 minutes with no terminal status), treat it as stalled, terminate it via
-`TaskStop` (falling back to `ps`/`kill -TERM` if `TaskStop` errors), and check the stage's report
-directory directly (`<module>/target/surefire-reports/` for Step 4, `qa/acceptance-tests/target/
-failsafe-reports/` for Step 5) rather than trusting the killed task's own exit code/status — which
-run `54177-1` observed to be inconsistent across two kills of the identical hang (`completed`/exit 0
-vs. `failed`/exit 144). A complete report found this way is fed into the normal pass/fail/self-heal
-logic unchanged; no usable report means `ERROR_INFRA` (never `FAIL_TEST`/`FAIL_ASSERTION` — there is
-no code-correctness signal to report). This folds into the SAME retry-cycle budget the bounded
+as general defense-in-depth for other/future stalls. verify.md now bounds this: terminate the
+stalled launch via `TaskStop` (falling back to `ps`/`kill -TERM` if `TaskStop` errors), and check
+the stage's report directory directly (`<module>/target/surefire-reports/` for Step 4,
+`qa/acceptance-tests/target/failsafe-reports/` for Step 5) rather than trusting the killed task's
+own exit code/status — which run `54177-1` observed to be inconsistent across two kills of the
+identical hang (`completed`/exit 0 vs. `failed`/exit 144). A complete report found this way is fed
+into the normal pass/fail/self-heal logic unchanged; no usable report means `ERROR_INFRA` (never
+`FAIL_TEST`/`FAIL_ASSERTION` — there is no code-correctness signal to report). This folds into the
+SAME retry-cycle budget the bounded
 self-heal above already uses (2 for build/test, 1 for acceptance) — a stall-and-recover sequence is
 just one way a launch can conclude, not a second, independently-uncapped counter.
+
+**Stall threshold redesigned to be progress-aware, not pure wall-clock (the
+run-56962-1-forensics change — see `DECISIONS.md § verify-run-56962-1-forensics`).** The original
+threshold above ("two consecutive `running` polls = stalled, full stop") was calibrated entirely
+from the `54177-1` scenario just described — a single acceptance-test class genuinely parked
+forever — and was never validated against Step 4's bulk multi-class module runs. Run `56962-1`
+showed the gap directly: `./mvnw test -pl zeebe/engine` (641 test classes) produced 149 fresh
+surefire reports (~23% of the suite) in the same ~20-minute window the old rule would kill it
+over — steady, healthy progress misclassified as a hang, forcing a kill-and-relaunch loop that
+could never complete a large module within one session. verify.md's stall check now keeps the
+~20-minute/two-consecutive-`running`-polls threshold ONLY as a floor (the minimum elapsed time
+before the check can even trigger), and past that floor requires ALSO that the count of fresh
+report files in the stage's report directory (compared against a `touch`ed marker file,
+`$DAGRUN_ARTIFACTS/.verify-launch-marker`, via `find ... -newer`) has NOT increased across the two
+most recent polls before classifying a stall — a climbing count means keep polling, not a stall.
+Because a shell variable set during one Bash tool call does not survive into the next, the
+reference point has to be a file, not an in-memory value; the poll-to-poll count itself is tracked
+in the model's own reasoning within the turn, needing no persistence. This still correctly catches
+a genuine hang (`54177-1`'s teardown-only stall happens after the report is already flushed, so
+the count plateaus immediately). Step 4's "no usable report after a kill" branch was also
+strengthened into an explicit bright line: classify `ERROR_INFRA` and stop, never reissue another
+`./mvnw` launch for that stage on the same path — `56962-1`'s agent violated exactly this (already
+implied, not previously stated as a bright line) by relaunching the full suite after an
+incomplete-report stall-kill instead of writing `ERROR_INFRA`.
+
+**Monitor/TaskOutput setup-call denial is not "a monitor is watching" (same run-56962-1-forensics
+change).** `verify.md`'s "Known environment constraints" section already told the model not to
+trust a "you will be notified" message and not to end its turn expecting to be woken up
+(`ScheduleWakeup` is disallowed for exactly this — see the one-shot-session note above) — but it
+didn't cover the case where the polling mechanism itself never started. On run `56962-1`, two
+`Monitor` setup attempts were both denied outright by the Bash sandbox's multi-statement approval
+policy, yet the session still ended its turn believing a monitor was running and would notify it —
+nothing ever did, since node sessions are one-shot and non-resumable, and `verify-report.json` was
+never written. The guard now explicitly treats a denied/errored setup call identically to having
+no progress signal at all: fall back to manual single-command polls, or the stall-recovery path,
+rather than ending the turn on an unconfirmed assumption.
 
 **The new engine mechanism — `outcomeGate`:** node status in dagrunner was previously derived only
 from SDK success/failure + `produces` file-existence — nothing read the CONTENT of a produced
