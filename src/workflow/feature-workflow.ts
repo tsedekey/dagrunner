@@ -153,7 +153,13 @@ export const featureWorkflow: Workflow = {
       dependsOn: ["fix"],
       command: "/verify",
       model: "sonnet",
-      produces: ["verify-plan.md", "verify-report.json"],
+      // verify-plan.md is conditional, not unconditional — payload/commands/verify.md's
+      // legitimate short-circuit paths (Docker unreachable at Step 0; unrecoverable
+      // stall with no usable report, ERROR_INFRA) explicitly instruct "Do NOT write a
+      // verify-plan.md — no authoring work happened." Only verify-report.json is
+      // load-bearing here; it remains gated via outcomeGate below. See DECISIONS.md
+      // § verify-run-56962-1-forensics.
+      produces: ["verify-report.json"],
       formatCommand: "./mvnw spotless:apply --no-transfer-progress",
       outcomeGate: {
         file: "verify-report.json",

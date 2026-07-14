@@ -100,7 +100,7 @@ const mockFactory = (
     implement: "success", // writes summary.md
     review: "success", // writes findings.json
     fix: "gate-pause", // writes summary.md + returns awaiting-gate
-    verify: "success", // writes verify-plan.md + verify-report.json (outcome: PASS)
+    verify: "success", // writes verify-report.json (outcome: PASS) — verify-plan.md is prompt-conditional, not in produces
     pr: "success", // writes body.md
   });
 
@@ -320,10 +320,13 @@ await resumeRun({
     "done",
     `A4: verify must run autonomously and be done (no election, no gate), got ${String(state.nodes["verify"]?.status)}`,
   );
-  assert.ok(
-    existsSync(join(runDirA, "verify", "verify-plan.md")),
-    "A4: verify/verify-plan.md must exist",
-  );
+  // verify-plan.md is intentionally NOT part of verify's produces contract
+  // (run 56962-1 forensics, DECISIONS.md § verify-run-56962-1-forensics) —
+  // payload/commands/verify.md's legitimate short-circuit paths (Docker
+  // unreachable, unrecoverable stall) explicitly skip writing it, so the
+  // mock (which only writes declared `produces` files) correctly does not
+  // write it either. verify-report.json remains the sole load-bearing,
+  // mechanically-enforced artifact — asserted below.
   const reportPath = join(runDirA, "verify", "verify-report.json");
   assert.ok(existsSync(reportPath), "A4: verify/verify-report.json must exist");
   const report = JSON.parse(readFileSync(reportPath, "utf8")) as {

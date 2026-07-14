@@ -404,6 +404,20 @@ test("featureWorkflow: verify declares outcomeGate on verify-report.json's outco
   });
 });
 
+// Run 56962-1 forensic fix (bug 1): verify.md documents legitimate
+// short-circuit paths (Docker unreachable at Step 0; unrecoverable stall
+// with no usable report, ERROR_INFRA) where it explicitly instructs "Do NOT
+// write a verify-plan.md — no authoring work happened." A hard produces
+// requirement on verify-plan.md trips the DAG's produces-contract check even
+// on these correct, prompt-following paths. verify-report.json remains
+// load-bearing (already gated via outcomeGate above); only the unconditional
+// verify-plan.md requirement is dropped.
+test("featureWorkflow: verify's produces contract does not hard-require verify-plan.md (conditional per verify.md's short-circuit paths)", () => {
+  const node = featureWorkflow.nodes.find((n) => n.id === "verify");
+  assert.ok(node !== undefined);
+  assert.deepEqual(node.produces, ["verify-report.json"]);
+});
+
 test("featureWorkflow: pr depends on both fix and verify", () => {
   const node = featureWorkflow.nodes.find((n) => n.id === "pr");
   assert.ok(node !== undefined);

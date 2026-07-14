@@ -275,6 +275,15 @@ export function worktreeArtifactPatterns(): string[] {
     }
   }
   // Secondary scratch patterns that aren't in produces.
+  //
+  // verify-plan.md: dropped from verify's `produces` array (run 56962-1
+  // forensics, DECISIONS.md § verify-run-56962-1-forensics) because
+  // payload/commands/verify.md's legitimate short-circuit paths (Docker
+  // unreachable, unrecoverable stall) explicitly skip writing it. It is
+  // still written on the normal (non-short-circuit) path, so it still needs
+  // to be excluded from the worktree/PR here — this hygiene list is a
+  // separate concern from the produces-contract check and must not silently
+  // lose coverage just because the file became conditional.
   for (const p of [
     "*.tmp",
     "*-state.json",
@@ -282,6 +291,7 @@ export function worktreeArtifactPatterns(): string[] {
     ".gitignore",
     ".claude/",
     "**/target/",
+    "verify-plan.md",
   ]) {
     names.add(p);
   }

@@ -230,7 +230,12 @@ test("findWorktreeScratch: existing basename tests still pass after signature ch
 
 test("worktreeArtifactPatterns: includes all featureWorkflow produces filenames", () => {
   const patterns = worktreeArtifactPatterns();
-  // All declared produces across featureWorkflow nodes.
+  // All declared produces across featureWorkflow nodes, plus verify-plan.md —
+  // which is no longer in verify's `produces` (run 56962-1 forensics,
+  // DECISIONS.md § verify-run-56962-1-forensics: it's conditional, written on
+  // the normal path but explicitly skipped on verify.md's documented
+  // short-circuit paths) but is still expected here via the SECONDARY scratch
+  // pattern list, since it can still legitimately land in the worktree.
   const expected = [
     "guide.md",
     "summary.md",
