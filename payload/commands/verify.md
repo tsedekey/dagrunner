@@ -11,7 +11,7 @@ see `DECISIONS.md`): CI already reruns build/test on every push, and `implement`
 self-report their own build/test status, so a redundant diff-scoped rerun here added cost without
 adding a signal nothing else already provides.
 
-When a build/test/acceptance failure's root cause is genuinely test-side, you have narrow, bounded
+When a build/acceptance failure's root cause is genuinely test-side, you have narrow, bounded
 authority to fix it yourself and retry, instead of failing immediately — e.g. a checkstyle/spotless
 violation in a test file, or (only after independently proving production code is correct) a stale
 assertion or fixture in the acceptance test itself. This is NOT license to patch anything that gets
@@ -632,20 +632,37 @@ SnapshotTransferImpl.java`). If you cannot pin the error to a specific file this
    If the file appears in this output, the diff touches it — this is NOT a confirmed-unrelated
    break. Fall through to the normal `FAIL_BUILD` path, unchanged.
 3. If the failing file did NOT appear above, additionally confirm it is byte-identical against the
-   merge-base — absence from the diff could also mean the file was deleted, which a content
-   comparison rules out:
+   merge-base — absence from the diff could also mean the file was deleted (or that the path you
+   have is malformed, e.g. an absolute worktree path from Maven's error output instead of the
+   repo-relative form `git diff --name-only` uses), either of which an empty `git diff` alone would
+   also produce, wrongly:
    ```bash
    cd "$DAGRUN_WORKTREE" && git diff "$(git merge-base origin/main HEAD)" -- "<failing-file-path>"
    ```
-   This must return genuinely empty output to count as confirmed.
-4. **Only if BOTH (2) and (3) confirm the failing file is absent from the diff AND byte-identical to
-   the merge-base:** write `"outcome": "DEFERRED_TO_CI"` instead of `"FAIL_BUILD"`.
+   This must return genuinely empty output — but empty output alone is NOT sufficient, see step 3b.
+   3b. **Required corroboration — positive proof the path is a real, tracked file at the merge-base,
+   not just "no diff":** a malformed/absolute path produces an empty diff in step 3 for the WRONG
+   reason (git silently can't match a pathspec it doesn't recognize, not because the file is
+   unchanged), which would otherwise let a genuinely diff-caused break slip through as
+   `DEFERRED_TO_CI` — exactly the outcome the bright line below exists to prevent. Confirm the path
+   actually resolves to a tracked blob at the merge-base:
+   ```bash
+   cd "$DAGRUN_WORKTREE" && git cat-file -e "$(git merge-base origin/main HEAD):<failing-file-path>" && echo present || echo absent
+   ```
+   Only `present` corroborates step 3's empty diff as genuine byte-identity. `absent` means the path
+   didn't resolve (malformed path, or a file that's new on this branch) — treat this exactly like a
+   non-empty diff in step 2: fall through to the normal `FAIL_BUILD` path, unchanged.
+4. **Only if (2) shows the failing file absent from the diff, AND (3) shows an empty `git diff`
+   output, AND (3b) confirms `present`:** write `"outcome": "DEFERRED_TO_CI"` instead of
+   `"FAIL_BUILD"`. `stages.build.status` is still `"FAIL"` (the build genuinely failed — only the
+   `outcome` classification and its blocking behavior change, not whether Step 4 itself passed).
    `stages.build.detail` must state, at the same evidentiary rigor as run `56954-1`'s report (see
    `DECISIONS.md § verify-defer-to-ci-and-drop-diff-scoped-rerun`): which module/file broke, the
-   specific compile error, the merge-base evidence (the empty `git diff` output from step 3), and
-   that this is being deferred to CI as a known, pre-existing trunk issue unrelated to this PR — a
-   human reading the report must be able to tell this was NOT silently treated as a pass.
-5. If step 1, 2, or 3 cannot be completed for any reason — the failing file can't be isolated, a
+   specific compile error, the merge-base evidence (the empty `git diff` output from step 3 AND the
+   `present` result from step 3b), and that this is being deferred to CI as a known, pre-existing
+   trunk issue unrelated to this PR — a human reading the report must be able to tell this was NOT
+   silently treated as a pass.
+5. If step 1, 2, 3, or 3b cannot be completed for any reason — the failing file can't be isolated, a
    command errors, or the evidence is ambiguous — do NOT guess. Fall through to the normal
    `FAIL_BUILD` path exactly as if this check did not exist.
 

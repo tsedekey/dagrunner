@@ -897,6 +897,50 @@ test("outcomeGate: PASS value passes the node through to done", async () => {
   assert.equal(result.nodes["verify"]?.status, "done");
 });
 
+// verify-defer-to-ci-and-drop-diff-scoped-rerun change (2026-07-14, motivated by run 56954-1):
+// DEFERRED_TO_CI is a second, non-blocking outcome value alongside PASS — a confirmed
+// pre-existing, diff-unrelated build break must not block pr the way FAIL_BUILD does. This
+// proves the mechanism generically (checkOutcomeGate/runDag are data-driven over whatever
+// passValues contains), not just that the two workflow configs declare the right array.
+test("outcomeGate: DEFERRED_TO_CI passes the node through to done when passValues includes it (verify-defer-to-ci-and-drop-diff-scoped-rerun)", async () => {
+  const { runDag } = (await import(DAG_MODULE)) as {
+    runDag: (
+      workflow: Workflow,
+      executor: NodeExecutor,
+      state: RunState,
+      opts: { ctx: Ctx; stateFile: string },
+    ) => Promise<RunState>;
+  };
+
+  const tmpDir = mkdtempSync(join(tmpdir(), "dr-outcome-gate-deferred-"));
+  const node: Node = {
+    id: "verify",
+    command: "/verify",
+    produces: ["verify-report.json"],
+    outcomeGate: {
+      file: "verify-report.json",
+      field: "outcome",
+      passValues: ["PASS", "DEFERRED_TO_CI"],
+    },
+  };
+  const { workflow, executor, stateFile } = makeOutcomeGateHarness(
+    tmpDir,
+    node,
+    JSON.stringify({ outcome: "DEFERRED_TO_CI" }),
+  );
+  const state = makeOutcomeGateState(tmpDir, "outcome-gate-deferred");
+  const ctx: Ctx = {
+    json: () => ({}),
+    read: () => "",
+    dir: (id) => join(tmpDir, id),
+  };
+
+  const result = await runDag(workflow, executor, state, { ctx, stateFile });
+
+  assert.equal(result.status, "done");
+  assert.equal(result.nodes["verify"]?.status, "done");
+});
+
 test("outcomeGate: a non-pass value fails the node with the outcome value in the error", async () => {
   const { runDag } = (await import(DAG_MODULE)) as {
     runDag: (
