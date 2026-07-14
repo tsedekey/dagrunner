@@ -206,11 +206,13 @@ single agent session, the same way the undocumented checkstyle fix in `54177-1` 
    the same self-grading-bias problem the plan flags for why `implement` shouldn't author its own
    acceptance test. A failed self-check halts before the (expensive) build/test/acceptance stages.
 5. **Independent build + test rerun, with bounded style/lint self-heal** — verify does not trust
-   `implement`/`fix`'s self-reported status; it reruns the build and the touched module's test suite
-   itself. Fail-fast ladder: build → test suite → acceptance test. A broken build or failing suite
-   stops before the acceptance run — unless the failure is a lint/style/format violation in a test
-   file, in which case verify may fix it and retry (capped, directory-gated; see "Bounded self-heal"
-   above).
+   `implement`/`fix`'s self-reported status; it reruns the build itself, then reruns only the test
+   classes mechanically mapped to the diff's changed production classes (naming convention + a
+   grep-based fallback + any test class named in the guide/summary; NOT the whole touched module —
+   see "Step 4 rescoped to diff-relevant test classes" below). Fail-fast ladder: build → test suite →
+   acceptance test. A broken build or failing suite stops before the acceptance run — unless the
+   failure is a lint/style/format violation in a test file, in which case verify may fix it and retry
+   (capped, directory-gated; see "Bounded self-heal" above).
 6. **Run + classify, with bounded proof-gated self-heal** — executes the AT via the existing
    `@MultiDbTest` framework (starts `TestStandaloneBroker`/`TestSimpleCamundaApplication` in-process,
    injects `CamundaClient` — dagrunner reimplements none of this). The framework only
@@ -291,6 +293,41 @@ nothing ever did, since node sessions are one-shot and non-resumable, and `verif
 never written. The guard now explicitly treats a denied/errored setup call identically to having
 no progress signal at all: fall back to manual single-command polls, or the stall-recovery path,
 rather than ending the turn on an unconfirmed assumption.
+
+**Step 4 rescoped to diff-relevant test classes, narrowing the whole-module tolerance above (the
+verify-diff-scoped-test-rerun change — see `DECISIONS.md § verify-diff-scoped-test-rerun`).** The
+progress-aware stall threshold two paragraphs up made whole-module runs survivable (no more false
+stalls), but did not fix the deeper problem it was papering over: whole-module scope itself
+manufactures false failures. Run `56962-1`'s actual `ERROR_INFRA` outcome is the empirical proof —
+`./mvnw test -pl zeebe/engine` (641 classes) ran twice (~4 hours total, the second an improvised,
+out-of-spec "flakiness recheck" relaunch that this change also explicitly forecloses), surfaced
+~26% failures across DMN/tenant/migration tests with zero relationship to the diff, and — proven via
+baseline-commit comparison in an isolated worktree — every one of them was a pre-existing
+environment/resource-contention defect, not a regression. Step 4's fail-fast ladder blocked on this
+spurious failure before ever reaching Step 5, even though the 6 test classes actually relevant to
+the diff all passed cleanly when run in isolation. `payload/commands/verify.md`'s Step 4 is now a
+mechanical diff-relevant class mapping instead of `-pl <touched-module>`: changed production classes
+are identified from `git diff --name-only --diff-filter=ACMR "$(git merge-base origin/main
+HEAD)"` (same merge-base fix as D3 below — `origin/main` can drift arbitrarily far past a branch's
+actual base), each mapped to candidate test classes via naming convention (`FooTest`/`FooIT` at the
+mirrored `src/test` path) UNIONed with a `grep -rlw` fallback (catches tests that reference the
+class without following the naming convention) UNIONed with any test class named in
+`reproduce/guide.md`/`implement/summary.md`/`fix/summary.md` (defense-in-depth — live evidence showed
+the guide-driven list often the most reliable signal), then run via `-Dtest=Class1,Class2,...`
+scoped to only the module(s) those classes live in. An empty mapping falls back to the smallest
+common parent package's test classes — never to whole-module, which is now out of scope for Step 4
+the same way CI's dist/packaging matrix already was. Because a resolved-but-non-matching `-Dtest`
+list can silently produce Maven's own `Tests run: 0` false green (the same failure class Step 5
+already guards against for `-Pmulti-db-test`), Step 4 also confirms N>0 tests actually executed by
+counting fresh Surefire reports against a re-touched `.verify-launch-marker`, not by parsing stdout
+(Surefire's summary line isn't reliably printed under `-q` on an all-pass run) — a 0-executed result
+falls back to the parent-package mapping rather than being trusted as a pass or fail; if that still
+executes nothing, the test stage is written `SKIPPED` (not forced into existence) and the run
+proceeds to Step 5, the acceptance test remaining the primary correctness gate. The stall-detection
+apparatus above (marker-based progress polling past a 20-minute floor) is now Step 5-only — a
+diff-scoped run of a handful of classes is expected to finish in low single-digit minutes, so Step 4
+uses a simple bounded poll-until-done instead; a stall on that path is now a much stronger signal
+than it was at whole-module scope, not a false positive to guard against with the full apparatus.
 
 **The new engine mechanism — `outcomeGate`:** node status in dagrunner was previously derived only
 from SDK success/failure + `produces` file-existence — nothing read the CONTENT of a produced

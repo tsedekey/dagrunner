@@ -21,8 +21,9 @@ You have access to the following env vars:
 
 - `$DEVHARNESS_SRC` — permanent camunda/camunda checkout
 - `$DAGRUN_ARTIFACTS` — write `verify-plan.md` and `verify-report.json` here (nowhere else); a
-  `.verify-launch-marker` scratch file for stall-detection bookkeeping is the one exception, see
-  "Constraints" at the end of this file
+  `.verify-launch-marker` scratch file for launch-freshness bookkeeping (stall detection in Step 5,
+  executed-test confirmation in Step 4) is the one exception, see "Constraints" at the end of this
+  file
 - `$DAGRUN_RUN_ID` — the current dagrunner run ID
 - `$DAGRUN_WORKTREE` — the worktree path (your cwd) — the acceptance test itself is written HERE,
   under `qa/acceptance-tests`, because it is real, committed Camunda test code, not an artifact
@@ -61,22 +62,33 @@ These facts are pre-verified — do not re-investigate them:
   the JVM (not through the Bash tool) — this allowlist entry only covers the preflight/diagnostic
   commands below, not the actual acceptance-test execution.
 - **This session is one-shot and non-resumable — nothing will ever re-invoke it.** A long-running
-  Bash command (this hits Step 4's test-suite run and Step 5's acceptance-test run, both of which
-  can run 10+ minutes with an Elasticsearch testcontainer) may be auto-converted into a background
-  task. If a Bash result says something like "running in background... you will be notified when it
+  Bash command may be auto-converted into a background task. This realistically means Step 5's
+  acceptance-test run (10+ minutes with an Elasticsearch testcontainer); Step 4's test-suite run is
+  now diff-scoped to a handful of test classes (see Step 4 below) and normally completes in low
+  single-digit minutes, but the sandbox can still auto-background it if it judges the command
+  long-running, so the same "don't trust a background notification" rule applies there too. If a
+  Bash result says something like "running in background... you will be notified when it
   completes," do NOT trust that notification and do NOT end your turn expecting to be woken up
   later — there is no external process that will ever resume this session. `ScheduleWakeup` is
   disallowed for this exact reason and calling it will fail. Instead, poll the backgrounded task
   synchronously, inside this same turn, using `TaskOutput(task_id, block: true, timeout: <bounded>)`
   (or `Monitor`) — issuing several sequential poll calls in a row is normal and does NOT end the
-  turn — **until the task completes OR the stall threshold below is hit, whichever comes first.**
-  Polling is not unbounded: on the same launch, once you've spent ~20 minutes of wall-clock time
-  with no terminal status (however you polled — repeated `TaskOutput` calls or `Monitor`), stop
-  polling blindly and switch to the progress-aware check in "Stall detection and recovery" below
-  before your next poll — reaching this floor is NOT itself a stall verdict, only the point where
-  that check starts applying. This matters because a hung process can look identical to a
-  slow-but-healthy one from `status: running` alone — see that section for what actually
-  distinguishes them past the floor.
+  turn. The bound differs by step:
+  - **Step 5:** poll **until the task completes OR the stall threshold below is hit, whichever comes
+    first.** Polling is not unbounded: on the same launch, once you've spent ~20 minutes of
+    wall-clock time with no terminal status (however you polled — repeated `TaskOutput` calls or
+    `Monitor`), stop polling blindly and switch to the progress-aware check in "Stall detection and
+    recovery" below before your next poll — reaching this floor is NOT itself a stall verdict, only
+    the point where that check starts applying. This matters because a hung process can look
+    identical to a slow-but-healthy one from `status: running` alone — see that section for what
+    actually distinguishes them past the floor.
+  - **Step 4:** the full progress-aware apparatus in "Stall detection and recovery" below is Step
+    5-specific and does not apply — a diff-scoped handful of classes has no legitimate reason to run
+    long, so a simple bounded poll-until-done is enough. Poll until the task completes; if it is
+    still `status: running` after ~10 minutes of wall-clock with no terminal status, treat that as a
+    genuine stall (a much stronger signal than it would have been at whole-module scope) and follow
+    Step 4 §3's own report check below — never the marker/progress-count machinery reserved for
+    Step 5.
 - **A denied or errored `Monitor`/`TaskOutput` SETUP call is NOT "a monitor is now watching."**
   Run `56962-1` ended its turn on exactly this false premise: two `Monitor` setup attempts were
   both denied outright by the Bash sandbox (a `Monitor` script combining a variable assignment, a
@@ -229,10 +241,21 @@ grounds findings independently rather than trusting the reviewer that raised the
 
 Pass it in the prompt:
 
-1. The diff: `cd "$DAGRUN_WORKTREE" && git diff origin/main` (two-dot form against the base branch
-   — this covers both staged and unstaged changes, i.e. everything `implement`/`fix`/you have
-   changed so far; this is a self-check input ONLY, never an authoring input — you already
-   authored from the guide in Step 1/3).
+1. The diff:
+   ```bash
+   cd "$DAGRUN_WORKTREE" && git diff "$(git merge-base origin/main HEAD)"
+   ```
+   Diffed against the merge-base commit, not `origin/main` directly — `origin/main` can drift
+   arbitrarily far ahead of this branch's actual base (observed live on run `56962-1`: ~1300 commits
+   of drift, which pollutes a direct `origin/main` diff with unrelated files); merge-base finds the
+   actual common ancestor, giving a clean diff regardless of how stale `origin/main` looks locally.
+   This still covers both staged and unstaged changes (no `..HEAD` suffix — a plain `git diff <ref>`
+   compares `<ref>` against the working tree), i.e. everything `implement`/`fix`/you have changed so
+   far; this is a self-check input ONLY, never an authoring input — you already authored from the
+   guide in Step 1/3. Recompute the merge-base inline, as a command substitution, in every diff
+   command below — do not assign it to a shell variable in one Bash call and read it in another;
+   shell state does not persist across separate Bash tool calls in this sandbox (see
+   `verify-run-56962-1-forensics` in `DECISIONS.md` for the same constraint in a different guise).
 2. The full content of **every** acceptance-test file/method that covers the guide's promised
    flow — whether newly authored in Step 3, an existing file identified as a reuse match in
    Step 2, or an existing `*AuthorizationIT`-style class you added a method to per the note above.
@@ -348,19 +371,22 @@ before Rule 3 existed.
   the original plus 1 retry) — each cycle re-provisions a fresh testcontainer for `LOCAL` (or
   re-exercises the manually-started `ES`/`OS` container from Step 5) and can take 10+ minutes; do
   not loop expensively.
-- **A stall-and-recover sequence (see "Stall detection and recovery" below) shares this SAME
-  budget — it is never a separate, stacked counter.** Read the cap above as a cap on total `./mvnw`
-  launches per stage (build/test: up to 3 launches; acceptance: up to 2 launches), regardless of
-  why any one launch ended — a clean pass/fail, a self-healed fix-and-retry, or a stall recovered
-  via a report found after termination. Recovering a usable report from a stalled launch does not,
-  by itself, burn an extra cycle beyond the launch it already was — it is simply how that launch
-  concluded, and the resulting pass/fail signal feeds the normal self-heal decision above with the
-  remaining budget untouched. What actually consumes budget is issuing another `./mvnw` invocation
-  (a genuine retry launch). If a _retry_ launch itself stalls and no usable report is found, do not
-  attempt yet another launch on the strength of remaining budget — treat the stage as exhausted and
-  stop. A stall with NO usable report, on ANY launch, is never retried on the spot regardless of
-  remaining budget — it is `ERROR_INFRA`, and `ERROR_INFRA` is never self-heal territory at any
-  stage (see above); the human reruns the whole node, not just the stalled stage.
+- **A stall-and-recover sequence shares this SAME budget — it is never a separate, stacked
+  counter.** For Step 5, "stall-and-recover" means the full apparatus in "Stall detection and
+  recovery" below. For Step 4, it means that step's own simpler bounded-poll-then-report-check (see
+  Step 4 §3) — the marker/progress-count machinery below is Step 5-specific, but the SAME budget
+  and bright-line rules apply to however Step 4's launch concluded. Read the cap above as a cap on
+  total `./mvnw` launches per stage (build/test: up to 3 launches; acceptance: up to 2 launches),
+  regardless of why any one launch ended — a clean pass/fail, a self-healed fix-and-retry, or a
+  stall recovered via a report found after termination. Recovering a usable report from a stalled
+  launch does not, by itself, burn an extra cycle beyond the launch it already was — it is simply
+  how that launch concluded, and the resulting pass/fail signal feeds the normal self-heal decision
+  above with the remaining budget untouched. What actually consumes budget is issuing another
+  `./mvnw` invocation (a genuine retry launch). If a _retry_ launch itself stalls and no usable
+  report is found, do not attempt yet another launch on the strength of remaining budget — treat the
+  stage as exhausted and stop. A stall with NO usable report, on ANY launch, is never retried on the
+  spot regardless of remaining budget — it is `ERROR_INFRA`, and `ERROR_INFRA` is never self-heal
+  territory at any stage (see above); the human reruns the whole node, not just the stalled stage.
 - If a stage exhausts its retry cap still failing, write the normal `FAIL_*` outcome exactly as
   before this change, but the `detail` field must narrate what was attempted — what was diagnosed,
   what was changed, why the retry still failed (including whether a stall-and-recovery was part of
@@ -369,7 +395,7 @@ before Rule 3 existed.
 
 ---
 
-## Stall detection and recovery (read before Step 4/5 — bounded, shares the retry budget above)
+## Stall detection and recovery (read before Step 5 — bounded, shares the retry budget above)
 
 **Why this exists:** "poll until the task completes" (see "Known environment constraints" above) has
 no upper bound if "completes" never actually arrives. This was observed live, three consecutive
@@ -387,12 +413,20 @@ future-chain to deadlock silently (`Broker.internalStart()` hangs with no error,
 `Broker.close()` hang `jstack` caught is the downstream symptom of a broker that never finished
 starting cleanly. The "`qa/acceptance-tests` module isolation" install fix above (the `-am`-scoped
 `./mvnw install`) addresses this specific root cause, so this exact hang pattern should now be rare.
-Stall-recovery below is retained regardless, as general defense-in-depth for other/future stalls —
-it is not something worth trusting a person to notice by watching a terminal. Applies to
-BOTH places this node backgrounds a long `./mvnw` invocation and polls it via `TaskOutput`: Step 4's
-test-suite run (`./mvnw test -pl <module>`) and Step 5's acceptance-test run (`./mvnw verify
--Dit.test=<ClassName>`) — not Step 4's build/compile command, which is fast and not a realistic
-stall candidate.
+Stall-recovery below is retained regardless, as general defense-in-depth for future stalls — it is
+not something worth trusting a person to notice by watching a terminal.
+
+**Scope note (narrowed by the verify-diff-scoped-test-rerun change — see `DECISIONS.md`):** this
+full apparatus (marker file, fresh-report-count polling past a 20-minute floor) now applies to
+Step 5's acceptance-test run (`./mvnw verify -Dit.test=<ClassName>`) only. It used to also apply to
+Step 4's test-suite run when that step ran an entire module (`./mvnw test -pl <module>`) — the
+149-fresh-reports-in-20-minutes example in "1. Stall threshold" below is drawn from exactly that,
+now-removed, whole-module scope, and is kept here purely as the historical evidence for why
+progress-awareness beats pure wall-clock, not as a live Step 4 scenario. Step 4 is now diff-scoped
+to a handful of test classes (see Step 4 below), so it no longer produces hours-long, steady-progress
+bulk runs for this apparatus to distinguish from a genuine hang — it uses its own much simpler
+bounded poll-until-done instead (see "Known environment constraints" above and Step 4 §3 below).
+Step 4's build/compile command was never a stall candidate either — it is fast.
 
 **1. Stall threshold — progress-aware, not pure wall-clock.** Two consecutive
 `TaskOutput(task_id, block: true, timeout: 600000)` (or `Monitor`) polls on the SAME background
@@ -426,13 +460,10 @@ alone:
 - **At each poll past the floor**, count report files newer than the marker — one self-contained
   pipeline per call, never chained with the `TaskOutput`/`Monitor` call or anything else:
   ```bash
-  find <module>/target/surefire-reports/ -name "*.txt" -newer "$DAGRUN_ARTIFACTS/.verify-launch-marker" 2>/dev/null | wc -l
+  find qa/acceptance-tests/target/failsafe-reports/ -newer "$DAGRUN_ARTIFACTS/.verify-launch-marker" 2>/dev/null | wc -l
   ```
-  (Step 5: `qa/acceptance-tests/target/failsafe-reports/` instead of
-  `<module>/target/surefire-reports/`.) `-newer` compares file modification time against the
-  marker, which also correctly counts a report Surefire/Failsafe overwrote in place (same
-  filename, newer mtime) — not just brand-new filenames — so a module re-running an
-  already-seen class still registers as forward progress.
+  `-newer` compares file modification time against the marker, which also correctly counts a report
+  Failsafe overwrote in place (same filename, newer mtime) — not just brand-new filenames.
 - Remember the count from your immediately-prior poll in your own reasoning across this turn — no
   need to persist it anywhere; this is all within the same session.
 
@@ -457,11 +488,10 @@ identifying and killing the underlying OS process via `ps`/`kill -TERM` in Bash 
 code.** Wait a few seconds after termination, then check the stage-appropriate report directory
 directly:
 
-- **Step 4** (unit/integration test stage, `./mvnw test -pl <module>`):
-  `<module>/target/surefire-reports/`
 - **Step 5** (acceptance stage, `./mvnw verify -Dit.test=<ClassName>`):
   `qa/acceptance-tests/target/failsafe-reports/` — look for `<ClassName>.txt` and
-  `TEST-<fully.qualified.ClassName>.xml`.
+  `TEST-<fully.qualified.ClassName>.xml`. (Step 4 no longer uses this apparatus — its own, simpler
+  report check is in Step 4 §3 below, against `<module>/target/surefire-reports/`.)
 
 This is deliberate: JVM shutdown hooks and Surefire/Failsafe's own report-flush timing mean the real
 result is very often already durably on disk as soon as the test methods + regular JUnit lifecycle
@@ -476,7 +506,7 @@ a task you JUST force-killed as meaningful on its own.
 
 - **A complete, readable report exists for the relevant test(s):** parse it directly for the real
   result and proceed exactly as if the command itself had returned that result normally — feed it
-  into the existing Step 4/5 pass/fail logic and self-heal decision, unaffected by this recovery
+  into the existing Step 5 pass/fail logic and self-heal decision, unaffected by this recovery
   path having been needed. Record in the stage's `detail` field, briefly, that a stall was hit on
   this launch and recovered via a report found after termination. Do NOT weaken this to "a report is
   present" — it must be complete (the test class's result is actually recorded, not a partial/
@@ -487,9 +517,11 @@ a task you JUST force-killed as meaningful on its own.
   signal that does not exist here. **Bright line: classify `ERROR_INFRA` and stop. Do NOT reissue
   another `./mvnw` launch for this stage on this path** — the human reruns the whole node (`dagrun
 rerun verify --branch <branch>`), not this session relaunching the suite from scratch. Run
-  `56962-1` did exactly the wrong thing here: after a stall-kill found an incomplete report, the
-  node relaunched the entire test suite instead of writing `ERROR_INFRA`, which then compounded
-  into a separate failure (see `DECISIONS.md § verify-run-56962-1-forensics`). Write a clear,
+  `56962-1` did exactly the wrong thing here (in what was then Step 4's whole-module scope, since
+  narrowed away — see `verify-diff-scoped-test-rerun` in `DECISIONS.md`): after a stall-kill found
+  an incomplete report, the node relaunched the entire test suite instead of writing `ERROR_INFRA`,
+  which then compounded into a separate failure (see `DECISIONS.md § verify-run-56962-1-forensics`).
+  The same bright line applies here at Step 5. Write a clear,
   actionable `detail` that names the observed pattern explicitly: a broker/environment teardown
   hang in `CamundaMultiDBExtension.afterAll` → `Broker.close()` → `CompletableActorFuture.join()`,
   pre-existing and unrelated to this diff (cite the `54177-1` precedent above), and instructs the
@@ -542,21 +574,106 @@ broken build or failing suite.
    - **If the retry cap is exhausted still failing:** write `"outcome": "FAIL_BUILD"` as above, but
      `stages.build.detail` must narrate the diagnosis and what was attempted (see retry-cap rule
      above), not just the final raw log tail. Skip to Step 7 and stop.
-2. **Unit/integration test suite** (scope: the module(s) `implement`/`fix` touched — do not run
-   the full monorepo suite; identify touched modules from `git diff --cached --name-only
-origin/main`). Drop the stall-detection marker first, as its own Bash call, THEN launch:
+2. **Identify diff-relevant test classes** (scope: only test classes that plausibly cover this
+   diff's changed production code — never a whole module. Run `56962-1` proved whole-module scope
+   manufactures false failures: `./mvnw test -pl zeebe/engine` (641 classes) took two full launches
+   and ~4 hours, hit ~26% failures entirely unrelated to the diff (pre-existing environment/resource
+   contention, confirmed via baseline-commit comparison), and never even reached Step 5 — while the
+   6 test classes actually relevant to the diff were 100% clean. See `DECISIONS.md §
+verify-diff-scoped-test-rerun`. This is a mechanical mapping, not a judgment call — do not
+   improvise a broader rerun "just to be safe," and do not add a flakiness-recheck relaunch if a
+   result looks surprising; a second whole-suite launch is exactly the improvised, budget-violating
+   step that compounded run `56962-1`'s failure.):
+
+   a. List changed production classes, base-refed against the merge-base (same fix as Step 3b —
+   `origin/main` can drift arbitrarily far past this branch's actual base):
+
+   ```bash
+   cd "$DAGRUN_WORKTREE" && git diff --name-only --diff-filter=ACMR "$(git merge-base origin/main HEAD)" | grep -E '/src/main/.*\.java$'
+   ```
+
+   (Avoid `git diff -- '**/src/main/**/*.java'`-style glob pathspecs — glob-pathspec matching
+   behavior is not consistent enough across git versions to trust here; piping plain `--name-only`
+   output through `grep -E` is unambiguous.)
+
+   b. For each changed file `.../src/main/java/.../Foo.java`, resolve candidate test classes:
+   - **Naming convention:** does `FooTest.java` / `FooIT.java` exist at the mirrored path under
+     `src/test/java/...` in the same module (`src/main` → `src/test`, same filename stem)?
+   - **Fallback/additive** (catches tests that reference the class without following the naming
+     convention — do not skip this even when (a) found a match, take the union of both):
+     ```bash
+     grep -rlw "Foo" "<module>/src/test" --include="*.java"
+     ```
+     Use `-w` (portable word-match, both BSD and GNU grep), not a `\b`-based pattern — `\b` is a
+     GNU-only extension and silently misbehaves on this platform's grep.
+
+   c. Fold in any test class names explicitly mentioned in `reproduce/guide.md` / `implement/summary.md`
+   / `fix/summary.md` (already read in Step 1) — defense-in-depth, not the primary mechanism; live
+   evidence (run `56962-1`) showed the guide-driven list is often the single most reliable signal
+   of the actually-relevant regression coverage. Resolve each name to a file path:
+
+   ```bash
+   find "$DAGRUN_WORKTREE" -path "*/src/test/*" -name "<ClassName>.java"
+   ```
+
+   d. Union (b) and (c) into one candidate list of test file paths. From it derive:
+   - **`-Dtest=Class1,Class2,...`** — comma-separated simple class names (Maven's `-Dtest` takes
+     simple names, not fully-qualified paths).
+   - **`-pl <mod1,mod2,...>`** — the module(s) each resolved test file lives under (the path
+     segment before `/src/test/...`, e.g. `zeebe/engine`), unioned across every resolved class.
+     This guarantees every `-pl` module actually contains at least one of the listed classes.
+
+   e. **If the union is empty** (no naming-convention match, no grep match, nothing named in the
+   guide/summary): do NOT fall back to whole-module — that is the exact anti-pattern this step
+   exists to remove. Instead widen to the smallest common parent package: derive the mirrored
+   test directory of the changed production files' common parent package (e.g. changed files
+   under `.../job/` → `<module>/src/test/java/.../job/`), then list the actual test classes it
+   contains:
+
+   ```bash
+   find "<mirrored-package-dir>" -name "*Test.java" -o -name "*IT.java"
+   ```
+
+   and use that as the candidate list instead. Record in `verify-plan.md` (Step 6b) that the
+   mapping was empty and this fallback was used — a human reading the report later should be
+   able to tell scope was inferred, not resolved from a direct match.
+
+3. **Run the scoped suite, with an empirical "did anything actually run" check** (a `-Dtest` list
+   that resolves to nothing runnable is a false-green/false-fail risk just like Step 5's
+   `-Pmulti-db-test` omission — `BUILD SUCCESS` with `Tests run: 0` is not a pass, and Surefire does
+   NOT reliably print that summary line under `-q` on an all-pass run, so don't rely on parsing
+   stdout for this — count fresh report files instead):
    ```bash
    touch "$DAGRUN_ARTIFACTS/.verify-launch-marker"
    ```
    ```bash
-   ./mvnw test -pl <touched-module(s)> -q
+   ./mvnw test -pl <module(s)> -Dtest=<Class1,Class2,...> -q
    ```
-   - **If this backgrounds and the poll stalls** (per the progress-aware check in "Stall detection
-     and recovery" above — not `status: running` alone): terminate via `TaskStop`, check
-     `<module>/target/surefire-reports/` for a complete report, and proceed from there.
+   - This should complete in low single-digit minutes for a typical diff. If it backgrounds, use
+     Step 4's own bounded poll (see "Known environment constraints" above) — not Step 5's
+     progress-aware apparatus. If the poll genuinely stalls (~10 min, no terminal status): terminate
+     via `TaskStop`, then move to the report check below anyway (a killed launch can still have a
+     complete, usable report).
+   - **Confirm N>0 tests actually executed** before trusting either a pass or a fail signal:
+     ```bash
+     find <module(s)>/target/surefire-reports -name "*.txt" -newer "$DAGRUN_ARTIFACTS/.verify-launch-marker" 2>/dev/null | wc -l
+     ```
+     - **Count is 0:** the mapping resolved to nothing runnable (a stale/typo'd class name, a
+       resolved class with no test methods, or a `-Dtest` mismatch) — this is NOT a suite result,
+       regardless of Maven's own exit code. If step 2 hadn't already used the parent-package
+       fallback (2e), use it now, re-touch the marker, and relaunch once. If the fallback ALSO
+       yields count 0 (a genuine "no diff-relevant test coverage exists" case, not a mapping bug):
+       do not force a suite to exist — write `stages.test.status: "SKIPPED"` with a `detail`
+       explaining what was tried and why nothing could be resolved/executed, record this prominently
+       in `verify-plan.md`, and proceed to Step 5 (the acceptance test is the primary correctness
+       gate for this diff regardless). This does not consume self-heal retry budget — it is a scope
+       resolution outcome, not a fix-and-retry cycle.
+     - **Count > 0:** trust the actual Maven/Surefire result as the real signal and apply the ladder
+       below normally.
    - **If this fails and the failure is a lint/style/format violation** (e.g. checkstyle enforced
      during the test-phase compile) in a test-path file: same self-heal procedure as the build
-     stage — up to 2 fix-and-retry cycles, Rule 1 directory check on every attempt.
+     stage — up to 2 fix-and-retry cycles, Rule 1 directory check on every attempt, re-touching the
+     marker before each relaunch.
    - **If this fails for any other reason** (a genuine behavioral test-assertion failure, or a
      violation in a production file): NOT self-heal-able, regardless of how confident you are about
      the root cause — a behavioral test failure is a real signal, not a lint nit. Write
@@ -564,10 +681,15 @@ origin/main`). Drop the stall-detection marker first, as its own Bash call, THEN
      truncated failing-test-output tail in `stages.test.detail`. Skip to Step 7 and stop.
    - **If the retry cap is exhausted still failing:** write `"outcome": "FAIL_TEST"` as above, with
      `stages.test.detail` narrating the diagnosis and what was attempted. Skip to Step 7 and stop.
-3. Both passing → `stages.build.status` and `stages.test.status` are `"PASS"`. Proceed to Step 5.
+4. Both passing (or test SKIPPED per 3's double-empty case) → `stages.build.status` is `"PASS"` and
+   `stages.test.status` is `"PASS"` or `"SKIPPED"`. Proceed to Step 5.
 
-**Out of scope — do not add:** CI's dist/packaging/cross-storage matrix. This is acceptance-level
-verification of THIS change, not a CI re-run.
+**Out of scope — do not add:** CI's dist/packaging/cross-storage matrix (this is acceptance-level
+verification of THIS change, not a CI re-run); a whole-module test rerun (removed by this change —
+see `DECISIONS.md § verify-diff-scoped-test-rerun`); a "rerun to check for flakiness" relaunch on an
+unexpected result (the flakiness run `56962-1` hit was a symptom of whole-module resource
+contention — narrowing scope removes the contention, it does not need a flakiness-recheck mechanism
+bolted back on).
 
 ---
 
@@ -780,7 +902,10 @@ Skip this file entirely if Step 0 exited early (no authoring work happened). Oth
 ## Independent build + test rerun
 
 - Build: PASS/FAIL
-- Test suite (`<module(s)>`): PASS/FAIL
+- Test suite: PASS/FAIL/SKIPPED — scope: `<Class1,Class2,...>` in `<module(s)>` (mapping source:
+  naming-convention/grep/guide-mentioned | smallest-common-parent-package fallback — note explicitly
+  if the mapping was empty and the fallback was used, or if SKIPPED because no diff-relevant test
+  coverage could be resolved/executed at all)
 
 ## Outcome
 
@@ -803,9 +928,10 @@ provisioning gotcha). Absence is fine. The SessionEnd hook captures this automat
 - The acceptance test file is real, committed Camunda test code — it belongs in
   `$DAGRUN_WORKTREE/qa/acceptance-tests`, NOT in `$DAGRUN_ARTIFACTS`.
 - `verify-plan.md` and `verify-report.json` are the only DECLARED artifacts written to
-  `$DAGRUN_ARTIFACTS`. `.verify-launch-marker` is the one exception — scratch stall-detection
-  bookkeeping for this node's own use (same pattern as `fix.md`'s `fix-history.log`), never a
-  produces artifact, never read by anything outside this session.
+  `$DAGRUN_ARTIFACTS`. `.verify-launch-marker` is the one exception — scratch launch-freshness
+  bookkeeping for this node's own use (stall-recovery in Step 5, executed-test confirmation in
+  Step 4; same pattern as `fix.md`'s `fix-history.log`), never a produces artifact, never read by
+  anything outside this session.
 - Never let a testcontainer/infra failure read as `PASS` — when in doubt between `ERROR_INFRA` and
   `FAIL_ASSERTION`, prefer `ERROR_INFRA` only when the failure is clearly provisioning-level (the
   test body itself never ran); otherwise it's a real assertion failure.
