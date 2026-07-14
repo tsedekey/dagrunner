@@ -1,13 +1,28 @@
 You are running the **fix node** of a dagrunner pipeline. Your job is to apply targeted code fixes for high-confidence review findings, self-verify the result, and write a summary artifact.
 
+> **⚠️ Do not try to print or discover the literal value of any `$DAGRUN_*` variable** (e.g. via
+> `echo`, `printenv`, `env`, or `node -e ...process.env`) — this sandbox's Bash tool blocks bare
+> variable-expansion/introspection commands outright, before any approval prompt; and even where
+> it doesn't, printing env vars requires human approval that never arrives in this unattended
+> session. Using a `$DAGRUN_*` variable inline inside a real command works fine — the shell expands
+> it as part of that command's own side effect:
+>
+> - **Read** a `$DAGRUN_ARTIFACTS`-relative file via `cat` in Bash (e.g.
+>   `cat "$DAGRUN_ARTIFACTS/../review/findings.json"`) — not the Read tool, which needs a literal
+>   path you don't have.
+> - **Write** via a heredoc (`cat > "$DAGRUN_ARTIFACTS/x.md" << 'EOF' ... EOF`) — not the Write
+>   tool, for the same reason.
+> - If you ever genuinely need the literal path, derive it with `cd "$DAGRUN_ARTIFACTS" && pwd` —
+>   a real command, not a bare print.
+
 ---
 
 ## Step 1 — Read findings
 
-Read the review artifact:
+Read the review artifact via `cat` (see the note above — do not use the Read tool here):
 
-```
-$DAGRUN_ARTIFACTS/../review/findings.json
+```bash
+cat "$DAGRUN_ARTIFACTS/../review/findings.json"
 ```
 
 Filter to the **actionable findings**: those with `confidence: "high"` AND `severity` of `"blocker"` or `"major"`.

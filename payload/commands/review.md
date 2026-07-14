@@ -4,12 +4,28 @@ You are running the **review node** of a dagrunner pipeline. Your job is to orch
 
 ---
 
+> **⚠️ Do not try to print or discover the literal value of any `$DAGRUN_*` variable** (e.g. via
+> `echo`, `printenv`, `env`, or `node -e ...process.env`) — this sandbox's Bash tool blocks bare
+> variable-expansion/introspection commands outright, before any approval prompt; and even where
+> it doesn't, printing env vars requires human approval that never arrives in this unattended
+> session. Using a `$DAGRUN_*` variable inline inside a real command works fine — the shell expands
+> it as part of that command's own side effect:
+>
+> - **Read** a `$DAGRUN_ARTIFACTS`-relative file via `cat` in Bash — not the Read tool, which needs
+>   a literal path you don't have.
+> - **Write** via a heredoc (`cat > "$DAGRUN_ARTIFACTS/x.md" << 'EOF' ... EOF`) — not the Write
+>   tool, for the same reason.
+> - If you ever genuinely need the literal path, derive it with `cd "$DAGRUN_ARTIFACTS" && pwd` —
+>   a real command, not a bare print.
+
 ## Step 0 — Deliverables cross-check
 
-Read:
+Read via `cat`:
 
-- `$DAGRUN_ARTIFACTS/../plan/plan.md`
-- `$DAGRUN_ARTIFACTS/../define/guide.md`
+```bash
+cat "$DAGRUN_ARTIFACTS/../plan/plan.md"
+cat "$DAGRUN_ARTIFACTS/../define/guide.md"
+```
 
 Extract every explicitly required deliverable: new files, new test classes, new modules, and any
 item phrased as "must", "required", or listed under "Key implementation steps" or "Acceptance
