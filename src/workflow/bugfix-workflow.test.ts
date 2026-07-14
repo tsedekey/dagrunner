@@ -89,10 +89,14 @@ test("bugfixWorkflow: verify depends on fix, is required (non-optional), and has
     "verify must be required (non-optional) — it blocks pr on a bad outcome",
   );
   assert.equal(node.gate, undefined, "verify must have no human gate");
+  // DEFERRED_TO_CI (added by the verify-defer-to-ci change, see DECISIONS.md
+  // § verify-defer-to-ci-and-drop-diff-scoped-rerun) is a non-blocking outcome:
+  // a confirmed pre-existing, diff-unrelated build break in Step 4 must not
+  // hard-fail the node and block pr the way a genuine FAIL_BUILD does.
   assert.deepEqual(node.outcomeGate, {
     file: "verify-report.json",
     field: "outcome",
-    passValues: ["PASS"],
+    passValues: ["PASS", "DEFERRED_TO_CI"],
   });
 });
 

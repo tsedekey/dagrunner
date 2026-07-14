@@ -205,14 +205,19 @@ single agent session, the same way the undocumented checkstyle fix in `54177-1` 
    self-assessment. This guards against a vacuous AT that would pass without touching the feature —
    the same self-grading-bias problem the plan flags for why `implement` shouldn't author its own
    acceptance test. A failed self-check halts before the (expensive) build/test/acceptance stages.
-5. **Independent build + test rerun, with bounded style/lint self-heal** — verify does not trust
-   `implement`/`fix`'s self-reported status; it reruns the build itself, then reruns only the test
-   classes mechanically mapped to the diff's changed production classes (naming convention + a
-   grep-based fallback + any test class named in the guide/summary; NOT the whole touched module —
-   see "Step 4 rescoped to diff-relevant test classes" below). Fail-fast ladder: build → test suite →
-   acceptance test. A broken build or failing suite stops before the acceptance run — unless the
-   failure is a lint/style/format violation in a test file, in which case verify may fix it and retry
-   (capped, directory-gated; see "Bounded self-heal" above).
+5. **Build the `qa/acceptance-tests` module (prerequisite for Step 5), with bounded style/lint
+   self-heal, no independent test-suite rerun** — verify does not trust `implement`/`fix`'s
+   self-reported build status; it rebuilds `qa/acceptance-tests` itself (the module-isolation `-am`
+   install genuinely required before this module can compile/run at all — see "Known environment
+   constraints" in `payload/commands/verify.md`). It does NOT separately rerun the unit/integration
+   test suite (removed by the verify-defer-to-ci-and-drop-diff-scoped-rerun change, 2026-07-14 — see
+   `DECISIONS.md § verify-defer-to-ci-and-drop-diff-scoped-rerun`): CI already reruns build/test on
+   every push and `implement`/`fix` already self-report their own status, so the diff-scoped test
+   rerun this step used to also perform was pure redundancy on top of those two signals, not an
+   independent check. Fail-fast ladder: build → acceptance test. A broken build stops before the
+   acceptance run — unless the failure is a lint/style/format violation in a test file (self-heal,
+   capped, directory-gated; see "Bounded self-heal" above), or is mechanically confirmed pre-existing
+   and diff-unrelated (`DEFERRED_TO_CI` — see below).
 6. **Run + classify, with bounded proof-gated self-heal** — executes the AT via the existing
    `@MultiDbTest` framework (starts `TestStandaloneBroker`/`TestSimpleCamundaApplication` in-process,
    injects `CamundaClient` — dagrunner reimplements none of this). The framework only
@@ -220,10 +225,10 @@ single agent session, the same way the undocumented checkstyle fix in `54177-1` 
    types verify actually runs against (`-Dtest.integration.camunda.database.type=ES|OS`), it expects
    a container already listening on `:9200` — verify starts one itself via `docker run` before
    invoking `mvnw` (see `payload/commands/verify.md` Step 5) — and classifies the result into exactly
-   one of `PASS` / `FAIL_ASSERTION` / `FAIL_BUILD` /
-   `FAIL_TEST` / `ERROR_INFRA`. An assertion failure is not written as `FAIL_ASSERTION` immediately —
-   verify first works the self-heal decision (isolated production-correctness proof, directory/
-   shared-fixture rules, one retry) before falling back to the classification.
+   one of `PASS` / `FAIL_ASSERTION` / `FAIL_BUILD` / `DEFERRED_TO_CI` / `ERROR_INFRA`. An assertion
+   failure is not written as `FAIL_ASSERTION` immediately — verify first works the self-heal decision
+   (isolated production-correctness proof, directory/shared-fixture rules, one retry) before falling
+   back to the classification.
 7. **Evidence + gate** — writes `$DAGRUN_ARTIFACTS/verify-report.json` (per-stage status +
    the single outcome classification + truncated logs, now also narrating any self-heal attempted)
    and, when authoring happened, `verify-plan.md` (which flow it covers, why, and the self-check
@@ -248,15 +253,17 @@ cleanly. Fixed by the `-am`-scoped `./mvnw install -pl qa/acceptance-tests -am -
 each time, the poll loop would have continued indefinitely. Stall-recovery is retained regardless,
 as general defense-in-depth for other/future stalls. verify.md now bounds this: terminate the
 stalled launch via `TaskStop` (falling back to `ps`/`kill -TERM` if `TaskStop` errors), and check
-the stage's report directory directly (`<module>/target/surefire-reports/` for Step 4,
-`qa/acceptance-tests/target/failsafe-reports/` for Step 5) rather than trusting the killed task's
-own exit code/status — which run `54177-1` observed to be inconsistent across two kills of the
-identical hang (`completed`/exit 0 vs. `failed`/exit 144). A complete report found this way is fed
-into the normal pass/fail/self-heal logic unchanged; no usable report means `ERROR_INFRA` (never
-`FAIL_TEST`/`FAIL_ASSERTION` — there is no code-correctness signal to report). This folds into the
-SAME retry-cycle budget the bounded
-self-heal above already uses (2 for build/test, 1 for acceptance) — a stall-and-recover sequence is
-just one way a launch can conclude, not a second, independently-uncapped counter.
+the stage's report directory directly (originally `<module>/target/surefire-reports/` for Step 4,
+`qa/acceptance-tests/target/failsafe-reports/` for Step 5 — Step 4 no longer participates in this
+apparatus at all as of the verify-defer-to-ci-and-drop-diff-scoped-rerun change below; a killed
+Step-4 build has no report-directory analog and resolves straight to `ERROR_INFRA`) rather than
+trusting the killed task's own exit code/status — which run `54177-1` observed to be inconsistent
+across two kills of the identical hang (`completed`/exit 0 vs. `failed`/exit 144). A complete report
+found this way is fed into the normal pass/fail/self-heal logic unchanged; no usable report means
+`ERROR_INFRA` (never `FAIL_ASSERTION` — there is no code-correctness signal to report). This folds
+into the SAME retry-cycle budget the bounded self-heal above already uses (2 for build, 1 for
+acceptance) — a stall-and-recover sequence is just one way a launch can conclude, not a second,
+independently-uncapped counter.
 
 **Stall threshold redesigned to be progress-aware, not pure wall-clock (the
 run-56962-1-forensics change — see `DECISIONS.md § verify-run-56962-1-forensics`).** The original
@@ -294,40 +301,50 @@ never written. The guard now explicitly treats a denied/errored setup call ident
 no progress signal at all: fall back to manual single-command polls, or the stall-recovery path,
 rather than ending the turn on an unconfirmed assumption.
 
-**Step 4 rescoped to diff-relevant test classes, narrowing the whole-module tolerance above (the
-verify-diff-scoped-test-rerun change — see `DECISIONS.md § verify-diff-scoped-test-rerun`).** The
-progress-aware stall threshold two paragraphs up made whole-module runs survivable (no more false
-stalls), but did not fix the deeper problem it was papering over: whole-module scope itself
-manufactures false failures. Run `56962-1`'s actual `ERROR_INFRA` outcome is the empirical proof —
-`./mvnw test -pl zeebe/engine` (641 classes) ran twice (~4 hours total, the second an improvised,
-out-of-spec "flakiness recheck" relaunch that this change also explicitly forecloses), surfaced
-~26% failures across DMN/tenant/migration tests with zero relationship to the diff, and — proven via
-baseline-commit comparison in an isolated worktree — every one of them was a pre-existing
-environment/resource-contention defect, not a regression. Step 4's fail-fast ladder blocked on this
-spurious failure before ever reaching Step 5, even though the 6 test classes actually relevant to
-the diff all passed cleanly when run in isolation. `payload/commands/verify.md`'s Step 4 is now a
-mechanical diff-relevant class mapping instead of `-pl <touched-module>`: changed production classes
-are identified from `git diff --name-only --diff-filter=ACMR "$(git merge-base origin/main
-HEAD)"` (same merge-base fix as D3 below — `origin/main` can drift arbitrarily far past a branch's
-actual base), each mapped to candidate test classes via naming convention (`FooTest`/`FooIT` at the
-mirrored `src/test` path) UNIONed with a `grep -rlw` fallback (catches tests that reference the
-class without following the naming convention) UNIONed with any test class named in
-`reproduce/guide.md`/`implement/summary.md`/`fix/summary.md` (defense-in-depth — live evidence showed
-the guide-driven list often the most reliable signal), then run via `-Dtest=Class1,Class2,...`
-scoped to only the module(s) those classes live in. An empty mapping falls back to the smallest
-common parent package's test classes — never to whole-module, which is now out of scope for Step 4
-the same way CI's dist/packaging matrix already was. Because a resolved-but-non-matching `-Dtest`
-list can silently produce Maven's own `Tests run: 0` false green (the same failure class Step 5
-already guards against for `-Pmulti-db-test`), Step 4 also confirms N>0 tests actually executed by
-counting fresh Surefire reports against a re-touched `.verify-launch-marker`, not by parsing stdout
-(Surefire's summary line isn't reliably printed under `-q` on an all-pass run) — a 0-executed result
-falls back to the parent-package mapping rather than being trusted as a pass or fail; if that still
-executes nothing, the test stage is written `SKIPPED` (not forced into existence) and the run
-proceeds to Step 5, the acceptance test remaining the primary correctness gate. The stall-detection
-apparatus above (marker-based progress polling past a 20-minute floor) is now Step 5-only — a
-diff-scoped run of a handful of classes is expected to finish in low single-digit minutes, so Step 4
-uses a simple bounded poll-until-done instead; a stall on that path is now a much stronger signal
-than it was at whole-module scope, not a false positive to guard against with the full apparatus.
+**Step 4 rescoped to diff-relevant test classes (the verify-diff-scoped-test-rerun change,
+2026-07-14 — see `DECISIONS.md § verify-diff-scoped-test-rerun`), then had that entire test-suite
+rerun dropped outright and replaced with a `DEFERRED_TO_CI` outcome for confirmed pre-existing
+build breaks (the verify-defer-to-ci-and-drop-diff-scoped-rerun change, same day — see `DECISIONS.md
+§ verify-defer-to-ci-and-drop-diff-scoped-rerun`).** The progress-aware stall threshold two
+paragraphs up made whole-module runs survivable (no more false stalls), but did not fix the deeper
+problem it was papering over: whole-module scope itself manufactures false failures. Run
+`56962-1`'s actual `ERROR_INFRA` outcome is the empirical proof — `./mvnw test -pl zeebe/engine`
+(641 classes) ran twice (~4 hours total), surfaced ~26% failures entirely unrelated to the diff, and
+— proven via baseline-commit comparison — every one was pre-existing environment/resource
+contention, not a regression, while the 6 test classes actually relevant to the diff were 100%
+clean. The verify-diff-scoped-test-rerun change first fixed this by rescoping Step 4 to a mechanical
+diff-relevant class mapping (`-Dtest=Class1,Class2,...`, naming convention + `grep -rlw` fallback +
+any class named in the guide/summary, with an N>0-executed-tests confirmation via a re-touched
+`.verify-launch-marker`) instead of `-pl <touched-module>`. Run `56954-1` then surfaced the deeper
+question this narrowing hadn't asked: is an independent test-suite rerun in `verify` needed at all,
+given CI already reruns build/test on every push and `implement`/`fix` already self-report their own
+status? Eddie's answer, agreed in conversation: no — the rerun (in either its whole-module or
+diff-scoped form) was pure redundancy layered on two signals that already exist, so
+`payload/commands/verify.md`'s Step 4 dropped it entirely, keeping only the build prerequisite
+(the `-am` module-isolation install `qa/acceptance-tests` genuinely cannot compile/run without).
+This also retires the class-mapping mechanism, the N>0-executed check, and — since Step 4 is no
+longer a bulk multi-class run — the stall-detection apparatus's Step 4 applicability entirely
+(it is Step 5-only now; a killed Step 4 build has no report-directory analog to recover a signal
+from, so a Step 4 stall resolves straight to `ERROR_INFRA`).
+
+Run `56954-1` also surfaced a second, independent problem the drop above doesn't address: the
+mandatory `-am` install can itself fail on a genuine, pre-existing trunk break entirely unrelated to
+the diff being verified (12 NullAway compile errors in `zeebe/snapshot`, confirmed byte-identical to
+the merge-base — a module this run never touched). Before this change, that situation had no correct
+classification: `FAIL_BUILD` would hard-block `pr` for a problem the PR author cannot fix (self-heal
+is categorically off — it's production code, out of scope, unrelated) and did not cause, and
+`ERROR_INFRA` would misrepresent a real (if pre-existing) compile break as an environment/tooling
+problem. `payload/commands/verify.md`'s Step 4 now works a narrow, mechanical "Deferred-to-CI check"
+before falling back to `FAIL_BUILD` on a genuine build failure: identify the specific failing
+file/module from Maven's error output, confirm it is absent from `git diff --name-only
+"$(git merge-base origin/main HEAD)"`, and additionally confirm it is byte-identical via `git diff
+"$(git merge-base origin/main HEAD)" -- <file>` returning empty (closing the "file was deleted"
+gap that absence-from-diff alone wouldn't). Only if both checks confirm unrelated does verify write
+`"outcome": "DEFERRED_TO_CI"` instead of `FAIL_BUILD`; any uncertainty falls through to `FAIL_BUILD`
+unchanged — this is a bright line, not a judgment call. `DEFERRED_TO_CI` is a new, narrower
+classification, not a rename of `ERROR_INFRA` — it means "the codebase this branch is based on
+doesn't compile, for reasons this diff didn't cause," and Step 5 is still skipped exactly as it is
+on `FAIL_BUILD` (there is no build to run the acceptance test against either way).
 
 **The new engine mechanism — `outcomeGate`:** node status in dagrunner was previously derived only
 from SDK success/failure + `produces` file-existence — nothing read the CONTENT of a produced
@@ -337,12 +354,19 @@ not duplicated — with `src/runtime/run-engine.ts`'s `rerunNode`) immediately a
 produces-file-existence check passes: it reads `field` out of the named JSON artifact and, if the
 value isn't in `passValues`, marks the node `"failed"` with a clear message instead of `"done"`.
 `verify` is wired with `outcomeGate: { file: "verify-report.json", field: "outcome", passValues:
-["PASS"] }` on both workflows. This gives every non-PASS classification a uniform engine-level
-effect — node fails, run halts, `pr` (which depends on `verify`, no longer `optional`) never runs —
-identical to today's produces-violation halt semantics. No separate `ERROR_INFRA`-specific engine
-code path was added: the distinction between "this feature is broken" and "the environment is
-broken" lives in the artifact's `outcome` field for the human to read on resume, not in different
-control flow.
+["PASS", "DEFERRED_TO_CI"] }` on both workflows — `DEFERRED_TO_CI` was added to `passValues` by the
+verify-defer-to-ci-and-drop-diff-scoped-rerun change above precisely because it is a non-blocking
+outcome: verify confirmed a pre-existing, diff-unrelated trunk issue and deferred acceptance-test
+confirmation to CI, which must not read as a failure of THIS change. `FAIL_BUILD`/`FAIL_ASSERTION`/
+`ERROR_INFRA` remain outside `passValues` and block `pr` exactly as before. This gives every
+blocking classification a uniform engine-level effect — node fails, run halts, `pr` (which depends
+on `verify`, no longer `optional`) never runs — identical to today's produces-violation halt
+semantics, while `DEFERRED_TO_CI` (like `PASS`) lets the node reach `"done"` and `pr` proceed,
+carrying a visible callout (see `payload/commands/pr.md`) rather than silently reading as a normal
+pass. No separate `ERROR_INFRA`/`DEFERRED_TO_CI`-specific engine code path was added: the
+distinction between "this feature is broken," "the environment is broken," and "trunk is broken for
+unrelated reasons" lives entirely in the artifact's `outcome` field and `passValues`, not in
+different control flow.
 
 **Sibling mechanism — `noPlaceholders` (added by the structural-upgrades change, 2026-07-09 — see
 `DECISIONS.md § structural-upgrades-2026-07-09`):** a second content-level check, `noPlaceholders:

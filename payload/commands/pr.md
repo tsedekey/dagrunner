@@ -29,16 +29,49 @@ All output files go to `$DAGRUN_ARTIFACTS/`.
 
 ## Step 1 — Read all available artifacts
 
-Read each of these inputs:
+**Do not try to print or discover the literal value of any `$DAGRUN_*` variable** (e.g. via `echo`,
+`printenv`, or `env`) — this sandbox's Bash tool blocks bare variable-expansion/introspection
+commands outright, before any approval prompt (same constraint as Step 0's `$DAGRUN_ARTIFACTS`
+note). Read each of these inputs via `cat` in Bash (not the Read tool, which needs a literal path
+you don't have) — a `$DAGRUN_*` variable used inline inside a real command like `cat` expands fine,
+it is only a bare print that gets rejected:
 
-- `$DAGRUN_RUN_DIR/plan/plan.md`
-- Guide: check `$DAGRUN_RUN_DIR/define/guide.md` first; if absent, use `$DAGRUN_RUN_DIR/reproduce/guide.md` (bugfix workflow)
-- `$DAGRUN_RUN_DIR/implement/summary.md`
-- `$DAGRUN_RUN_DIR/review/findings.json`
-- `$DAGRUN_RUN_DIR/fix/summary.md`
-- `$DAGRUN_RUN_DIR/verify/manual-test.md` (optional — skip if absent)
+```bash
+cat "$DAGRUN_RUN_DIR/plan/plan.md" 2>/dev/null
+cat "$DAGRUN_RUN_DIR/define/guide.md" 2>/dev/null
+cat "$DAGRUN_RUN_DIR/reproduce/guide.md" 2>/dev/null
+cat "$DAGRUN_RUN_DIR/implement/summary.md" 2>/dev/null
+cat "$DAGRUN_RUN_DIR/review/findings.json" 2>/dev/null
+cat "$DAGRUN_RUN_DIR/fix/summary.md" 2>/dev/null
+cat "$DAGRUN_RUN_DIR/verify/verify-report.json" 2>/dev/null
+cat "$DAGRUN_RUN_DIR/verify/manual-test.md" 2>/dev/null
+```
+
+- Guide: use `define/guide.md` if it printed something; otherwise use `reproduce/guide.md` (bugfix workflow).
+- `verify/manual-test.md` is optional — absent is fine, skip it.
+- `verify/verify-report.json`'s `outcome` field matters for Step 2 below: if it is
+  `"DEFERRED_TO_CI"`, the PR body must carry a visible callout — see Step 2's "Deferred-to-CI
+  callout" note. If the file is absent (verify never ran on this workflow shape) or `outcome` is
+  anything else, no callout is needed.
 
 ## Step 2 — Compose the PR body
+
+**Deferred-to-CI callout (only if Step 1 found `verify/verify-report.json`'s `outcome` is
+`"DEFERRED_TO_CI"`):** insert a short, clearly-labeled callout block immediately after the
+`## Description` section, before `## Checklist` — a reviewer merging this PR needs to know verify
+did NOT independently confirm a green build, and why, before they trust the checklist below. This
+callout is explicitly exempt from the "no bullet lists"/plain-prose rule that governs the
+Description paragraph itself (they are separate sections with separate purposes) — name the
+specific unrelated trunk module/file/error from `stages.build.detail`, verbatim or close to it, not
+a vague "build issue":
+
+```markdown
+> **⚠️ Verify deferred to CI:** the independent build rerun hit a confirmed pre-existing,
+> diff-unrelated issue in `<module/file from stages.build.detail>` (`<one-line error summary>`) —
+> mechanically confirmed unchanged from the merge-base, unrelated to this PR. Acceptance-test
+> confirmation was deferred to CI as a result; verify did NOT independently confirm a green build
+> for this change.
+```
 
 Follow the Camunda PR template exactly:
 
@@ -50,6 +83,9 @@ cat > "$DAGRUN_ARTIFACTS/body.md" << 'BODY'
 <2–4 sentences. What this PR does and why — goal and purpose only.
 Draw from guide.md and implement/summary.md. No bullet lists, no sub-headers,
 no review/fix recap. If verify ran, one sentence noting it was produced.>
+
+<Insert the Deferred-to-CI callout block here, verbatim, ONLY if outcome was "DEFERRED_TO_CI" per
+Step 1 — omit this line and the callout entirely otherwise.>
 
 ## Checklist
 

@@ -394,13 +394,17 @@ test("featureWorkflow: verify uses sonnet (raised from haiku for authoring reaso
   assert.equal(node.model, "sonnet");
 });
 
-test("featureWorkflow: verify declares outcomeGate on verify-report.json's outcome field", () => {
+test("featureWorkflow: verify declares outcomeGate on verify-report.json's outcome field, passValues include DEFERRED_TO_CI", () => {
   const node = featureWorkflow.nodes.find((n) => n.id === "verify");
   assert.ok(node !== undefined);
+  // DEFERRED_TO_CI (added by the verify-defer-to-ci change, see DECISIONS.md
+  // § verify-defer-to-ci-and-drop-diff-scoped-rerun) is a non-blocking outcome:
+  // a confirmed pre-existing, diff-unrelated build break in Step 4 must not
+  // hard-fail the node and block pr the way a genuine FAIL_BUILD does.
   assert.deepEqual(node.outcomeGate, {
     file: "verify-report.json",
     field: "outcome",
-    passValues: ["PASS"],
+    passValues: ["PASS", "DEFERRED_TO_CI"],
   });
 });
 

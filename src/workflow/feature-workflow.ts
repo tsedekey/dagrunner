@@ -161,10 +161,18 @@ export const featureWorkflow: Workflow = {
       // § verify-run-56962-1-forensics.
       produces: ["verify-report.json"],
       formatCommand: "./mvnw spotless:apply --no-transfer-progress",
+      // DEFERRED_TO_CI (verify-defer-to-ci-and-drop-diff-scoped-rerun change,
+      // 2026-07-14, see DECISIONS.md § verify-defer-to-ci-and-drop-diff-scoped-rerun,
+      // motivated by run 56954-1) is non-blocking, alongside PASS: it means
+      // verify confirmed Step 4's build broke on a pre-existing, diff-unrelated
+      // trunk issue (mechanically proven byte-identical against the merge-base)
+      // and deferred acceptance-test confirmation to CI, NOT that the build was
+      // skipped or the diff itself is broken. FAIL_BUILD/FAIL_TEST/FAIL_ASSERTION/
+      // ERROR_INFRA remain blocking — unchanged.
       outcomeGate: {
         file: "verify-report.json",
         field: "outcome",
-        passValues: ["PASS"],
+        passValues: ["PASS", "DEFERRED_TO_CI"],
       },
     },
     {
