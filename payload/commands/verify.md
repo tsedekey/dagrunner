@@ -195,8 +195,8 @@ one already exists:
 3. **If an existing AT already covers the flow:** do NOT author a new one. Record which file was
    reused and why in `verify-plan.md` (Step 6b). Proceed directly to Step 4 (build prerequisite for
    Step 5) using that existing AT as the one to execute in Step 5 — skip Step 3 (author) entirely,
-   but do NOT skip Step 3b (D3 self-check) — the self-check still applies to a reused AT (see the D3
-   subagent's own note on this).
+   but do NOT skip Step 3b (the diff-grounding self-check) — the self-check still applies to a
+   reused AT (see the diff-grounding subagent's own note on this).
 4. **If no existing AT covers the flow:** proceed to Step 3 exactly as the feature workflow does.
 
 ---
@@ -224,7 +224,8 @@ job, already done. You are proving the end-to-end user-facing contract, not re-t
    auth case needs, bolting one method onto it is usually the right call — duplicating that
    fixture in the new file just to keep everything in one place is not required and often worse.
    Whichever files end up covering the guide's promised flow, list all of them in `verify-plan.md`
-   (Step 6b) and carry every one of them into Step 3b — do not let D3 see only the new file.
+   (Step 6b) and carry every one of them into Step 3b — do not let the diff-grounding self-check
+   see only the new file.
 3. Use the framework's own await/poll semantics for timing-sensitive assertions (e.g. its existing
    `Awaitility`-style helpers, if the reference tests use one) — **no fixed `Thread.sleep`**.
 4. Run the formatter after writing the file:
@@ -232,14 +233,14 @@ job, already done. You are proving the end-to-end user-facing contract, not re-t
    ./mvnw spotless:apply --no-transfer-progress
    ```
 5. Stage the new file (and anything else outstanding in the worktree) so it is visible to the
-   D3 self-check's diff comparison and eventually reaches the PR:
+   diff-grounding self-check's diff comparison and eventually reaches the PR:
    ```bash
    cd "$DAGRUN_WORKTREE" && git add -A && git status --short
    ```
 
 ---
 
-## Step 3b — D3: isolated diff-grounding self-check (mandatory, before Step 4)
+## Step 3b — isolated diff-grounding self-check (mandatory, before Step 4)
 
 Dispatch the **`verify-diff-grounding-checker`** subagent via the Agent tool — this is a deliberate
 isolated-context check, not a self-assessment, mirroring how `review`'s adversarial verifier
@@ -301,8 +302,8 @@ verify has no human review, which is exactly why this boundary is mechanical, no
   isolated `verify-production-correctness-checker` subagent independently confirms the production
   code is correct (see Rule 3 below). Never self-heal on your own conclusion alone, no matter how
   rigorous your own tracing felt — same-session self-grading has a known bias problem in this
-  codebase, which is exactly why D3 (`verify-diff-grounding-checker`) already exists as an isolated
-  dispatch elsewhere in this command.
+  codebase, which is exactly why the diff-grounding self-check (`verify-diff-grounding-checker`)
+  already exists as an isolated dispatch elsewhere in this command.
 - `ERROR_INFRA` is never self-heal territory at any stage — an infra problem isn't a code defect to
   fix.
 
@@ -368,8 +369,9 @@ failure as test-side and self-heal it ONLY after dispatching the **isolated**
 `verify-production-correctness-checker` subagent (via the Agent tool) and receiving back
 `production_correct: true` AND `confirmed: true`. Pass it: the diff, the AT's full content and the
 specific failing assertion(s), the actual failure output, and a one-paragraph flow description
-(same inputs D3 already uses, plus the failure output). If the subagent returns `false` for either
-field, or you cannot dispatch it, self-heal is off — write `FAIL_ASSERTION` and stop, exactly as
+(same inputs the diff-grounding self-check already uses, plus the failure output). If the subagent
+returns `false` for either field, or you cannot dispatch it, self-heal is off — write
+`FAIL_ASSERTION` and stop, exactly as
 before Rule 3 existed.
 
 **Retry caps (cost control — acceptance cycles are expensive):**
@@ -555,14 +557,14 @@ independently-uncapped stall-retry counter.
 This does not repeat the Rule 1/2/3 mechanics above — it's a short reinforcement of judgment calls
 that lead TO the boundary being tested in the first place.
 
-| Red flag phrase (in your own reasoning)                                        | What to do instead                                                                                                                                                                                                                                    |
-| ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| "This is basically a lint issue" (when it isn't)                               | Only checkstyle/spotless/format tooling actually flagging it counts as lint. A genuine compile error or behavioral assertion failure dressed up as "basically style" is still not self-heal-able (Step 4).                                            |
-| "This assertion failure looks stale, I'll just update it"                      | Not without the `verify-production-correctness-checker` subagent's `production_correct: true` AND `confirmed: true` (Rule 3). Your own read of "looks stale" is exactly the self-grading bias Rule 3 exists to guard against.                         |
-| "I'll just tweak this shared fixture once, it's a small change"                | Run the Rule 2 `grep -rl` count first. More than one dependent test means the fixture is off-limits — fix the dependent AT's assertions instead.                                                                                                      |
-| "The directory check is a formality, I know my edit was test-only"             | Run `git diff --name-only` anyway (Rule 1) — it is the mechanical gate, not your own confidence.                                                                                                                                                      |
-| "This has already taken a while, I'll skip the isolated subagent to save time" | The isolated subagent dispatch (D3, and Rule 3 for acceptance self-heal) is what makes verify's judgment trustworthy with no human reviewing it. Skipping it to save time removes the one check that exists precisely because there is no human here. |
-| "Docker/testcontainer flakiness, I'll just call it ERROR_INFRA"                | Confirm the container was actually started and answered (Step 0 / Step 5's `ES`/`OS` note) before writing `ERROR_INFRA` — a setup omission on your part is not infra flakiness.                                                                       |
+| Red flag phrase (in your own reasoning)                                        | What to do instead                                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "This is basically a lint issue" (when it isn't)                               | Only checkstyle/spotless/format tooling actually flagging it counts as lint. A genuine compile error or behavioral assertion failure dressed up as "basically style" is still not self-heal-able (Step 4).                                                                       |
+| "This assertion failure looks stale, I'll just update it"                      | Not without the `verify-production-correctness-checker` subagent's `production_correct: true` AND `confirmed: true` (Rule 3). Your own read of "looks stale" is exactly the self-grading bias Rule 3 exists to guard against.                                                    |
+| "I'll just tweak this shared fixture once, it's a small change"                | Run the Rule 2 `grep -rl` count first. More than one dependent test means the fixture is off-limits — fix the dependent AT's assertions instead.                                                                                                                                 |
+| "The directory check is a formality, I know my edit was test-only"             | Run `git diff --name-only` anyway (Rule 1) — it is the mechanical gate, not your own confidence.                                                                                                                                                                                 |
+| "This has already taken a while, I'll skip the isolated subagent to save time" | The isolated subagent dispatch (the diff-grounding self-check, and Rule 3 for acceptance self-heal) is what makes verify's judgment trustworthy with no human reviewing it. Skipping it to save time removes the one check that exists precisely because there is no human here. |
+| "Docker/testcontainer flakiness, I'll just call it ERROR_INFRA"                | Confirm the container was actually started and answered (Step 0 / Step 5's `ES`/`OS` note) before writing `ERROR_INFRA` — a setup omission on your part is not infra flakiness.                                                                                                  |
 
 ---
 
@@ -867,7 +869,7 @@ Skip this file entirely if Step 0 exited early (no authoring work happened). Oth
 - **File:** `qa/acceptance-tests/.../ClassName.java`
 - **Source:** authored new | reused existing (bugfix workflow only — name the flow match reason)
 
-## D3 self-check verdict
+## Diff-grounding self-check verdict
 
 <The verify-diff-grounding-checker subagent's grounded/rationale verdict, verbatim.>
 
@@ -905,7 +907,7 @@ Absence is fine. The SessionEnd hook captures this automatically.
   `FAIL_ASSERTION`, prefer `ERROR_INFRA` only when the failure is clearly provisioning-level (the
   test body itself never ran); otherwise it's a real assertion failure.
 - Do not add any CI-style dist/packaging/cross-storage matrix coverage — out of scope.
-- Do not skip the D3 self-check for a reused existing AT (bugfix path) — reuse still needs
+- Do not skip the diff-grounding self-check for a reused existing AT (bugfix path) — reuse still needs
   grounding confirmation.
 - Self-heal (Step 4/5) is bounded and gated — never edit anything under `**/src/main/**` or any
   other production path (Rule 1), never edit a shared fixture used by more than one AT (Rule 2), and

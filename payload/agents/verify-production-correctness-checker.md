@@ -11,7 +11,7 @@ This exists because `verify`'s own session cannot be trusted to be the sole judg
 acceptance-test failure is its own to fix — an agent that wants to believe its diagnosis is correct
 (so it can self-heal and move on, rather than fail loud) has a structural incentive to conclude
 "production is fine, it's just the test" too readily. This is the same self-grading-bias problem
-`verify-diff-grounding-checker` (D3) already exists to guard against for a different question
+`verify-diff-grounding-checker` (the diff-grounding self-check) already exists to guard against for a different question
 ("does the AT exercise the diff?"); you guard the companion question that only comes up on an
 acceptance FAILURE: "is the production code actually correct, such that the failure's root cause
 can only be in test code?" `verify` may self-heal an acceptance-test failure ONLY after you confirm

@@ -161,13 +161,13 @@ rather than failing immediately:
   a genuine compile error or behavioral test-assertion failure. No isolated proof subagent needed —
   a style violation isn't a behavioral question. Capped at 2 fix-and-retry cycles per stage.
 - **Acceptance-stage self-heal** — an assertion failure may be self-healed only after an isolated
-  `verify-production-correctness-checker` subagent (new, mirrors the existing D3
-  `verify-diff-grounding-checker` pattern) independently confirms, with file:line citations, that
-  the production code is correct and the failure's root cause can only be test-side. verify's own
-  same-session conclusion is never sufficient — this is the same self-grading-bias concern D3
-  already exists to guard against, applied to the companion question that only comes up on a
-  failure. Capped at 1 fix-and-retry cycle (each cycle re-provisions a fresh testcontainer/ES stack
-  and can take 10+ minutes).
+  `verify-production-correctness-checker` subagent (new, mirrors the existing diff-grounding
+  self-check's `verify-diff-grounding-checker` pattern) independently confirms, with file:line
+  citations, that the production code is correct and the failure's root cause can only be
+  test-side. verify's own same-session conclusion is never sufficient — this is the same
+  self-grading-bias concern the diff-grounding self-check already exists to guard against, applied
+  to the companion question that only comes up on a failure. Capped at 1 fix-and-retry cycle (each
+  cycle re-provisions a fresh testcontainer/ES stack and can take 10+ minutes).
 
 Three mechanical rules bound every self-heal, checked by verify itself before any fix is kept, not
 left to prompt-only discipline: (1) **directory-scoped** — a `git add -A` baseline before the fix,
@@ -692,23 +692,45 @@ this becomes team-scale, multi-repo, no-single-human-gate infra.
 
 ### 10.4 manual-smoke (Sibling 4 — added by the verify-autonomy change, §3d)
 
-`payload/siblings/commands/manual-smoke.md`. Generates the human-readable `seeding-spec.json` +
-`manual-test.md` pair the pipeline's `verify` node used to write before verify became autonomous
-(§3d, `DECISIONS.md § verify-autonomy-remove-election`) — relocated here rather than deleted,
-since the manual-walkthrough value didn't disappear, only the reason to gate on it did.
+`payload/siblings/commands/manual-smoke.md`. Generates a human-readable `manual-test.md` — plus
+`seeding-spec.json`, only when a live cluster is actually needed — for a completed (or
+past-Gate-1) run, replacing the fixed `seeding-spec.json` + `manual-test.md` pair the pipeline's
+`verify` node used to write before verify became autonomous (§3d, `DECISIONS.md §
+verify-autonomy-remove-election`) — relocated here rather than deleted, since the manual-walkthrough
+value didn't disappear, only the reason to gate on it did.
 
 - **Invocation:** `/manual-smoke [run-id]`, run on demand against any completed (or past-Gate-1)
   run's existing artifacts — bootstrap logic (run/worktree/guide resolution) lives in
   `payload/siblings/scripts/manual-smoke/phase-0-bootstrap.sh`.
-- **Read-only from the worktree** — never modifies worktree files, only writes into the run's own
-  `manual-smoke/` artifact subdirectory (so it can be invoked repeatedly, including against a run
-  whose `verify` node failed its `outcomeGate`, without disturbing pipeline state).
+- **Read-only from the worktree, and never executes anything against a live cluster or locally** —
+  never modifies worktree files, never runs Maven/Docker/`curl`/`zdb`/cluster commands itself, only
+  writes into the run's own `manual-smoke/` artifact subdirectory (so it can be invoked repeatedly,
+  including against a run whose `verify` node failed its `outcomeGate`, without disturbing pipeline
+  state).
 - **Gates nothing.** Unlike the removed verify-election, this sibling has no pipeline effect —
   it exists purely for a human who wants a walkthrough, independent of that run's `verify` outcome.
 - Reads the same input priority order the old verify-guide used: run artifacts (`plan.md`,
   `define/guide.md` or `reproduce/guide.md`, `implement`/`review` outputs) → git log → git diff →
-  OpenAPI spec (to ground REST observations), producing the same two output files `seed-data`
-  (§10.1) already knows how to consume.
+  OpenAPI spec (only actually read if the REST API is a chosen surface, see below).
+- **Analyzes the diff to choose a verification method before writing anything (`verify-manual-smoke-method-analysis`,
+  DECISIONS.md).** The old version always assumed a live cluster reachable via REST API/Postman,
+  which breaks for a diff that never touches the REST gateway or any secondary-storage export path
+  at all (e.g. a change confined to Optimize, or an internal broker/engine change with no
+  externally observable contract). It now picks from: `rest-api` (Postman/curl against the REST
+  gateway, spec-grounded), `secondary-storage` (a direct ES/OS/RDBMS query via a database client),
+  `zdb` (the Zeebe debugging tool, for broker/engine/stream-processor internals REST/secondary
+  storage can't fully observe — its actual CLI shape is located in the worktree at generation time,
+  never assumed from memory), or `existing-test` (no live-cluster surface applies at all — names
+  the specific pre-existing test class/suite that already covers the changed behavior, e.g. an
+  Optimize E2E suite, and the exact local command to run it). Multiple methods can combine (e.g.
+  `rest-api` + `secondary-storage` for a REST-triggered, ES-materialized feature); `existing-test`
+  is exclusive of the others — when it's the only applicable method, `seeding-spec.json` is omitted
+  entirely (there is nothing to seed) and `manual-test.md` names the test command instead of
+  cluster-seeding steps.
+- `seed-data` (§10.1) automates confirmation for `rest-api` and `elasticsearch` observations only —
+  `opensearch`/`rdbms`/`zdb` observations already degrade gracefully to a `NOT_CHECKED` record
+  (unchanged; `seed-data` itself was NOT modified by this change), leaving confirmation to the
+  human via `manual-test.md`'s own concrete steps.
 
 ### Removed from scope
 
