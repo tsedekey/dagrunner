@@ -1078,6 +1078,10 @@ export async function resumeRun(opts: {
   // a genuinely broken node eventually settles the run to "failed".
   const stateBefore = state;
   state = resetInterruptedNodes(state, MAX_INTERRUPT_RETRIES);
+  // Archive (not silently overwrite) any node's prior artifacts before it
+  // re-executes into the same directory — mirrors rerunNode's archive-then-
+  // wipe via archivePriorAttempt. See archiveInterruptedNodeArtifacts's doc.
+  archiveInterruptedNodeArtifacts(runDir, stateBefore, state);
   for (const [id, ns] of Object.entries(state.nodes)) {
     const prev = stateBefore.nodes[id];
     if (ns.status === "pending" && prev?.status === "failed") {
@@ -1557,6 +1561,46 @@ export function archivePriorAttempt(
       : 1;
 
   renameSync(artifactsDir, join(attemptsDir, `attempt-${nextN}`));
+}
+
+// ---------------------------------------------------------------------------
+// archiveInterruptedNodeArtifacts — resumeRun's half of the same gap
+// ---------------------------------------------------------------------------
+
+/**
+ * For every node that `resetInterruptedNodes` just reset from an interrupt-
+ * reconciled `failed` back to `pending` (i.e. `stateBefore.nodes[id].status
+ * === "failed"` and `stateAfter.nodes[id].status === "pending"`), archive its
+ * artifacts directory via `archivePriorAttempt` (same mechanism `rerunNode`
+ * uses) and give it a clean, empty directory to re-execute into.
+ *
+ * Without this, `resumeRun`'s crash-recovery retry re-executed a node into
+ * the SAME artifacts directory `rerunNode` always wipes-or-archives first —
+ * a node's session-level writers (`transcript.log`/`burn.json`, both
+ * `writeFileSync`, which truncates) silently overwrote the interrupted
+ * attempt's partial output, while append-only writers (`reflections.md` via
+ * the SessionEnd hook) duplicated onto it instead. Empirically found via 10
+ * of 105 byte-identical duplicate entries in `store/reflection-log.jsonl`
+ * across three runs, none of which had a `-attempts/` dir (ruling out
+ * `rerunNode` as the cause — see DECISIONS.md § resume-interrupt-artifact-
+ * archiving).
+ *
+ * No-op for any node whose status did not transition failed -> pending
+ * between the two states (ordinary failures, already-done nodes, etc).
+ */
+export function archiveInterruptedNodeArtifacts(
+  runDir: string,
+  stateBefore: RunState,
+  stateAfter: RunState,
+): void {
+  for (const [id, ns] of Object.entries(stateAfter.nodes)) {
+    const prev = stateBefore.nodes[id];
+    if (ns.status !== "pending" || prev?.status !== "failed") continue;
+    const artifactsDir = join(runDir, id);
+    archivePriorAttempt(runDir, id, artifactsDir);
+    rmSync(artifactsDir, { recursive: true, force: true });
+    mkdirSync(artifactsDir, { recursive: true });
+  }
 }
 
 // ---------------------------------------------------------------------------

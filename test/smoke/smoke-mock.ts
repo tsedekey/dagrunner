@@ -19,6 +19,9 @@
  *   Run F — verify's outcomeGate: a non-PASS verify-report.json outcome fails
  *           verify and blocks pr (run ends failed) — the D6 engine mechanism,
  *           end-to-end through the real startRun/resumeRun/runDag path.
+ *   Run J — resumeRun's resetInterruptedNodes path archives an interrupted
+ *           node's partial artifacts before the retry re-executes, instead of
+ *           silently overwriting them in place.
  *
  * Note: mock gate-pause returns iteration:1, so a reject after the first pause writes
  * feedback-2.md (not feedback-1.md). This differs from the real SDK runner which
@@ -932,6 +935,155 @@ console.log(
 );
 
 // ---------------------------------------------------------------------------
+// RUN J — resumeRun's resetInterruptedNodes path archives (not silently
+//          overwrites) a node's pre-existing artifacts before re-executing
+//          it, the same class of gap Run I proves for rerunNode. Exercises
+//          the actual resumeRun wiring call site (archiveInterruptedNodeArtifacts),
+//          not just the pure helper unit-tested in run-engine.test.ts — see
+//          DECISIONS.md § resume-interrupt-artifact-archiving.
+// ---------------------------------------------------------------------------
+
+const HOME_J = `/tmp/dagrun-smoke-mock-j-${BASE_TS + 8}`;
+mkdirSync(join(HOME_J, "runs"), { recursive: true });
+mkdirSync(join(HOME_J, "worktrees"), { recursive: true });
+mkdirSync(join(HOME_J, "store"), { recursive: true });
+
+const RUN_ID_J = "interrupt-test-1700000000000-bbbbbb";
+const runDirJ = join(HOME_J, "runs", RUN_ID_J);
+mkdirSync(runDirJ, { recursive: true });
+
+// Hand-craft state as if "reproduce" already completed and "implement" was
+// mid-execution when the process was killed (status left "running" — exactly
+// what reconcileRunningNodes/resetInterruptedNodes turn into a pending retry).
+const stateJ = {
+  runId: RUN_ID_J,
+  workflow: "bugfix",
+  createdAt: "2026-08-01T00:00:00.000Z",
+  updatedAt: "2026-08-01T00:05:00.000Z",
+  status: "running",
+  worktreePath: TOY_REPO_PATH,
+  branch: "fix/interrupt-test",
+  sourcePlanPath: TOY_PLAN_PATH,
+  nodes: {
+    reproduce: {
+      status: "done",
+      artifacts: [],
+      iteration: 0,
+      cost: 0,
+      gateHistory: [],
+    },
+    implement: {
+      status: "running",
+      artifacts: [],
+      iteration: 0,
+      cost: 0,
+      gateHistory: [],
+    },
+    review: {
+      status: "pending",
+      artifacts: [],
+      iteration: 0,
+      cost: 0,
+      gateHistory: [],
+    },
+    fix: {
+      status: "pending",
+      artifacts: [],
+      iteration: 0,
+      cost: 0,
+      gateHistory: [],
+    },
+    verify: {
+      status: "pending",
+      artifacts: [],
+      iteration: 0,
+      cost: 0,
+      gateHistory: [],
+    },
+    pr: {
+      status: "pending",
+      artifacts: [],
+      iteration: 0,
+      cost: 0,
+      gateHistory: [],
+    },
+  },
+};
+writeFileSync(
+  join(runDirJ, "state.json"),
+  JSON.stringify(stateJ, null, 2),
+  "utf8",
+);
+
+// Simulate the interrupted attempt's partial output sitting in implement/'s
+// artifacts dir — exactly what a crash mid-session leaves behind.
+const implementDirJ = join(runDirJ, "implement");
+mkdirSync(implementDirJ, { recursive: true });
+writeFileSync(
+  join(implementDirJ, "transcript.log"),
+  "PARTIAL — interrupted mid-attempt, before the crash",
+  "utf8",
+);
+writeFileSync(
+  join(implementDirJ, "reflections.md"),
+  "STALE TIP: from the interrupted attempt — must not survive into the retry's directory",
+  "utf8",
+);
+
+await resumeRun({
+  runId: RUN_ID_J,
+  homeDir: HOME_J,
+  config,
+  executorFactory: bugfixMockFactory,
+});
+
+{
+  const archivedTranscript = readFileSync(
+    join(runDirJ, "implement-attempts", "attempt-1", "transcript.log"),
+    "utf8",
+  );
+  assert.strictEqual(
+    archivedTranscript,
+    "PARTIAL — interrupted mid-attempt, before the crash",
+    "J: the interrupted attempt's transcript.log must be archived to implement-attempts/attempt-1/, not lost",
+  );
+  const archivedReflections = readFileSync(
+    join(runDirJ, "implement-attempts", "attempt-1", "reflections.md"),
+    "utf8",
+  );
+  assert.strictEqual(
+    archivedReflections,
+    "STALE TIP: from the interrupted attempt — must not survive into the retry's directory",
+    "J: the interrupted attempt's reflections.md must be archived to implement-attempts/attempt-1/, not lost",
+  );
+  assert.strictEqual(
+    existsSync(join(implementDirJ, "transcript.log")),
+    false,
+    "J: the live implement/ dir must NOT still hold the interrupted attempt's transcript.log — resumeRun must archive+clear before re-executing, not silently overwrite/append onto it",
+  );
+  assert.strictEqual(
+    existsSync(join(implementDirJ, "reflections.md")),
+    false,
+    "J: the live implement/ dir must NOT still hold the interrupted attempt's reflections.md",
+  );
+  assert.strictEqual(
+    existsSync(join(implementDirJ, "summary.md")),
+    true,
+    "J: the retry must actually run and write its own fresh summary.md into the (now clean) implement/ dir",
+  );
+
+  const state = readState(runDirJ);
+  assert.strictEqual(
+    state.nodes["implement"]?.status,
+    "done",
+    `J: implement must complete on the retry, got ${String(state.nodes["implement"]?.status)}`,
+  );
+}
+console.log(
+  "step J passed: resumeRun archives an interrupted node's partial artifacts to implement-attempts/attempt-1/ before the retry re-executes, instead of silently overwriting them in place",
+);
+
+// ---------------------------------------------------------------------------
 // RUN G — noPlaceholders: a placeholder left in define/guide.md fails the
 //          node on the GATE-APPROVE transition, not runDag's own done-branch
 //          (define always returns awaiting-gate from the executor — see
@@ -1106,5 +1258,6 @@ console.log(
     "Run C: night clean unattended, Run D: night flagged, Run E: stale gate auto-skip, " +
     "Run F: outcomeGate blocks pr on non-PASS, Run G: noPlaceholders blocks a manually-approved " +
     "gate, Run H: noPlaceholders blocks a night-mode auto-approved gate, Run I: rerunNode archives " +
-    "the prior failed attempt before wiping)",
+    "the prior failed attempt before wiping, Run J: resumeRun archives an interrupted node's " +
+    "partial artifacts before the retry re-executes)",
 );

@@ -36,7 +36,33 @@ import {
   parseFrontmatter,
   severityForcesPause,
   archivePriorAttempt,
+  archiveInterruptedNodeArtifacts,
 } from "./run-engine.js";
+import type { RunState, NodeState } from "../core/state.js";
+
+// ---------------------------------------------------------------------------
+// Minimal RunState/NodeState fixture helper (archiveInterruptedNodeArtifacts
+// tests below only care about .nodes[id].status — everything else is filler
+// to satisfy the types).
+// ---------------------------------------------------------------------------
+
+function nodeState(status: NodeState["status"]): NodeState {
+  return { status, artifacts: [], iteration: 0, cost: 0, gateHistory: [] };
+}
+
+function runState(nodes: Record<string, NodeState>): RunState {
+  return {
+    runId: "test-run",
+    workflow: "bugfix",
+    createdAt: "2026-08-12T00:00:00.000Z",
+    updatedAt: "2026-08-12T00:00:00.000Z",
+    status: "running",
+    worktreePath: "/tmp/does-not-matter",
+    branch: "fix/test",
+    sourcePlanPath: "/tmp/plan.md",
+    nodes,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // makeRunId
@@ -679,4 +705,98 @@ test("archivePriorAttempt: different node ids get independent attempt sequences"
 
   assert.equal(existsSync(join(runDir, "verify-attempts", "attempt-1")), true);
   assert.equal(existsSync(join(runDir, "review-attempts", "attempt-1")), true);
+});
+
+// ---------------------------------------------------------------------------
+// archiveInterruptedNodeArtifacts — the resumeRun/resetInterruptedNodes half
+// of the same class of gap archivePriorAttempt closes for rerunNode. See
+// DECISIONS.md § resume-interrupt-artifact-archiving.
+// ---------------------------------------------------------------------------
+
+test("archiveInterruptedNodeArtifacts: archives and clears a node reset from interrupted-failed to pending", () => {
+  const runDir = mkdtempSync(join(tmpdir(), "dr-archive-interrupt-"));
+  const artifactsDir = join(runDir, "implement");
+  mkdirSync(artifactsDir);
+  writeFileSync(
+    join(artifactsDir, "transcript.log"),
+    "partial — interrupted mid-attempt",
+  );
+  writeFileSync(
+    join(artifactsDir, "reflections.md"),
+    "STALE TIP from the interrupted attempt",
+  );
+
+  const stateBefore = runState({
+    reproduce: nodeState("done"),
+    implement: nodeState("failed"),
+  });
+  const stateAfter = runState({
+    reproduce: nodeState("done"),
+    implement: nodeState("pending"),
+  });
+
+  archiveInterruptedNodeArtifacts(runDir, stateBefore, stateAfter);
+
+  assert.equal(
+    readFileSync(
+      join(runDir, "implement-attempts", "attempt-1", "transcript.log"),
+      "utf8",
+    ),
+    "partial — interrupted mid-attempt",
+    "prior attempt's transcript.log must be archived, not lost",
+  );
+  assert.equal(
+    readFileSync(
+      join(runDir, "implement-attempts", "attempt-1", "reflections.md"),
+      "utf8",
+    ),
+    "STALE TIP from the interrupted attempt",
+    "prior attempt's reflections.md must be archived, not lost",
+  );
+  assert.equal(
+    existsSync(join(artifactsDir, "transcript.log")),
+    false,
+    "the live artifacts dir must be cleared, not left with stale content for the retry to silently overwrite/append onto",
+  );
+  assert.equal(
+    existsSync(artifactsDir),
+    true,
+    "the live artifacts dir must exist (fresh, empty) for the retry to write into",
+  );
+});
+
+test("archiveInterruptedNodeArtifacts: no-op for a node that did not transition failed->pending", () => {
+  const runDir = mkdtempSync(join(tmpdir(), "dr-archive-interrupt-"));
+  const artifactsDir = join(runDir, "review");
+  mkdirSync(artifactsDir);
+  writeFileSync(join(artifactsDir, "findings.json"), "{}");
+
+  // review stayed "done" in both before/after — untouched by resetInterruptedNodes.
+  const stateBefore = runState({ review: nodeState("done") });
+  const stateAfter = runState({ review: nodeState("done") });
+
+  archiveInterruptedNodeArtifacts(runDir, stateBefore, stateAfter);
+
+  assert.equal(existsSync(join(runDir, "review-attempts")), false);
+  assert.equal(
+    readFileSync(join(artifactsDir, "findings.json"), "utf8"),
+    "{}",
+    "an untouched node's artifacts must survive completely unmodified",
+  );
+});
+
+test("archiveInterruptedNodeArtifacts: no-op when the reset node has no prior artifacts", () => {
+  const runDir = mkdtempSync(join(tmpdir(), "dr-archive-interrupt-"));
+
+  const stateBefore = runState({ implement: nodeState("failed") });
+  const stateAfter = runState({ implement: nodeState("pending") });
+
+  archiveInterruptedNodeArtifacts(runDir, stateBefore, stateAfter);
+
+  assert.equal(existsSync(join(runDir, "implement-attempts")), false);
+  assert.equal(
+    existsSync(join(runDir, "implement")),
+    true,
+    "a clean artifacts dir must still exist for the retry to write into",
+  );
 });
