@@ -152,11 +152,15 @@ Read the failure logs collected above. For each failing check:
    beyond what the check requires.
 
 4. Apply each fix in the worktree. After applying, stage and commit with a conventional-commit
-   subject only — no body, no trailers:
+   subject line:
    ```
    git add <specific files>
    git commit -m "fix: <brief reason>"
    ```
+   Add a description (a second `-m`) only when it earns its place — it explains something the
+   subject can't: non-obvious code, a workaround, or context a reviewer would otherwise be
+   missing. Skip it when the subject already says enough; never restate the diff in prose. Still
+   no trailers — no Co-Authored-By, no other trailers.
    Then continue to Phase 4c for local verification.
 
 If there are no failing checks (e.g., checks are pending or all pass), skip to Phase 5.

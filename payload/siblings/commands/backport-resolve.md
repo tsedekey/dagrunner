@@ -183,7 +183,11 @@ git add <file1> <file2> ...
 git commit -m "fix: <same subject as the original PR>"
 ```
 
-Conventional commit, no body, no trailer. Max 120 chars. The original `BACKPORT-CONFLICT` commit
+Conventional commit, subject max 120 chars, no trailer. Add a description (a second `-m`) only
+when it earns its place — it explains something the subject can't: non-obvious code, a
+workaround, or context a reviewer would otherwise be missing (e.g. why the conflict resolution
+took this shape). Skip it when the subject already says enough; never restate the diff in prose.
+Still no trailers — no Co-Authored-By, no other trailers. The original `BACKPORT-CONFLICT` commit
 stays in history — do not amend it; this is a new resolution commit on top.
 
 ---

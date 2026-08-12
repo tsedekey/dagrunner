@@ -311,12 +311,16 @@ Wait for the human's selection before proceeding.
 
 1. Read the "Implementation plan" section from the draft file.
 2. Apply the code changes to the worktree — edit the file(s) listed in the implementation plan.
-3. Stage the changed files and commit using a conventional-commit subject line only (no body, no description, no trailers):
+3. Stage the changed files and commit using a conventional-commit subject line, present tense, imperative mood:
    ```bash
    git add <specific files only>
    git commit -m "fix: <brief conventional-commit summary of the change>"
    ```
-   The commit message must follow CONTRIBUTIONS.md format: subject line only, present tense, imperative mood. Do NOT add a body, description, or Co-Authored-By trailer.
+   The subject line must follow CONTRIBUTIONS.md format. Add a description (a second `-m`) only
+   when it earns its place — it explains something the subject can't: non-obvious code, a
+   workaround, or context a reviewer would otherwise be missing. Skip it when the subject already
+   says enough; never restate the diff in prose. Still no trailers — no Co-Authored-By, no other
+   trailers.
 4. Capture the commit SHA: `COMMIT_SHA=$(git rev-parse --short HEAD)`
 5. Push immediately so the SHA is reachable on GitHub before the reply is posted:
    ```bash

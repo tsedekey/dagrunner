@@ -172,6 +172,11 @@ git add -A
 git commit -m "${DAGRUN_PR_TITLE_PREFIX:-feat} <short description> (dagrun: $DAGRUN_RUN_ID)"
 ```
 
+Add a description (a second `-m`) only when it earns its place — it explains something the
+subject can't: non-obvious code, a workaround, or context a reviewer would otherwise be missing.
+Skip it when the subject already says enough; never restate the diff in prose. No trailers — no
+Co-Authored-By, no other trailers.
+
 Under normal flow `implement.md` commits first — this is a no-op if that happened.
 
 ## Step 5 — Reflections (optional, do this last)
