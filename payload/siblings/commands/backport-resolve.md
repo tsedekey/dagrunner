@@ -174,7 +174,48 @@ Re-read reformatted files to confirm intent survived. Repeat if a subsequent edi
 
 ---
 
-## Step 7 — Commit
+## Step 7 — Reword the placeholder, then commit
+
+### 7.1 Reword the `BACKPORT-CONFLICT` commit (do this BEFORE staging anything)
+
+The backport tool leaves a placeholder commit whose message is a bare, leading-space
+` BACKPORT-CONFLICT` with no conventional-commit type. Left alone it **always** fails
+Lint/Commitlint with `header must not start with whitespace [header-trim]` and
+`type may not be empty`, and the `ci:ignore-commitlint` label does **not** suppress it — that label
+is documentation only. Fix the message here rather than leaving it for ci-babysit to discover via a
+red check.
+
+The commit itself stays in history — you are changing only its **message**, not squashing it and not
+altering its diff.
+
+Nothing is staged yet at this point, so if the placeholder is still `HEAD` a plain amend rewords it
+without touching content:
+
+```bash
+git log -1 --pretty=%s                      # confirm it is the ` BACKPORT-CONFLICT` placeholder
+git commit --amend -m "fix: <same subject as the original PR>"
+```
+
+**If the placeholder is NOT `HEAD`** (e.g. a resumed session already committed on top), `--amend`
+cannot reach it and `git rebase -i` is unavailable in this environment (it needs interactive input).
+Use the non-interactive reword instead — replay the same diff under a new message, then replay the
+rest of the branch on top:
+
+```bash
+git branch tmp-reword <placeholder_sha>^
+git checkout tmp-reword
+git cherry-pick --no-commit <placeholder_sha>
+git commit -m "fix: <same subject as the original PR>"
+git rebase --onto tmp-reword <placeholder_sha> <feature_branch>
+git checkout <feature_branch>
+git diff origin/<feature_branch> <feature_branch>   # MUST be empty: history rewritten, content identical
+git branch -D tmp-reword
+```
+
+If that `git diff` is not empty, stop and report — the replay changed content, which it must not.
+A rewritten history needs `--force-with-lease` in Step 8.
+
+### 7.2 Commit the resolution
 
 Stage only the edited files (no artifacts, no `target/`):
 
@@ -187,8 +228,8 @@ Conventional commit, subject max 120 chars, no trailer. Add a description (a sec
 when it earns its place — it explains something the subject can't: non-obvious code, a
 workaround, or context a reviewer would otherwise be missing (e.g. why the conflict resolution
 took this shape). Skip it when the subject already says enough; never restate the diff in prose.
-Still no trailers — no Co-Authored-By, no other trailers. The original `BACKPORT-CONFLICT` commit
-stays in history — do not amend it; this is a new resolution commit on top.
+Still no trailers — no Co-Authored-By, no other trailers. This is a new resolution commit on top of
+the (now properly worded) original.
 
 ---
 
@@ -196,6 +237,13 @@ stays in history — do not amend it; this is a new resolution commit on top.
 
 ```bash
 git push origin HEAD
+```
+
+Step 7.1 rewrote the placeholder commit's message, so the remote's history no longer matches and a
+plain push is rejected. Use a lease-guarded force — never a bare `--force`:
+
+```bash
+git push --force-with-lease origin HEAD
 ```
 
 Then tell the user:

@@ -255,6 +255,14 @@ After writing the draft, update triage-state.json for this comment's state key:
 - `grounded: <true|false>`
 - `grounded_sha: "<worktree_sha>"`
 - `classification: "<class>"`
+- `updated_at: "<the comment's own updated_at (or submitted_at for reviews) from the tick's new_or_edited entry>"`
+
+**Must include `updated_at`.** Phase 1's edit-detection (`phase-1-fetch-comments.sh`) compares each
+freshly-fetched comment's `updated_at` against `known[id].updated_at` read back from this same file.
+If this write omits `updated_at`, that field is permanently `null` for this comment, so
+`$prior.updated_at // ""` always evaluates to `""` and every later tick's `$c.updated_at > ""` is
+trivially true — the comment is misclassified as edited on every subsequent tick forever, even
+though it never changed.
 
 The state key is: `<id>` (inline), `issue_<id>` (issue comment), `review_<id>` (review summary).
 
@@ -266,11 +274,13 @@ jq --arg key "<state_key>" \
    --argjson grounded true \
    --arg grounded_sha "<sha>" \
    --arg classification "<class>" \
+   --arg updated_at "<comment_updated_at>" \
    '.comments[$key].lifecycle = $lifecycle |
     .comments[$key].draft_file = $draft_file |
     .comments[$key].grounded = $grounded |
     .comments[$key].grounded_sha = $grounded_sha |
-    .comments[$key].classification = $classification' \
+    .comments[$key].classification = $classification |
+    .comments[$key].updated_at = $updated_at' \
    "$TRIAGE_STATE" > "${TRIAGE_STATE}.tmp" && mv "${TRIAGE_STATE}.tmp" "$TRIAGE_STATE"
 ```
 

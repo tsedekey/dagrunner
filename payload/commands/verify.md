@@ -155,14 +155,17 @@ If `docker_reachable` is `0`, continue to Step 1.
 
 ## Step 1 — Read the promised user flow
 
-Check these paths in order and use the first one that exists — this is the **authoring source**
-(the promised user flow/contract), not the diff:
+Find the **authoring source** (the promised user flow/contract, not the diff). `define/guide.md`
+means the feature workflow; `reproduce/guide.md` means the bugfix workflow. Run this — do not try to
+resolve `$DAGRUN_RUN_DIR` to a literal path first; use the variable inline, as below:
 
-1. `$DAGRUN_RUN_DIR/define/guide.md` (feature workflow)
-2. `$DAGRUN_RUN_DIR/reproduce/guide.md` (bugfix workflow)
+```bash
+cat "$DAGRUN_RUN_DIR/define/guide.md" 2>/dev/null || cat "$DAGRUN_RUN_DIR/reproduce/guide.md"
+```
 
-Whichever path exists tells you which workflow you are running under — remember this, it decides
-whether Step 2 (search-existing-coverage) applies.
+Whichever one prints tells you which workflow you are running under — remember this, it decides
+whether Step 2 (search-existing-coverage) applies. If neither prints, stop and report it: a verify
+run with no authoring source cannot gate anything.
 
 Also read, for context (not as an authoring source):
 
