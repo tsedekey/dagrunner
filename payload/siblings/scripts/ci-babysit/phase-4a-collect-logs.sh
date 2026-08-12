@@ -33,7 +33,15 @@ if [ -z "$FAILING_CHECKS" ]; then
   echo "No failing checks to collect logs for."
 else
   echo "Collecting failure logs..."
-  while IFS=$'\t' read -r CHECK_NAME GH_RUN_ID; do
+  # Read the outer loop's input from fd 3, not fd 0 (stdin). `gh run view`/
+  # `gh api` below inherit fd 0 from this shell; if the loop also reads its
+  # own here-string on fd 0, those inner commands drain the buffered
+  # here-string and the outer `read` hits EOF after the first iteration —
+  # silently stopping the loop with no error under `set -euo pipefail` (a
+  # `read` returning nonzero is just a normal loop exit). Routing the loop's
+  # own read through fd 3 (`-u3` / `3<<<`) isolates it from anything the loop
+  # body does on fd 0.
+  while IFS=$'\t' read -r -u3 CHECK_NAME GH_RUN_ID; do
     [ -z "$CHECK_NAME" ] && continue
     SAFE_NAME=$(echo "$CHECK_NAME" | tr '/ ' '--')
     LOG_FILE="$ARTIFACTS_DIR/check-logs/${SAFE_NAME}.log"
@@ -64,5 +72,5 @@ else
       echo "  Link: ${LINK:-not available}"
       echo "(no run ID)" > "$LOG_FILE"
     fi
-  done <<< "$FAILING_CHECKS"
+  done 3<<< "$FAILING_CHECKS"
 fi
