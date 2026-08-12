@@ -650,7 +650,7 @@ function makeCtx(runDir: string) {
 const MODEL_IDS: Record<string, string> = {
   haiku: "claude-haiku-4-5-20251001",
   sonnet: "claude-sonnet-5",
-  opus: "claude-opus-4-8",
+  opus: "claude-opus-5",
 };
 
 function makeInitialNodeStates(workflow: Workflow): Record<string, NodeState> {

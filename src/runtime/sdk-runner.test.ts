@@ -158,6 +158,18 @@ test("applyNodeOptions: model tiers still map to pinned model ids", () => {
     baseNode({ model: "sonnet" }),
   );
   assert.equal(sonnet.model, "claude-sonnet-5");
+
+  const opus = applyNodeOptions(
+    buildBaseQueryOptions("/tmp/dagrunner-test-worktree", false),
+    baseNode({ model: "opus" }),
+  );
+  assert.equal(opus.model, "claude-opus-5");
+
+  const haiku = applyNodeOptions(
+    buildBaseQueryOptions("/tmp/dagrunner-test-worktree", false),
+    baseNode({ model: "haiku" }),
+  );
+  assert.equal(haiku.model, "claude-haiku-4-5-20251001");
 });
 
 test("teeth-check: seeded settings always wire the deny-guard (stop-verifier) hook", () => {

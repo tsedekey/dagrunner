@@ -143,7 +143,7 @@ export function applyNodeOptions(options: Options, node: Node): Options {
   } else if (node.model === "sonnet") {
     options.model = "claude-sonnet-5";
   } else if (node.model === "opus") {
-    options.model = "claude-opus-4-8";
+    options.model = "claude-opus-5";
   }
   // else: omit model → SDK default (unpinned)
 
