@@ -49,7 +49,6 @@ test("reflect-append: creates store dir and file if absent", () => {
   try {
     const entry: ReflectionEntry = {
       source: "expand",
-      kind: "dagrunner-harness",
       body: "guide.md needs more error-handling guidance",
     };
     appendReflection(home, entry);
@@ -67,7 +66,6 @@ test("reflect-append: written line is valid JSON (one-line JSONL)", () => {
   try {
     appendReflection(home, {
       source: "review",
-      kind: "camunda-knowledge",
       body: "Module X has a hidden coupling to Y",
     });
     const raw = readFileSync(logPath(home), "utf8").trim();
@@ -83,12 +81,11 @@ test("reflect-append: written line is valid JSON (one-line JSONL)", () => {
   }
 });
 
-test("reflect-append: entry has required fields ts, source, kind, body", () => {
+test("reflect-append: entry has required fields ts, source, body — and no kind (removed, see DECISIONS.md § reflect-drop-kind)", () => {
   const home = makeTmpHome();
   try {
     appendReflection(home, {
       source: "fix",
-      kind: "dagrunner-harness",
       body: "Formatter hook changed additional files",
     });
     const obj = JSON.parse(
@@ -99,8 +96,11 @@ test("reflect-append: entry has required fields ts, source, kind, body", () => {
       "ts must be a non-empty string",
     );
     assert.equal(obj["source"], "fix");
-    assert.equal(obj["kind"], "dagrunner-harness");
     assert.equal(obj["body"], "Formatter hook changed additional files");
+    assert.ok(
+      !("kind" in obj),
+      "kind must not be written — the field was removed",
+    );
   } finally {
     cleanup(home);
   }
@@ -111,7 +111,6 @@ test("reflect-append: run_id is written when provided", () => {
   try {
     appendReflection(home, {
       source: "pr",
-      kind: "camunda-knowledge",
       body: "PR body format",
       run_id: "run-abc-123",
     });
@@ -129,7 +128,6 @@ test("reflect-append: run_id absent when not provided", () => {
   try {
     appendReflection(home, {
       source: "pr",
-      kind: "camunda-knowledge",
       body: "tip without run id",
     });
     const obj = JSON.parse(
@@ -149,12 +147,10 @@ test("reflect-append: append is additive — second call adds a second line", ()
   try {
     appendReflection(home, {
       source: "expand",
-      kind: "dagrunner-harness",
       body: "first tip",
     });
     appendReflection(home, {
       source: "review",
-      kind: "camunda-knowledge",
       body: "second tip",
     });
     const lines = readFileSync(logPath(home), "utf8")
@@ -178,7 +174,6 @@ test("reflect-append: fail-soft on missing body — does not throw, does not wri
     assert.doesNotThrow(() => {
       appendReflection(home, {
         source: "expand",
-        kind: "dagrunner-harness",
         body: "",
       });
     });
@@ -200,7 +195,6 @@ test("reflect-append: teeth — omitting ts from read object fails (validate sch
   try {
     appendReflection(home, {
       source: "implement",
-      kind: "dagrunner-harness",
       body: "canary entry",
     });
     const obj = JSON.parse(

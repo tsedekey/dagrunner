@@ -19,8 +19,6 @@ import { join, dirname } from "node:path";
 export interface ReflectionEntry {
   /** Node or agent that is appending (e.g. "define", "review", "ci-babysit"). */
   source: string;
-  /** Routing hint for harvest: where the tip belongs. */
-  kind: "camunda-knowledge" | "dagrunner-harness";
   /** The raw tip or gotcha text. */
   body: string;
   /** Optional run id for traceability — does not scope storage. */
@@ -51,7 +49,6 @@ export function appendReflection(
   const record: Record<string, string> = {
     ts: new Date().toISOString(),
     source: entry.source,
-    kind: entry.kind,
     body: entry.body,
   };
   if (entry.run_id !== undefined) {

@@ -472,30 +472,21 @@ function cmdClear(argv: string[]): void {
 
 function cmdReflect(argv: string[]): void {
   const source = flagValue(argv, "--source");
-  const kind = flagValue(argv, "--kind");
   const body = flagValue(argv, "--body");
   const runId = flagValue(argv, "--run-id");
 
-  if (source === undefined || kind === undefined || body === undefined) {
+  if (source === undefined || body === undefined) {
     process.stderr.write(
-      `dagrun reflect: --source, --kind, and --body are required.\n` +
-        `Usage: dagrun reflect --source <node> --kind camunda-knowledge|dagrunner-harness --body "<text>" [--run-id <id>]\n`,
+      `dagrun reflect: --source and --body are required.\n` +
+        `Usage: dagrun reflect --source <node> --body "<text>" [--run-id <id>]\n`,
     );
     // Exit 0 — capture is best-effort; caller must not fail because of this.
-    return;
-  }
-
-  if (kind !== "camunda-knowledge" && kind !== "dagrunner-harness") {
-    process.stderr.write(
-      `dagrun reflect: --kind must be camunda-knowledge or dagrunner-harness, got "${kind}"\n`,
-    );
     return;
   }
 
   const homeDir = resolveHome();
   appendReflection(homeDir, {
     source,
-    kind,
     body,
     ...(runId !== undefined ? { run_id: runId } : {}),
   });
@@ -731,7 +722,7 @@ function printHelp(): void {
       "  dagrun rerun <run-id> <node-id>",
       "  dagrun scaffold <node-id> --branch <feature-branch> [--mocks <dir>]",
       "  dagrun seed <repo-path>",
-      '  dagrun reflect --source <node> --kind camunda-knowledge|dagrunner-harness --body "<text>" [--run-id <id>]',
+      '  dagrun reflect --source <node> --body "<text>" [--run-id <id>]',
       "",
     ].join("\n"),
   );
