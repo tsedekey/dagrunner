@@ -189,3 +189,13 @@ test("bugfixWorkflow: digest uses sonnet, produces knowledge-map.md, and has no 
     "digest must have no human gate — informational/read-only, same pattern as review",
   );
 });
+
+test("bugfixWorkflow: digest is optional — a produces-contract failure must degrade to skipped, never fail a run whose pr already shipped", () => {
+  const node = bugfixWorkflow.nodes.find((n) => n.id === "digest");
+  assert.ok(node !== undefined);
+  assert.equal(
+    node.optional,
+    true,
+    "digest must be optional — unlike verify (deliberately required/blocking), digest is informational-only and nothing downstream depends on it",
+  );
+});

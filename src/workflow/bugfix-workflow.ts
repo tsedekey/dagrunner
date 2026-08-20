@@ -104,12 +104,17 @@ export const bugfixWorkflow: Workflow = {
     // in the diff/summaries/findings rather than the plan. No gate (same
     // read-only pattern as review); sonnet, not opus — this is synthesis of
     // already-written artifacts, not adversarial judgment.
+    // optional: true — informational-only; a produces-contract violation here
+    // (e.g. an untested new prompt file hitting the $DAGRUN_* probe wall) must
+    // degrade to 'skipped', never fail a run whose PR already shipped via pr.
+    // See DECISIONS.md § digest-node.
     {
       id: "digest",
       dependsOn: ["fix", "verify"],
       command: "/digest",
       model: "sonnet",
       produces: ["knowledge-map.md"],
+      optional: true,
     },
   ],
 };

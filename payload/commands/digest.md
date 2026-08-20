@@ -88,6 +88,14 @@ useful too:
 git diff --stat "$(git merge-base origin/main HEAD)"
 ```
 
+**Known limitation on hotfix bugfix runs:** `base_branch` (e.g. `release/1.x`, from the plan's YAML
+frontmatter — see `docs/dagrunner-master-architecture.md` §3c) is consumed by engine TS code from
+`state.json`, not exported as an env var to node prompts, so this command has no way to read it and
+hardcodes `origin/main` here (matching `review.md`/`verify.md`'s existing `origin/main` usage). On a
+run that actually branched from a release branch, this diff range will include the
+release-branch/main divergence, not just this change — treat Section 3 with that in mind rather than
+assuming every line in the diff belongs to this PR.
+
 ## Step 3 — Read the run's own artifacts
 
 ```bash
