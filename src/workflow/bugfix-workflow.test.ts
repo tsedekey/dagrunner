@@ -31,11 +31,11 @@ test("bugfixWorkflow: name is 'bugfix'", () => {
 // Node shape
 // ---------------------------------------------------------------------------
 
-test("bugfixWorkflow: has exactly 6 nodes", () => {
-  assert.equal(bugfixWorkflow.nodes.length, 6);
+test("bugfixWorkflow: has exactly 7 nodes", () => {
+  assert.equal(bugfixWorkflow.nodes.length, 7);
 });
 
-test("bugfixWorkflow: node ids are reproduce, implement, review, fix, verify, pr", () => {
+test("bugfixWorkflow: node ids are reproduce, implement, review, fix, verify, pr, digest", () => {
   const ids = bugfixWorkflow.nodes.map((n) => n.id);
   assert.deepEqual(ids, [
     "reproduce",
@@ -44,6 +44,7 @@ test("bugfixWorkflow: node ids are reproduce, implement, review, fix, verify, pr
     "fix",
     "verify",
     "pr",
+    "digest",
   ]);
 });
 
@@ -163,4 +164,28 @@ test("bugfixWorkflow: implement and fix pin effort to 'medium'", () => {
       `${nodeId} must pin effort to "medium"`,
     );
   }
+});
+
+// ---------------------------------------------------------------------------
+// digest node — terminal-adjacent, parallel with pr (see DECISIONS.md
+// § digest-node)
+// ---------------------------------------------------------------------------
+
+test("bugfixWorkflow: digest depends on both fix and verify (same deps as pr, runs in parallel)", () => {
+  const node = bugfixWorkflow.nodes.find((n) => n.id === "digest");
+  assert.ok(node !== undefined, "digest node must exist");
+  assert.ok(node.dependsOn?.includes("fix"), "digest must depend on fix");
+  assert.ok(node.dependsOn?.includes("verify"), "digest must depend on verify");
+});
+
+test("bugfixWorkflow: digest uses sonnet, produces knowledge-map.md, and has no gate", () => {
+  const node = bugfixWorkflow.nodes.find((n) => n.id === "digest");
+  assert.ok(node !== undefined);
+  assert.equal(node.model, "sonnet");
+  assert.deepEqual(node.produces, ["knowledge-map.md"]);
+  assert.equal(
+    node.gate,
+    undefined,
+    "digest must have no human gate — informational/read-only, same pattern as review",
+  );
 });

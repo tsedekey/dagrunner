@@ -97,5 +97,19 @@ export const bugfixWorkflow: Workflow = {
       model: "haiku",
       produces: ["body.md"],
     },
+    // Terminal-adjacent, informational, read-only — same deps as pr so it runs
+    // in parallel with pr and adds no wall-clock time (see DECISIONS.md §
+    // digest-node). Synthesizes a bottom-up knowledge map of what was
+    // implemented (and why) from the already-written run artifacts, grounded
+    // in the diff/summaries/findings rather than the plan. No gate (same
+    // read-only pattern as review); sonnet, not opus — this is synthesis of
+    // already-written artifacts, not adversarial judgment.
+    {
+      id: "digest",
+      dependsOn: ["fix", "verify"],
+      command: "/digest",
+      model: "sonnet",
+      produces: ["knowledge-map.md"],
+    },
   ],
 };

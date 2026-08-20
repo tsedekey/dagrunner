@@ -428,3 +428,27 @@ test("featureWorkflow: pr depends on both fix and verify", () => {
   assert.ok(node.dependsOn?.includes("fix"));
   assert.ok(node.dependsOn?.includes("verify"));
 });
+
+// ---------------------------------------------------------------------------
+// digest node — terminal-adjacent, parallel with pr (see DECISIONS.md
+// § digest-node)
+// ---------------------------------------------------------------------------
+
+test("featureWorkflow: digest depends on both fix and verify (same deps as pr, runs in parallel)", () => {
+  const node = featureWorkflow.nodes.find((n) => n.id === "digest");
+  assert.ok(node !== undefined, "digest node must exist");
+  assert.ok(node.dependsOn?.includes("fix"), "digest must depend on fix");
+  assert.ok(node.dependsOn?.includes("verify"), "digest must depend on verify");
+});
+
+test("featureWorkflow: digest uses sonnet, produces knowledge-map.md, and has no gate", () => {
+  const node = featureWorkflow.nodes.find((n) => n.id === "digest");
+  assert.ok(node !== undefined);
+  assert.equal(node.model, "sonnet");
+  assert.deepEqual(node.produces, ["knowledge-map.md"]);
+  assert.equal(
+    node.gate,
+    undefined,
+    "digest must have no human gate — informational/read-only, same pattern as review",
+  );
+});
