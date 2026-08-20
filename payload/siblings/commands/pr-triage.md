@@ -186,7 +186,7 @@ the reviewer's concern, no explaining why the existing code is structured the wa
   - `ungrounded-or-false-positive` → cite the evidence: "This was addressed in <sha8> / line N now reads X."
   - `nit-or-style` → "Will apply." or "Keeping as-is — [one-word reason]."
 - **Human:** ≤2 sentences. Answer the question or state the action. No "Good catch", no "Great point".
-  - `needs-code-change` → "Will [action]." (Phase 4 appends the commit SHA automatically.)
+  - `needs-code-change` → "Will [action]."
   - `question-back` → answer directly in 1–2 sentences.
   - `defer-out-of-scope` → "Valid point — opened #<issue> to track."
 
@@ -230,7 +230,8 @@ For `needs-code-change` drafts, open the proposed reply section with:
 
 Then draft the reply text as a single action statement per the reply length rules above.
 Do not acknowledge the concern, do not explain the current code, do not describe why the
-change is needed — Phase 4 will append the commit SHA. Example: "Will apply the rename."
+change is needed, and do not reference a commit SHA or say which commit fixed it — Phase 4
+never appends one. Example: "Will apply the rename."
 
 For `needs-code-change` drafts, also write an **Implementation plan** section after the proposed reply:
 
@@ -331,12 +332,12 @@ Wait for the human's selection before proceeding.
    workaround, or context a reviewer would otherwise be missing. Skip it when the subject already
    says enough; never restate the diff in prose. Still no trailers — no Co-Authored-By, no other
    trailers.
-4. Capture the commit SHA: `COMMIT_SHA=$(git rev-parse --short HEAD)`
-5. Push immediately so the SHA is reachable on GitHub before the reply is posted:
+4. Push the commit:
    ```bash
    git push origin HEAD
    ```
-6. Update the proposed reply to reference the commit: append `\n\nFixed in commit ${COMMIT_SHA}.` to the reply body.
+5. Post the reply as drafted — do not append a commit SHA or a sentence naming which commit
+   fixed the issue. The reply text stands as-is.
 
 **Then post the reply** (for all classifications, including needs-code-change after the above):
 
@@ -402,7 +403,7 @@ presented on the next interactive session. Do not mark them skipped; do not post
 - [ ] No comment was posted without explicit per-comment human approval
 - [ ] Each disposition (approve/skip/defer) recorded in triage-state.json
 - [ ] triage-state.json is consistent after each action (no partial writes)
-- [ ] `needs-code-change` approvals: code change applied, committed (summary-only), pushed, reply references commit SHA
+- [ ] `needs-code-change` approvals: code change applied, committed (summary-only), pushed, reply posted with no commit-SHA reference
 
 ---
 
@@ -471,7 +472,8 @@ Each tick is independent and idempotent:
 7. Coexistence with ci-babysit: pr-triage never writes to `ci-babysit/` artifacts, never rebases
    or force-pushes. It pushes only on an approved `needs-code-change` commit (fast-forward only).
 8. A `needs-code-change` comment approved by the human: code change applied to worktree, committed
-   with summary-only conventional commit, pushed to origin, reply posted referencing the commit SHA.
+   with summary-only conventional commit, pushed to origin, reply posted as drafted with no
+   commit-SHA reference.
 
 ---
 
