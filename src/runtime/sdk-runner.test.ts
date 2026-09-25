@@ -163,7 +163,7 @@ test("applyNodeOptions: model tiers still map to pinned model ids", () => {
     buildBaseQueryOptions("/tmp/dagrunner-test-worktree", false),
     baseNode({ model: "opus" }),
   );
-  assert.equal(opus.model, "claude-opus-5");
+  assert.equal(opus.model, "claude-opus-5-5");
 
   const haiku = applyNodeOptions(
     buildBaseQueryOptions("/tmp/dagrunner-test-worktree", false),
