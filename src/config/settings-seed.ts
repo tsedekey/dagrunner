@@ -108,7 +108,7 @@ export function buildSeededSettings(opts: {
   /** Work-profile MCP servers to include in settings (from readWorkProfileMcpServers). */
   workProfileMcpServers?: Record<string, unknown>;
   /**
-   * DEVHARNESS_SRC (e.g. ~/dev/camunda/camunda-main). When provided, added to
+   * DEVHARNESS_SRC (e.g. ~/dev/camunda/camunda). When provided, added to
    * additionalDirectories so nodes can read from the main source tree (e.g.
    * cross-tree file reads). All nodes get this access — scope is intentional:
    * prompt-discipline is the guard, not the permission boundary.
