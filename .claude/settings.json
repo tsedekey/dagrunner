@@ -36,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx prettier --write \"$CLAUDE_FILE_PATHS\" 2>/dev/null || true"
+            "command": "jq -r '.tool_input.file_path' | xargs -I{} npx prettier --write {} 2>/dev/null || true"
           }
         ]
       }
