@@ -227,7 +227,7 @@ async function cmdGate(argv: string[]): Promise<void> {
         `  dagrun gate show <run-id>\n` +
         `  dagrun gate decide <run-id> --gate <node> --revision <rev> --action approve|amend|hold\n` +
         `      [--run-next yes|no] [--target <node>] [--comment "<text>"] [--session <id>] [--confirm <decision-id>]\n` +
-        `  dagrun gate attach <run-id> --session <id> [--reconstructed] [--replace]\n`,
+        `  dagrun gate attach <run-id> --session <id> [--reconstructed] [--replace] [--reseed]\n`,
     );
     process.exit(1);
   }
@@ -249,6 +249,7 @@ async function cmdGate(argv: string[]): Promise<void> {
       session,
       reconstructed: hasFlag(argv, "--reconstructed"),
       replace: hasFlag(argv, "--replace"),
+      reseed: hasFlag(argv, "--reseed"),
     });
   } else {
     const gate = flagValue(argv, "--gate");
@@ -798,7 +799,7 @@ function printHelp(): void {
       '  dagrun resume <run-id> [--approve [--run-next yes|no]] [--reject "<comment>"]   (legacy gates)',
       "  dagrun gate show <run-id>                                    (companion gates)",
       "  dagrun gate decide <run-id> --gate <node> --revision <rev> --action approve|amend|hold [--run-next yes|no] [--target <node>] [--comment <text>] [--confirm <id>]",
-      "  dagrun gate attach <run-id> --session <id> [--reconstructed] [--replace]",
+      "  dagrun gate attach <run-id> --session <id> [--reconstructed] [--replace] [--reseed]",
       "  dagrun status [<run-id>]",
       "  dagrun list",
       "  dagrun abort <run-id>",

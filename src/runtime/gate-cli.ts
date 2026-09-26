@@ -12,7 +12,7 @@
  * All validation/binding lives in core/gate.ts; execution reuses resumeRun.
  */
 
-import { existsSync } from "node:fs";
+import { cpSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { DagrunnerConfig } from "../config/xdg.js";
 import { readState, writeState } from "../core/state.js";
@@ -180,6 +180,8 @@ export function gateAttach(args: {
   session: string;
   reconstructed: boolean;
   replace: boolean;
+  /** Re-copy dagrunner's bundled commands/agents into the run's worktree (.claude/, untracked seed). */
+  reseed?: boolean;
   configDirs?: string[];
 }): number {
   const r = load(args.homeDir, args.runId);
@@ -187,8 +189,10 @@ export function gateAttach(args: {
   if (r.workflow.companionGates !== true) {
     return err(`workflow "${r.state.workflow}" has no companion gates`);
   }
-  if (r.state.status !== "paused") {
-    return err(`run is "${r.state.status}", not paused — attach only while paused at a gate`);
+  // A crashed process can leave status "running" with a node still awaiting its gate
+  // (stale lock); what matters is that the run is genuinely waiting at a gate.
+  if (awaitingGateId(r.state) === undefined) {
+    return err(`run is "${r.state.status}" and no node is awaiting a gate — attach only while paused at a gate`);
   }
   const dirs = args.configDirs ?? sessionConfigDirs(args.config, r.state);
   const foundDir = findSessionConfigDir(args.session, dirs);
@@ -213,6 +217,16 @@ export function gateAttach(args: {
     },
     updatedAt: new Date().toISOString(),
   });
+  if (args.reseed === true) {
+    // Same seed startRun/rerunNode perform. Needed to adopt a run created before the
+    // prompts changed: its worktree still holds the old command copies.
+    const root = new URL("../../", import.meta.url).pathname;
+    for (const d of ["commands", "agents"]) {
+      const src = join(root, "payload", d);
+      if (existsSync(src)) cpSync(src, join(r.state.worktreePath, ".claude", d), { recursive: true });
+    }
+    process.stdout.write(`dagrun gate: re-seeded payload commands/agents into ${r.state.worktreePath}/.claude\n`);
+  }
   process.stdout.write(
     `dagrun gate: attached ${args.reconstructed ? "RECONSTRUCTED " : ""}companion session ${args.session} to run ${args.runId}\n`,
   );

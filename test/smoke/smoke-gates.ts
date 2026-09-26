@@ -83,9 +83,9 @@ function newHome(): { home: string; plan: string } {
 const factory = (over: Record<string, string> = {}) => () =>
   createMockExecutor({ reproduce: "gate-pause", implement: "success", review: "success", fix: "gate-pause", verify: "success", pr: "gate-pause", digest: "success", ...over } as never);
 
-async function newRun(over: Record<string, string> = {}, session: string | undefined = SESSION) {
+async function newRun(over: Record<string, string> = {}, session: string | null = SESSION) {
   const { home, plan } = newHome();
-  await quiet(() => startRun({ workflow: bugfixWorkflow, planPath: plan, homeDir: home, config, executorFactory: factory(over), ...(session !== undefined ? { companionSessionId: session } : { noCompanion: true }) }));
+  await quiet(() => startRun({ workflow: bugfixWorkflow, planPath: plan, homeDir: home, config, executorFactory: factory(over), ...(session !== null ? { companionSessionId: session } : { noCompanion: true }) }));
   const runId = readdirSync(join(home, "runs"))[0] as string;
   return { home, runId, runDir: join(home, "runs", runId) };
 }
@@ -300,6 +300,28 @@ const R = await newRun();
   assert.equal(s.companion?.source, "attach");
   transcript(SESSION); // restore for later
   say("11 passed: unavailable original session → blocked with recovery options; reconstructed fallback is explicit, flagged, and only via attach");
+}
+
+// ===========================================================================
+// 11b. Adopting an existing (legacy, companion-less) run: stale "running" status is fine
+//      while a gate is awaiting; --reseed refreshes the worktree's command prompts
+// ===========================================================================
+{
+  const L = await newRun({}, null); // legacy: --no-companion
+  assert.equal(stateOf(L.runDir).companion, undefined);
+  const st = stateOf(L.runDir);
+  writeFileSync(join(L.runDir, "state.json"), JSON.stringify({ ...st, status: "running" })); // simulate crash-stale status
+  const stale = join(st.worktreePath, ".claude", "commands", "verify.md");
+  writeFileSync(stale, "OLD PROMPT");
+  transcript(SESSION);
+  assert.equal(await quiet(async () => gateAttach({ homeDir: L.home, config, runId: L.runId, session: SESSION, reconstructed: false, replace: false, reseed: true })), 0);
+  assert.notEqual(readFileSync(stale, "utf8"), "OLD PROMPT", "--reseed refreshes the worktree's verify prompt");
+  assert.equal(stateOf(L.runDir).companion?.sessionId, SESSION);
+  // and a run NOT waiting at a gate cannot be attached
+  const done = stateOf(R.runDir);
+  assert.equal(done.status, "done");
+  assert.equal(await quiet(async () => gateAttach({ homeDir: R.home, config, runId: R.runId, session: SESSION, reconstructed: false, replace: true })), 1);
+  say("11b passed: legacy/stale-status run adopts a companion + refreshed prompts; a finished run cannot");
 }
 
 // ===========================================================================
