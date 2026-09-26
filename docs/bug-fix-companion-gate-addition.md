@@ -73,8 +73,9 @@ dagrun start bugfix --plan <approved fix-plan file> --companion-session "$CLAUDE
   - Read `fix/summary.md` § _Verify recommendation_ (the agent's advice) and give Eddie your own view.
   - Ask explicitly: run verify, or skip? Then `--run-next yes|no`. Eddie may add a `--comment` naming
     what he wants demonstrated; verify reads it as its focus.
-  - `verify` is not a CI duplicate: it builds the candidate from the worktree, runs it on a local
-    disposable target and produces `verify/demo.md` (manual replay steps) for Eddie.
+  - `verify` is not a CI duplicate: it builds the candidate from the worktree, starts it on a local
+    disposable target, produces `verify/demo.md` (manual steps) for Eddie, and leaves it running for
+    his hands-on testing (torn down after his verdict at the `pr` gate).
 - **`pr`** — pre-PR gate. Review the PR body, the diff, and (if it ran) `verify/verify-report.json` +
   `demo.md`. Approve = the branch is pushed and a DRAFT PR opens. Amend `--target fix` sends the code
   back; nothing has been published yet. Approval never implies merge, reviewers, ready-for-review, or
@@ -82,11 +83,18 @@ dagrun start bugfix --plan <approved fix-plan file> --companion-session "$CLAUDE
 
 ## Verify evidence — how to read it
 
-`DEMONSTRATED` = one scenario shown on a candidate built from this worktree, on a loopback disposable
-target. The engine checks consistency (revision, dirty files, candidate observation, cleanup), not truth:
-read `demo.md` and the observations yourself. It is not regression coverage and not CI. `NOT_DEMONSTRATED`
-(behaviour did not match) and `BLOCKED_RUNTIME` (no runtime evidence obtained) fail the run; explain which
-and why. Do not describe a skipped or blocked verify as passed.
+`verify` does not test the candidate and renders no verdict. It builds the candidate from this worktree,
+starts it on a loopback disposable target, writes `demo.md` (what to hit, what to expect) and STOPS, leaving
+the environment running. Outcomes: `PROVISIONED` (environment up and reachable; Eddie's manual testing is
+pending) or `BLOCKED_RUNTIME` (no environment obtained; fails the run — explain why). A source-only
+`PROVISIONED` (`capability: source`, with a `sourceRationale`) means there was no runtime surface and no
+environment exists. The engine checks consistency (revision, dirty files, readiness probe, owned resources),
+not truth: `PROVISIONED` says the environment is up, not that the change works.
+
+The verdict is Eddie's. Point him at `demo.md` and the host:port in the gate brief's `verifyEnvironment`
+block, let him test at his own pace, and take his verdict as the `pr` gate decision (approve / amend / hold).
+Any of those tears the environment down as a side effect (proposal text says so); tell him before he
+confirms. Never describe a skipped, blocked or still-pending verify as passed.
 
 ## Which command when (`resume` vs `gate …`)
 
@@ -95,12 +103,12 @@ validates your decision and then calls that same engine. "Direct-decision flags"
 is just the old calling convention: no proposal step, no statement shown to Eddie first — so it is refused on
 companion runs. Pick by run state:
 
-| Run state | Use |
-|---|---|
-| Paused at a gate (a node is `awaiting-gate`) | `gate show`, then `gate decide` (propose, wait, `--confirm`). `gate open` / bare `dagrun resume <run>` in a real terminal re-enters the companion conversation; from a non-terminal, bare `resume` only prints the pause and decides nothing. `gate attach` only while paused. |
-| No gate pending (`gate show` says "not paused at a gate"; `gate open`/`attach`/`decide` error `not-awaiting`) | `dagrun resume <run>` (no flags) is the only command that works: it reconciles crashed nodes and runs whatever is still `pending`. |
-| Top-level `failed` but the nodes are `done`, after a node was completed out-of-band with `dagrun rerun <run> <node>` | `dagrun resume <run>` (no flags). It makes no decision; it just continues from current state and recomputes the run status. `rerun` never updates the top-level status and never retries/unskips other nodes. |
-| Crashed (status `running`, node stuck `running`, no process) | `dagrun resume <run>` (no flags): stuck nodes are reset to `pending` (up to a retry cap) and re-run. |
+| Run state                                                                                                            | Use                                                                                                                                                                                                                                                                            |
+| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Paused at a gate (a node is `awaiting-gate`)                                                                         | `gate show`, then `gate decide` (propose, wait, `--confirm`). `gate open` / bare `dagrun resume <run>` in a real terminal re-enters the companion conversation; from a non-terminal, bare `resume` only prints the pause and decides nothing. `gate attach` only while paused. |
+| No gate pending (`gate show` says "not paused at a gate"; `gate open`/`attach`/`decide` error `not-awaiting`)        | `dagrun resume <run>` (no flags) is the only command that works: it reconciles crashed nodes and runs whatever is still `pending`.                                                                                                                                             |
+| Top-level `failed` but the nodes are `done`, after a node was completed out-of-band with `dagrun rerun <run> <node>` | `dagrun resume <run>` (no flags). It makes no decision; it just continues from current state and recomputes the run status. `rerun` never updates the top-level status and never retries/unskips other nodes.                                                                  |
+| Crashed (status `running`, node stuck `running`, no process)                                                         | `dagrun resume <run>` (no flags): stuck nodes are reset to `pending` (up to a retry cap) and re-run.                                                                                                                                                                           |
 
 Teardown: only a `gate decide --confirm` at a gate downstream of `verify` tears down the provisioned verify
 environment. If a gate was bypassed with `rerun`, or the run was resumed without a decision, clean up with
