@@ -13,6 +13,8 @@ import {
   findAppliedDecision,
   findSessionConfigDir,
   planAmend,
+  gateResumePrompt,
+  readSessionCwd,
   readNextNodeDecision,
   runHash,
   validateGateRequest,
@@ -184,6 +186,25 @@ test("a different session cannot decide the gate", () => {
   const b = brief(s);
   assert.equal((v(s, b, req(b, { session: "someone-else" })) as { code?: string }).code, "session-mismatch");
   assert.equal(v(s, b, req(b, { session: "sess-original-1" })).ok, true);
+});
+
+test("readSessionCwd reads the session's directory from the transcript head; null when absent", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cwd-"));
+  const f = join(dir, "s.jsonl");
+  writeFileSync(f, '{"type":"user","cwd":"/Users/e/dev/my proj","sessionId":"x"}\n');
+  assert.equal(readSessionCwd(f), "/Users/e/dev/my proj");
+  writeFileSync(f, '{"type":"summary"}\n');
+  assert.equal(readSessionCwd(f), null);
+  assert.equal(readSessionCwd(join(dir, "missing.jsonl")), null);
+});
+
+test("gateResumePrompt tells a resumed conversation a gate is waiting, defers facts to `gate show`, and forbids deciding", () => {
+  const p = gateResumePrompt("59478-2", "reproduce");
+  assert.match(p, /run 59478-2 is paused at its "reproduce" gate/);
+  assert.match(p, /dagrun gate show 59478-2/);
+  assert.match(p, /bug-fix-companion/);
+  assert.match(p, /Do not decide or confirm anything until I explicitly tell you/);
+  assert.doesNotMatch(p, /revision/i, "no revision baked into a prompt that could go stale");
 });
 
 test("findSessionConfigDir locates a transcript and rejects bad ids", () => {

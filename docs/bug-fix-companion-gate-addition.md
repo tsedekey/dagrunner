@@ -27,6 +27,8 @@ dagrun start bugfix --plan <approved fix-plan file> --companion-session "$CLAUDE
 
 ## At a gate
 
+(If this conversation was just resumed by `dagrun gate open`, its opening message already says which run is paused — start here.)
+
 1. Confirm the run and gate: `dagrun gate show <run-id>` prints a JSON brief — run, gate, `revision`,
    gate artifacts and upstream artifact hashes, mechanical validation results, `pendingDecision`
    (allowed actions, amend targets, what approving continues to, and whether approving also decides
@@ -92,8 +94,10 @@ and why. Do not describe a skipped or blocked verify as passed.
   the original session; `dagrun gate attach <run-id> --session <id>`; a reconstructed session built from the
   saved checkpoint via `... --reconstructed` ONLY with Eddie's explicit agreement (it is recorded as a
   fallback, not as continuity); or stay paused.
-- **Resume this conversation from a terminal:** the brief's `companion.resumeHint`
-  (`CLAUDE_CONFIG_DIR=<dir> claude --resume <id>`). Unverified that a resumed session keeps the same id; if
+- **Resume this conversation from a terminal:** `dagrun gate open <run-id>` (or the brief's
+  `companion.resumeHint`) re-enters it from its original directory with an opening message saying a gate is
+  waiting. A bare `claude --resume <id>` reopens the chat with NO gate context — if that is how you were
+  resumed, run `dagrun gate show <run-id>` first and treat it as a gate session. Unverified that a resumed session keeps the same id; if
   `decide` reports `session-mismatch`, use `gate attach --replace` with Eddie's agreement.
 - **A run created before v0.1.50** (no companion recorded): `dagrun gate attach <run-id> --session
 "$CLAUDE_CODE_SESSION_ID" --reseed` (refreshes the worktree's prompts; touches only the run's untracked

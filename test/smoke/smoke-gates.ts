@@ -43,7 +43,7 @@ function transcript(id: string, present = true): void {
   const d = join(CFG, "projects", "-fake-companion");
   mkdirSync(d, { recursive: true });
   const f = join(d, `${id}.jsonl`);
-  if (present) writeFileSync(f, "{}\n");
+  if (present) writeFileSync(f, `{"type":"user","cwd":"/fake/companion dir","sessionId":"${id}"}\n`);
   else rmSync(f, { force: true });
 }
 transcript(SESSION);
@@ -139,6 +139,8 @@ const R = await newRun();
   const b = briefOf(R.runDir, "reproduce");
   assert.equal(b.companion.status, "ok");
   assert.match(b.companion.resumeHint ?? "", new RegExp(`claude --resume ${SESSION}`));
+  assert.equal(b.companion.resume?.cwd, "/fake/companion dir");
+  assert.match(b.companion.resumeHint ?? "", /^cd '\/fake\/companion dir' && CLAUDE_CONFIG_DIR='.*' claude --resume 1111.* 'DagRunner run .* gate show /s);
   assert.equal(b.pendingDecision.decidesNode, undefined);
   assert.deepEqual(b.pendingDecision.approveContinuesTo, ["implement", "review", "fix", "verify", "pr", "digest"]);
   assert.ok(existsSync(join(R.runDir, "reproduce", "gate-context.md")));

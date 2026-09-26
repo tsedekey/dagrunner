@@ -13,6 +13,7 @@
  */
 
 import { cpSync, existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import type { DagrunnerConfig } from "../config/xdg.js";
 import { readState, writeState } from "../core/state.js";
@@ -69,6 +70,49 @@ export function gateShow(args: {
   });
   process.stdout.write(JSON.stringify(brief, null, 2) + "\n");
   return 0;
+}
+
+/**
+ * `dagrun gate open` — re-enter the ORIGINATING companion conversation with an
+ * opening prompt that tells it a gate is waiting. User-initiated; it resumes the
+ * recorded session, it never starts a new agent. Unverified: that resume keeps
+ * the same session id (if not, `decide` will report session-mismatch).
+ */
+export function gateOpen(args: {
+  homeDir: string;
+  config: DagrunnerConfig;
+  runId: string;
+  configDirs?: string[];
+}): number {
+  const r = load(args.homeDir, args.runId);
+  if (r === null) return err(`run "${args.runId}" not found`);
+  const gate = awaitingGateId(r.state);
+  if (gate === undefined) return err(`run "${args.runId}" is not paused at a gate`);
+  const brief = buildGateBrief({
+    runDir: r.runDir,
+    state: r.state,
+    workflow: r.workflow,
+    gateNodeId: gate,
+    configDirs: args.configDirs ?? sessionConfigDirs(args.config, r.state),
+  });
+  const res = brief.companion.resume;
+  if (brief.companion.status !== "ok" || res === undefined) {
+    return err(brief.companion.blockedReason ?? "originating companion unavailable");
+  }
+  if (res.cwd === null || !existsSync(res.cwd)) {
+    return err(
+      `cannot determine the session's original directory (${res.cwd ?? "not recorded"}); ` +
+        `cd there yourself and run: claude --resume ${res.sessionId}`,
+    );
+  }
+  emitGateBrief({ runDir: r.runDir, state: r.state, workflow: r.workflow, gateNodeId: gate, config: args.config, ...(args.configDirs !== undefined ? { configDirs: args.configDirs } : {}) });
+  const out = spawnSync("claude", ["--resume", res.sessionId, res.prompt], {
+    stdio: "inherit",
+    cwd: res.cwd,
+    env: { ...process.env, CLAUDE_CONFIG_DIR: res.configDir },
+  });
+  if (out.error !== undefined) return err(`failed to launch claude: ${out.error.message}`);
+  return out.status ?? 0;
 }
 
 export type DecideArgs = {

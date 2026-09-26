@@ -42,7 +42,7 @@ import {
   seedWorktreeSiblings,
 } from "../runtime/run-engine.js";
 import { readState, writeState } from "../core/state.js";
-import { gateAttach, gateDecide, gateShow } from "../runtime/gate-cli.js";
+import { gateAttach, gateDecide, gateOpen, gateShow } from "../runtime/gate-cli.js";
 import {
   runPreflight,
   printPreflightResult,
@@ -218,13 +218,14 @@ async function cmdGate(argv: string[]): Promise<void> {
   const sub = argv[0];
   const runId = argv[1];
   if (
-    (sub !== "show" && sub !== "decide" && sub !== "attach") ||
+    (sub !== "show" && sub !== "decide" && sub !== "attach" && sub !== "open") ||
     runId === undefined ||
     runId.startsWith("--")
   ) {
     process.stderr.write(
       `Usage:\n` +
         `  dagrun gate show <run-id>\n` +
+        `  dagrun gate open <run-id>      (resume the originating companion conversation, told a gate is waiting)\n` +
         `  dagrun gate decide <run-id> --gate <node> --revision <rev> --action approve|amend|hold\n` +
         `      [--run-next yes|no] [--target <node>] [--comment "<text>"] [--session <id>] [--confirm <decision-id>]\n` +
         `  dagrun gate attach <run-id> --session <id> [--reconstructed] [--replace] [--reseed]\n`,
@@ -236,6 +237,8 @@ async function cmdGate(argv: string[]): Promise<void> {
   let code = 0;
   if (sub === "show") {
     code = gateShow({ homeDir, config, runId });
+  } else if (sub === "open") {
+    code = gateOpen({ homeDir, config, runId });
   } else if (sub === "attach") {
     const session = flagValue(argv, "--session");
     if (session === undefined) {
@@ -798,6 +801,7 @@ function printHelp(): void {
       "  dagrun start <workflow> --plan <file> [--max-budget-usd <n>] [--force] [--night] [--companion-session <id> | --no-companion]",
       '  dagrun resume <run-id> [--approve [--run-next yes|no]] [--reject "<comment>"]   (legacy gates)',
       "  dagrun gate show <run-id>                                    (companion gates)",
+      "  dagrun gate open <run-id>                                    (resume the originating companion, with a gate prompt)",
       "  dagrun gate decide <run-id> --gate <node> --revision <rev> --action approve|amend|hold [--run-next yes|no] [--target <node>] [--comment <text>] [--confirm <id>]",
       "  dagrun gate attach <run-id> --session <id> [--reconstructed] [--replace] [--reseed]",
       "  dagrun status [<run-id>]",

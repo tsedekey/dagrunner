@@ -13,7 +13,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync } from "node:fs";
 import { join } from "node:path";
 import type { Workflow } from "./types.js";
 import type { RunState } from "./state.js";
@@ -74,6 +74,8 @@ export type GateBrief = {
     status: "ok" | "blocked";
     blockedReason?: string;
     resumeHint?: string;
+    /** Structured return path (used by `dagrun gate open`). */
+    resume?: { sessionId: string; configDir: string; cwd: string | null; prompt: string };
   };
   pendingDecision: {
     actions: GateAction[];
@@ -199,20 +201,67 @@ export function approveContinuesTo(
  * preserves the id; that is a harness property recorded as unverified.
  * Returns the owning config dir, or null.
  */
-export function findSessionConfigDir(
+export function findSessionFile(
   sessionId: string,
   configDirs: string[],
-): string | null {
+): { dir: string; file: string } | null {
   if (!/^[A-Za-z0-9-]{8,}$/.test(sessionId)) return null;
   for (const dir of configDirs) {
     const projects = join(dir, "projects");
     if (!existsSync(projects)) continue;
     for (const slug of readdirSync(projects)) {
-      if (existsSync(join(projects, slug, `${sessionId}.jsonl`))) return dir;
+      const file = join(projects, slug, `${sessionId}.jsonl`);
+      if (existsSync(file)) return { dir, file };
     }
   }
   return null;
 }
+
+export function findSessionConfigDir(
+  sessionId: string,
+  configDirs: string[],
+): string | null {
+  return findSessionFile(sessionId, configDirs)?.dir ?? null;
+}
+
+/**
+ * The directory a session was started in, read from the first transcript
+ * records. `claude --resume <id>` only finds a session from its own project
+ * directory, so the return path must `cd` there. null when not recorded.
+ */
+export function readSessionCwd(file: string): string | null {
+  try {
+    const fd = openSync(file, "r");
+    try {
+      const buf = Buffer.alloc(65536);
+      const n = readSync(fd, buf, 0, buf.length, 0);
+      const m = /"cwd":"((?:[^"\\]|\\.)*)"/.exec(buf.subarray(0, n).toString("utf8"));
+      return m?.[1] === undefined ? null : (JSON.parse(`"${m[1]}"`) as string);
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The opening message that makes a resumed companion conversation aware a gate
+ * is waiting (a bare `claude --resume` reopens the chat with no such context).
+ * Deliberately excludes revision/evidence: the agent must fetch those live via
+ * `dagrun gate show`, so a stale prompt can never carry stale facts.
+ */
+export function gateResumePrompt(runId: string, gateNodeId: string): string {
+  return (
+    `DagRunner run ${runId} is paused at its "${gateNodeId}" gate: the preceding node has finished and is ` +
+    `waiting for our decision. Use the bug-fix-companion skill (references/dagrunner-gates.md). ` +
+    `First run: dagrun gate show ${runId} — then review the actual artifacts against our agreed plan and ` +
+    `explain the meaningful findings one increment at a time. Do not decide or confirm anything until I ` +
+    `explicitly tell you the action; understanding is not approval.`
+  );
+}
+
+const shq = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 
 // ---------------------------------------------------------------------------
 // Request validation
@@ -438,6 +487,7 @@ export function buildGateBrief(args: {
   let status: "ok" | "blocked" = "ok";
   let blockedReason: string | undefined;
   let resumeHint: string | undefined;
+  let resume: GateBrief["companion"]["resume"];
   if (assoc === undefined) {
     status = "blocked";
     blockedReason =
@@ -445,15 +495,21 @@ export function buildGateBrief(args: {
       `(\`dagrun gate attach ${state.runId} --session <id>\`), or (2) attach a reconstructed session with Eddie's ` +
       "agreement (add --reconstructed), or (3) stay paused.";
   } else {
-    const dir = findSessionConfigDir(assoc.sessionId, configDirs);
-    if (dir === null) {
+    const found = findSessionFile(assoc.sessionId, configDirs);
+    const dir = found?.dir ?? null;
+    if (found === null || dir === null) {
       status = "blocked";
       blockedReason =
         `originating session "${assoc.sessionId}" has no transcript in any known Claude config dir ` +
         `(${configDirs.join(", ")}). Recovery: locate it, or attach a reconstructed session with Eddie's ` +
         `agreement (\`dagrun gate attach ${state.runId} --session <id> --reconstructed\`), or stay paused.`;
     } else {
-      resumeHint = `CLAUDE_CONFIG_DIR=${dir} claude --resume ${assoc.sessionId}`;
+      const cwd = readSessionCwd(found.file);
+      const prompt = gateResumePrompt(state.runId, gateNodeId);
+      resume = { sessionId: assoc.sessionId, configDir: dir, cwd, prompt };
+      resumeHint =
+        `${cwd !== null ? `cd ${shq(cwd)} && ` : ""}CLAUDE_CONFIG_DIR=${shq(dir)} ` +
+        `claude --resume ${assoc.sessionId} ${shq(prompt)}`;
     }
   }
 
@@ -471,6 +527,7 @@ export function buildGateBrief(args: {
       status,
       ...(blockedReason !== undefined ? { blockedReason } : {}),
       ...(resumeHint !== undefined ? { resumeHint } : {}),
+      ...(resume !== undefined ? { resume } : {}),
     },
     pendingDecision: {
       actions: [...GATE_ACTIONS],
