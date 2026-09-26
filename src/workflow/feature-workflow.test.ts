@@ -403,7 +403,7 @@ test("featureWorkflow: verify is the same optional runtime demonstration, decide
   assert.deepEqual(node.outcomeGate, {
     file: "verify-report.json",
     field: "outcome",
-    passValues: ["DEMONSTRATED"],
+    passValues: ["PROVISIONED"],
   });
   assert.deepEqual(node.produces, ["verify-report.json", "demo.md"]);
   assert.equal(node.evidenceCheck, "verify-runtime");

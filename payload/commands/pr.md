@@ -49,10 +49,12 @@ cat "$DAGRUN_RUN_DIR/verify/manual-test.md" 2>/dev/null
 
 - Guide: use `define/guide.md` if it printed something; otherwise use `reproduce/guide.md` (bugfix workflow).
 - `verify/manual-test.md` is optional — absent is fine, skip it.
-- `verify/` exists only when Eddie chose the optional runtime demonstration at the fix gate. If
-  `verify/verify-report.json` is present and its `outcome` is `DEMONSTRATED`, the description may
-  say so in one sentence (what was shown, on what local target). If absent, say nothing about verify.
-  Never claim CI-level acceptance-test coverage from it.
+- `verify/` exists only when Eddie chose the optional runtime hand-off at the fix gate. verify only
+  PROVISIONS a local environment for Eddie's manual testing and renders no verdict; his verdict is
+  given at the pre-PR gate, AFTER this body is composed. If `verify/verify-report.json` is present
+  with `outcome` `PROVISIONED`, do NOT claim anything was demonstrated or passed — at most note
+  "manual verification pending / by Eddie" (the gate carries the verdict). If absent, say nothing
+  about verify. Never claim CI-level acceptance-test coverage from it.
 
 ## Step 2 — Compose the PR body
 
@@ -65,7 +67,7 @@ cat > "$DAGRUN_ARTIFACTS/body.md" << 'BODY'
 
 <2–4 sentences. What this PR does and why — goal and purpose only.
 Draw from guide.md and implement/summary.md. No bullet lists, no sub-headers,
-no review/fix recap. If the verify demonstration ran (`DEMONSTRATED`), one sentence noting it.>
+no review/fix recap. Do not describe verify results — Eddie's manual verification verdict comes at the gate, after this is written.>
 
 ## Checklist
 

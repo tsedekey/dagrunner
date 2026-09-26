@@ -112,7 +112,8 @@ cat "$DAGRUN_RUN_DIR/verify/demo.md" 2>/dev/null
   was addressed vs. deferred" half. Do not treat an absent/empty findings array as a gap to explain
   — "no high-confidence blocker/major findings" is a legitimate, common outcome.
 - `verify/verify-report.json`'s `outcome` field and `verify/demo.md` are your source for Section 5.
-  `verify` is an OPTIONAL runtime demonstration chosen at the fix gate — when `verify/` is absent it
+  `verify` is an OPTIONAL provision-and-hand-off chosen at the fix gate (it stands up a local
+  environment for Eddie's manual testing and renders no verdict) — when `verify/` is absent it
   was skipped by decision, which is a normal outcome, not a gap.
 
 ## Step 4 — Write `$DAGRUN_ARTIFACTS/knowledge-map.md` (short — two sections only)
@@ -134,8 +135,8 @@ If nothing was deferred, say so in one line — that is a normal outcome.>
 ## 2. Open questions a reviewer will likely ask
 
 <Design tradeoffs with a reasonable alternative, scope boundaries the guide drew, and one line on
-verification: whether the optional verify demonstration ran (verify/ absent = skipped by the fix-gate
-decision) and, if it did, its outcome (`DEMONSTRATED` is one scenario shown locally — not regression
+verification: whether the optional verify hand-off ran (verify/ absent = skipped by the fix-gate
+decision) and, if it did, its outcome (`PROVISIONED` only means an environment was handed to Eddie for manual testing — the verdict is Eddie's, not in the artifacts; not regression
 coverage, not CI). Ground file/line claims in the diff from Step 2; otherwise stay at file/component
 level.>
 EOF

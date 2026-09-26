@@ -53,11 +53,12 @@ function producesFileContent(
     gate.file === filename &&
     node.evidenceCheck === "verify-runtime"
   ) {
-    // A schema-2 runtime-demonstration report that satisfies the evidence
-    // contract for the CURRENT worktree — plumbing fixture, not model output.
+    // A schema-3 source-only PROVISIONED report (no owned resources, so no teardown
+    // path is ever reached) that satisfies the evidence contract for the CURRENT
+    // worktree — plumbing fixture, not model output.
     return JSON.stringify(
       {
-        schemaVersion: 2,
+        schemaVersion: 3,
         outcome: gate.passValues[0],
         capability: "source",
         sourceRationale: "mock fixture",
@@ -74,8 +75,7 @@ function producesFileContent(
           artifact: "mock",
           artifactIdentity: "mock-sha256",
         },
-        observations: [{ kind: "candidate", command: "mock", result: "mock" }],
-        cleanup: { status: "clean", leftovers: [] },
+        teardown: { status: "not-applicable" },
         demoFile: "demo.md",
       },
       null,

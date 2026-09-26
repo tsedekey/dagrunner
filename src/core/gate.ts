@@ -19,6 +19,7 @@ import type { Workflow } from "./types.js";
 import type { RunState } from "./state.js";
 import { checkNoPlaceholders, checkOutcomeGate } from "./dag.js";
 import { gitHead } from "./verify-evidence.js";
+import { readVerifyEnv } from "./verify-cleanup.js";
 
 export type GateAction = "approve" | "amend" | "hold";
 export const GATE_ACTIONS: readonly GateAction[] = ["approve", "amend", "hold"];
@@ -76,6 +77,19 @@ export type GateBrief = {
     resumeHint?: string;
     /** Structured return path (used by `dagrun gate open`). */
     resume?: { sessionId: string; configDir: string; cwd: string | null; prompt: string };
+  };
+  /**
+   * The verify hand-off, when this gate sits downstream of a verify node that
+   * provisioned an environment. NOT part of the revision hash (state that changes
+   * at teardown must never make the companion's decision stale).
+   */
+  verifyEnvironment?: {
+    status: "provisioned" | "torn-down" | "teardown-leftovers";
+    host: string;
+    port: number | null;
+    resourceCount: number;
+    demoFile: string;
+    note: string;
   };
   pendingDecision: {
     actions: GateAction[];
@@ -506,6 +520,28 @@ export function buildGateBrief(args: {
     }
   }
 
+  let verifyEnvironment: GateBrief["verifyEnvironment"];
+  if (ancestorsOf(workflow, gateNodeId).includes("verify") && state.nodes["verify"]?.status === "done") {
+    const env = readVerifyEnv(join(runDir, "verify"), true);
+    if (env !== null && env.resources.length > 0) {
+      const status = env.teardown?.status === "clean" ? "torn-down" : env.teardown?.status === "leftovers" ? "teardown-leftovers" : "provisioned";
+      const demo = join(runDir, "verify", env.demoFile);
+      verifyEnvironment = {
+        status,
+        host: env.host,
+        port: env.port,
+        resourceCount: env.resources.length,
+        demoFile: demo,
+        note:
+          status === "provisioned"
+            ? `Verify environment is RUNNING at ${env.host}:${env.port ?? "?"} — manual testing pending. Point Eddie at ${demo} (steps + expected results); get his verdict BEFORE deciding. Any decision at this gate tears the environment down.`
+            : status === "torn-down"
+              ? "Verify environment already torn down; manual testing cannot be repeated without re-running verify."
+              : "Verify environment teardown left resources behind — run `dagrun verify cleanup <run-id>`.",
+      };
+    }
+  }
+
   const assoc = state.companion;
   const sessionId = assoc?.sessionId ?? null;
   let status: "ok" | "blocked" = "ok";
@@ -547,6 +583,7 @@ export function buildGateBrief(args: {
     iteration: state.nodes[gateNodeId]?.iteration ?? 0,
     ...ev,
     validation,
+    ...(verifyEnvironment !== undefined ? { verifyEnvironment } : {}),
     companion: {
       sessionId,
       reconstructed: assoc?.reconstructed ?? false,

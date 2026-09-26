@@ -92,11 +92,11 @@ test("bugfixWorkflow: verify is an OPTIONAL runtime demonstration decided at the
     "verify",
     "the fix gate decides whether verify runs",
   );
-  // Only a DEMONSTRATED report passes; NOT_DEMONSTRATED / BLOCKED_RUNTIME fail the node.
+  // Only a PROVISIONED report passes; BLOCKED_RUNTIME fails the node.
   assert.deepEqual(node.outcomeGate, {
     file: "verify-report.json",
     field: "outcome",
-    passValues: ["DEMONSTRATED"],
+    passValues: ["PROVISIONED"],
   });
   assert.equal(node.evidenceCheck, "verify-runtime");
 });

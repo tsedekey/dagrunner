@@ -337,8 +337,8 @@ await resumeRun({
   };
   assert.strictEqual(
     report.outcome,
-    "DEMONSTRATED",
-    `A4: verify-report.json outcome must be DEMONSTRATED, got ${String(report.outcome)}`,
+    "PROVISIONED",
+    `A4: verify-report.json outcome must be PROVISIONED, got ${String(report.outcome)}`,
   );
   assert.strictEqual(
     state.nodes["pr"]?.status,
@@ -439,7 +439,7 @@ await resumeRun({
   const report = JSON.parse(readFileSync(reportPath, "utf8")) as {
     outcome?: string;
   };
-  assert.strictEqual(report.outcome, "DEMONSTRATED");
+  assert.strictEqual(report.outcome, "PROVISIONED");
   assert.strictEqual(
     state.nodes["pr"]?.status,
     "done",
@@ -920,7 +920,7 @@ await rerunNode({
   ) as { outcome?: string };
   assert.strictEqual(
     newReport.outcome,
-    "DEMONSTRATED",
+    "PROVISIONED",
     `I: rerun must land a fresh, passing verify-report.json in the live dir, got ${String(newReport.outcome)}`,
   );
 

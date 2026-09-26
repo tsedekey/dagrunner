@@ -74,6 +74,9 @@ export function emitGateBrief(args: {
     ...(brief.pendingDecision.decidesNode !== undefined
       ? [`**Approval also decides:** whether "${brief.pendingDecision.decidesNode}" runs (--run-next yes|no)`]
       : []),
+    ...(brief.verifyEnvironment !== undefined
+      ? [``, `## Verify environment`, `- ${brief.verifyEnvironment.status}: ${brief.verifyEnvironment.note}`]
+      : []),
     ``,
     `## Evidence`,
     ...brief.gateArtifacts.map((f) => `- ${f.path} (${f.sha256.slice(0, 12)})`),

@@ -144,10 +144,12 @@ export const featureWorkflow: Workflow = {
         "Then update {artifactsDir}/summary.md to reflect all changes made (which findings were addressed, what files changed, what was deferred).",
       formatCommand: "./mvnw spotless:apply --no-transfer-progress",
     },
-    // Optional runtime DEMONSTRATION for the human — same node/prompt as the
+    // Optional provision-and-hand-off of a runtime for the human — same node/prompt as the
     // bugfix workflow (payload/commands/verify.md). Whether it runs is decided at
     // the fix gate (gate.decidesNode) and read from fix/next-node-decision.json.
-    // Only DEMONSTRATED passes; see core/verify-evidence.ts.
+    // Only PROVISIONED passes; see core/verify-evidence.ts. NOTE: this workflow has no
+    // pre-PR gate, so nothing tears the environment down on a verdict — cleanup is
+    // `dagrun verify cleanup <run-id>` (see DECISIONS.md § verify-provision-handoff).
     {
       id: "verify",
       dependsOn: ["fix"],
@@ -159,7 +161,7 @@ export const featureWorkflow: Workflow = {
       outcomeGate: {
         file: "verify-report.json",
         field: "outcome",
-        passValues: ["DEMONSTRATED"],
+        passValues: ["PROVISIONED"],
       },
       evidenceCheck: "verify-runtime",
     },

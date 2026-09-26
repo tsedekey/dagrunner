@@ -42,6 +42,8 @@ import {
   seedWorktreeSiblings,
 } from "../runtime/run-engine.js";
 import { readState, writeState } from "../core/state.js";
+import { verifyCleanup } from "../runtime/verify-cli.js";
+import { pendingVerifyEnvs } from "../core/verify-cleanup.js";
 import { gateAttach, gateDecide, gateOpen, gateShow, resumeOpensCompanion } from "../runtime/gate-cli.js";
 import {
   runPreflight,
@@ -308,6 +310,29 @@ async function cmdGate(argv: string[]): Promise<void> {
   if (code !== 0) process.exit(code);
 }
 
+/** Safety net: a PROVISIONED verify env with no recorded teardown must not leak silently. */
+function warnPendingVerifyEnv(homeDir: string, runId: string, prefix: string): void {
+  const pending = pendingVerifyEnvs(join(homeDir, "runs", runId));
+  if (pending.length === 0) return;
+  const n = pending.reduce((a, e) => a + e.resources.length, 0);
+  process.stdout.write(
+    `${prefix}VERIFY ENVIRONMENT STILL PROVISIONED (${n} owned resources, not torn down).\n` +
+      `  Tear down with: dagrun verify cleanup ${runId}\n`,
+  );
+}
+
+function cmdVerify(argv: string[]): void {
+  const runId = argv[1];
+  if (argv[0] !== "cleanup" || runId === undefined || runId.startsWith("--")) {
+    process.stderr.write(
+      `Usage: dagrun verify cleanup <run-id>   (tear down the run's provisioned verify environment; idempotent)\n`,
+    );
+    process.exit(1);
+  }
+  const code = verifyCleanup({ homeDir: resolveHome(), runId });
+  if (code !== 0) process.exit(code);
+}
+
 function cmdStatus(argv: string[]): void {
   const homeDir = resolveHome();
 
@@ -360,6 +385,8 @@ function cmdStatus(argv: string[]): void {
 
   process.stdout.write(`\nTotal cost: $${totalCost.toFixed(4)}\n`);
 
+  warnPendingVerifyEnv(homeDir, state.runId, "\n");
+
   const gateNode = Object.entries(state.nodes).find(
     ([, ns]) => ns.status === "awaiting-gate",
   );
@@ -389,8 +416,9 @@ function cmdList(): void {
   );
 
   for (const run of runs) {
+    const leak = pendingVerifyEnvs(join(homeDir, "runs", run.runId)).length > 0;
     process.stdout.write(
-      `${run.runId.padEnd(36)}  ${run.status.padEnd(10)}  ${run.updatedAt}\n`,
+      `${run.runId.padEnd(36)}  ${run.status.padEnd(10)}  ${run.updatedAt}${leak ? "  [verify env NOT torn down: dagrun verify cleanup " + run.runId + "]" : ""}\n`,
     );
   }
 }
@@ -819,6 +847,7 @@ function printHelp(): void {
       "  dagrun gate open <run-id>                                    (resume the originating companion, with a gate prompt)",
       "  dagrun gate decide <run-id> --gate <node> --revision <rev> --action approve|amend|hold [--run-next yes|no] [--target <node>] [--comment <text>] [--confirm <id>]",
       "  dagrun gate attach <run-id> --session <id> [--reconstructed] [--replace] [--reseed]",
+      "  dagrun verify cleanup <run-id>                               (tear down the provisioned verify environment)",
       "  dagrun status [<run-id>]",
       "  dagrun list",
       "  dagrun abort <run-id>",
@@ -885,6 +914,10 @@ async function main(argv: string[]): Promise<number> {
 
     case "gate":
       await cmdGate(rest);
+      return 0;
+
+    case "verify":
+      cmdVerify(rest);
       return 0;
 
     case "status":

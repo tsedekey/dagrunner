@@ -5,9 +5,9 @@
  *   reproduce (Gate 1) -> implement -> review -> fix (Gate 2) -> verify -> pr (Gate 3, pre-PR)
  *
  * verify is OPTIONAL and no longer the MultiDbTest acceptance-test duplicate of CI.
- * It is (shared with the feature workflow) a runtime DEMONSTRATION for the human (payload/commands/verify.md): build
- * the candidate from the worktree, run it on a local disposable target, and show
- * how the fix behaves so it can be reproduced manually. Whether it runs is decided
+ * It is (shared with the feature workflow) a PROVISION-AND-HAND-OFF node (payload/commands/verify.md): build
+ * the candidate from the worktree, run it on a local disposable target, write manual
+ * verification steps, and STOP with the environment left running for Eddie to test by hand. Whether it runs is decided
  * by Eddie + the companion AT THE FIX GATE (gate.decidesNode) and persisted as
  * fix/next-node-decision.json, which verify's `when` reads. See DECISIONS.md
  * § companion-gates / § verify-runtime-demo.
@@ -72,13 +72,15 @@ export const bugfixWorkflow: Workflow = {
       when: (ctx) =>
         readNextNodeDecision(ctx.read("fix", "next-node-decision.json"), "verify"),
       produces: ["verify-report.json", "demo.md"],
-      // Only a DEMONSTRATED report passes; NOT_DEMONSTRATED / BLOCKED_RUNTIME fail
-      // the node loudly. evidenceCheck rejects a DEMONSTRATED claim that lacks
-      // candidate provenance / local-disposable target (core/verify-evidence.ts).
+      // Only a PROVISIONED report passes (environment up, handed to Eddie for manual
+      // testing); BLOCKED_RUNTIME fails the node loudly. evidenceCheck rejects a
+      // PROVISIONED claim that lacks candidate provenance / owned-resource inventory /
+      // readiness (core/verify-evidence.ts). The environment is torn down when Eddie's
+      // verdict lands at the pr gate (core/verify-cleanup.ts), not by this node.
       outcomeGate: {
         file: "verify-report.json",
         field: "outcome",
-        passValues: ["DEMONSTRATED"],
+        passValues: ["PROVISIONED"],
       },
       evidenceCheck: "verify-runtime",
     },

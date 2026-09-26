@@ -155,7 +155,14 @@ export type DecideArgs = {
   confirm?: string;
   configDirs?: string[];
   executorFactory?: Parameters<typeof resumeRun>[0]["executorFactory"];
+  /** Test seam: docker exec for the verify-environment teardown the verdict triggers. */
+  dockerExec?: Parameters<typeof resumeRun>[0]["dockerExec"];
 };
+
+const TEARDOWN_NOTE = (b: ReturnType<typeof buildGateBrief>): string =>
+  b.verifyEnvironment?.status === "provisioned"
+    ? ` Any decision here also TEARS DOWN the verify environment (containers/network/image, ${b.verifyEnvironment.resourceCount} owned resources) — only decide after Eddie has finished manual testing and given his verdict.`
+    : "";
 
 function statement(
   workflow: Workflow,
@@ -174,13 +181,14 @@ function statement(
       (g === "pr" && workflow.nodes.some((n) => n.id === "pr")
         ? ` This PUSHES the branch and opens a DRAFT PR.`
         : "") +
-      ` Not authorized by this: merge, reviewer requests, marking ready, backport labels.`
+      ` Not authorized by this: merge, reviewer requests, marking ready, backport labels.` +
+      TEARDOWN_NOTE(brief)
     );
   }
   if (action === "amend") {
-    return `AMEND: revise "${target}" with your feedback and re-run everything downstream of it from fresh evidence; the run pauses again at the next gate.`;
+    return `AMEND: revise "${target}" with your feedback and re-run everything downstream of it from fresh evidence; the run pauses again at the next gate.` + TEARDOWN_NOTE(brief);
   }
-  return `HOLD at gate "${g}": record the reason, change nothing, stay paused.`;
+  return `HOLD at gate "${g}": record the reason, change nothing, stay paused.` + TEARDOWN_NOTE(brief);
 }
 
 export async function gateDecide(a: DecideArgs): Promise<number> {
@@ -239,6 +247,7 @@ export async function gateDecide(a: DecideArgs): Promise<number> {
     gateRequest: { ...req, decisionId: id },
     ...(a.configDirs !== undefined ? { sessionConfigDirs: a.configDirs } : {}),
     ...(a.executorFactory !== undefined ? { executorFactory: a.executorFactory } : {}),
+    ...(a.dockerExec !== undefined ? { dockerExec: a.dockerExec } : {}),
   });
   return 0;
 }

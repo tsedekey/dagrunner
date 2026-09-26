@@ -19,7 +19,7 @@ decision: approve
 ### Gate that also decides a downstream node
 
 If `$DAGRUN_GATE_DECIDES_NODE` is set (e.g. `verify`), approving this gate ALSO decides whether that
-node runs. It is an optional runtime demonstration for Eddie, not a CI duplicate — ask explicitly
+node runs. It is an optional provision-and-hand-off (a local environment for Eddie to test by hand; it is torn down when he gives his verdict at the pre-PR gate), not a CI duplicate — ask explicitly
 ("run verify, or skip it?") using the fix summary's `## Verify recommendation` as the agent's advice,
 then add one extra line to an approve decision:
 

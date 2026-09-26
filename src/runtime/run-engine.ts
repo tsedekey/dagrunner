@@ -32,7 +32,9 @@ import { homedir, tmpdir } from "node:os";
 import type { Workflow } from "../core/types.js";
 import type { DagrunnerConfig } from "../config/xdg.js";
 import { readState, writeState } from "../core/state.js";
+import { formatTeardown, teardownRun, type DockerExec } from "../core/verify-cleanup.js";
 import {
+  ancestorsOf,
   findSessionConfigDir,
   planAmend,
   validateGateRequest,
@@ -1160,6 +1162,51 @@ export async function startRun(opts: {
   }
 }
 
+/**
+ * The human's verdict on a verify hand-off: tear down the run's provisioned verify
+ * environment (see core/verify-cleanup.ts). Applies only at a gate that sits
+ * downstream of `verify` (the pre-PR gate) and only when an environment is
+ * PROVISIONED and not yet torn down; otherwise a no-op. Never throws and never
+ * touches the recorded decision: a failure is printed loudly and left as
+ * teardown.json status "leftovers" so `dagrun verify cleanup <run>` can retry.
+ * Returns true when nothing is left behind.
+ */
+export function teardownVerifyForDecision(args: {
+  workflow: Workflow;
+  gateNodeId: string;
+  runId: string;
+  runDir: string;
+  worktreePath: string;
+  action: string;
+  exec?: DockerExec;
+}): boolean {
+  if (!ancestorsOf(args.workflow, args.gateNodeId).includes("verify")) return true;
+  try {
+    const r = teardownRun({
+      runDir: args.runDir,
+      runId: args.runId,
+      worktreePath: args.worktreePath,
+      trigger: `gate-decide:${args.gateNodeId}:${args.action}`,
+      ...(args.exec !== undefined ? { exec: args.exec } : {}),
+    });
+    if (r.reports.length === 0) return true;
+    process.stdout.write(`dagrun: verdict recorded — ${formatTeardown(r.reports)}`);
+    if (!r.ok) {
+      process.stderr.write(
+        `dagrun: WARNING verify environment teardown incomplete — the decision stands. ` +
+          `Retry: dagrun verify cleanup ${args.runId}\n`,
+      );
+    }
+    return r.ok;
+  } catch (e) {
+    process.stderr.write(
+      `dagrun: WARNING verify environment teardown crashed (${(e as Error).message}) — the decision stands. ` +
+        `Retry: dagrun verify cleanup ${args.runId}\n`,
+    );
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // resumeRun
 // ---------------------------------------------------------------------------
@@ -1177,6 +1224,8 @@ export async function resumeRun(opts: {
   /** Test seam: config dirs searched for the companion's transcript. */
   sessionConfigDirs?: string[];
   executorFactory?: ExecutorFactory;
+  /** Test seam: docker exec used by the verify-environment teardown at a verdict. */
+  dockerExec?: DockerExec;
 }): Promise<void> {
   const { runId, homeDir, config } = opts;
   const runDir = join(homeDir, "runs", runId);
@@ -1265,6 +1314,15 @@ export async function resumeRun(opts: {
       // via `dagrun gate decide`, never a fresh spawned session or a bare flag.
       const companionMode =
         state.companion !== undefined && workflow.companionGates === true;
+      const verifyTd = {
+        workflow,
+        gateNodeId,
+        runId,
+        runDir,
+        worktreePath: state.worktreePath,
+        ...(opts.dockerExec !== undefined ? { exec: opts.dockerExec } : {}),
+      };
+      let verifyTeardownOk = true;
       let approveNow = opts.approve === true;
       let rejectNow = opts.rejectComment;
       let boundMeta: Partial<GateHistoryEntry> = {};
@@ -1330,6 +1388,7 @@ export async function resumeRun(opts: {
           };
           writeState(stateFile, state);
           process.stdout.write(`dagrun: hold recorded at gate "${gateNodeId}" — still paused, nothing advanced\n`);
+          teardownVerifyForDecision({ ...verifyTd, action: "hold" });
           releaseLock(homeDir);
           process.exit(0);
         }
@@ -1367,6 +1426,10 @@ export async function resumeRun(opts: {
             releaseLock(homeDir);
             process.exit(1);
           }
+          // Tear the verify environment down BEFORE the reset below archives verify/
+          // (the report is the durable inventory) and before verify can re-provision
+          // under the same dagrun-<run>- names.
+          verifyTeardownOk = teardownVerifyForDecision({ ...verifyTd, action: "amend" });
           const nodesNext = { ...state.nodes };
           for (const id of plan.reset) {
             const ns = nodesNext[id];
@@ -1411,6 +1474,15 @@ export async function resumeRun(opts: {
           process.stdout.write(
             `dagrun: amend — "${plan.revise}" will revise (iteration ${n}); invalidated: ${plan.reset.join(", ")}\n`,
           );
+          if (!verifyTeardownOk) {
+            // The amended run would re-provision verify under the same names: stop here.
+            process.stderr.write(
+              `dagrun: amend recorded but NOT continued — verify environment leftovers must be removed first.\n` +
+                `  Run: dagrun verify cleanup ${runId}   then: dagrun resume ${runId}\n`,
+            );
+            releaseLock(homeDir);
+            process.exit(1);
+          }
         }
       }
       const amendedAncestor =
@@ -1464,6 +1536,7 @@ export async function resumeRun(opts: {
         process.stdout.write(
           `dagrun: rejected — node "${gateNodeId}" will revise (iteration ${n})\n`,
         );
+        if (companionMode) teardownVerifyForDecision({ ...verifyTd, action: "amend" });
       } else if (approveNow) {
         // Approve: mark done, collect artifacts from disk, continue. A
         // mechanical noPlaceholders violation still fails the node even after
@@ -1527,6 +1600,7 @@ export async function resumeRun(opts: {
           updatedAt: approveTs,
         };
         writeState(stateFile, state);
+        if (companionMode) teardownVerifyForDecision({ ...verifyTd, action: "approve" });
         if (approvePlaceholderCheck.ok) {
           process.stdout.write(`dagrun: approved — continuing run\n`);
         } else {
@@ -1937,6 +2011,8 @@ export async function rerunNode(opts: {
   homeDir: string;
   config: DagrunnerConfig;
   executorFactory?: ExecutorFactory;
+  /** Test seam: docker exec used to tear down a still-provisioned verify env first. */
+  dockerExec?: DockerExec;
 }): Promise<void> {
   const { runId, nodeId, homeDir, config } = opts;
   const runDir = join(homeDir, "runs", runId);
@@ -1962,6 +2038,27 @@ export async function rerunNode(opts: {
 
   const worktreePath = state.worktreePath;
   const artifactsDir = join(runDir, nodeId);
+
+  // Re-running verify re-provisions under the same dagrun-<run>- names: any earlier
+  // environment that was never torn down must go first (and the attempt archive below
+  // would otherwise move its report — the only inventory — out of sight).
+  if (nodeId === "verify") {
+    const r = teardownRun({
+      runDir,
+      runId,
+      worktreePath: state.worktreePath,
+      trigger: "rerun:verify",
+      ...(opts.dockerExec !== undefined ? { exec: opts.dockerExec } : {}),
+    });
+    if (r.reports.length > 0) process.stdout.write(`dagrun: ${formatTeardown(r.reports)}`);
+    if (!r.ok) {
+      process.stderr.write(
+        `dagrun: refusing to re-run verify — a previous verify environment could not be fully torn down. ` +
+          `Fix, then: dagrun verify cleanup ${runId}\n`,
+      );
+      process.exit(1);
+    }
+  }
 
   // Re-seed .claude/ so any changes to commands, hooks, or settings-seed.ts
   // take effect without needing a new full run (e.g. allowedDomains fixes).

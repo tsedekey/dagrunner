@@ -1,30 +1,38 @@
 /**
- * verify-evidence.ts — mechanical contract for the runtime-demonstration
+ * verify-evidence.ts — mechanical contract for the provision-and-hand-off
  * verify node's report (`evidenceCheck: "verify-runtime"`).
  *
- * The verify node is a runtime DEMONSTRATION for the human, chosen at the fix
- * gate. Whether the demonstration happened is agent-reported, so this module
- * refuses a `DEMONSTRATED` report that lacks the provenance that would make the
- * claim checkable: a local disposable target, a candidate built from the actual
- * worktree revision (a stock released image can only be a baseline), separate
- * baseline vs candidate observations, and honest cleanup status. A verifier
- * that cannot meet this must report BLOCKED_RUNTIME / NOT_DEMONSTRATED — both
- * fail the node, never a pass.
+ * The verify node PROVISIONS a real runtime (candidate built from the worktree,
+ * running on loopback) and hands it to the human for manual testing; it renders
+ * no verdict and does not tear down (the human's verdict at the pre-PR gate does,
+ * via core/verify-cleanup.ts). Whether the environment is genuinely up is
+ * agent-reported, so this module refuses a `PROVISIONED` report that lacks the
+ * evidence that makes the claim checkable: a local disposable loopback target,
+ * a candidate built from the actual worktree revision, a durable typed
+ * `ownedResources` inventory (enough for a later cleanup with no other memory,
+ * every name carrying the `dagrun-<run-id>-` ownership prefix), and a readiness
+ * probe result. A verifier that cannot meet this reports BLOCKED_RUNTIME, which
+ * fails the node, never a pass.
+ *
+ * schemaVersion 3 is required of the node. Cleanup also READS schemaVersion 2
+ * (see verify-cleanup.ts) so runs produced before this change stay cleanable.
  */
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { Node } from "./types.js";
 
-export const VERIFY_OUTCOMES = [
-  "DEMONSTRATED",
-  "NOT_DEMONSTRATED",
-  "BLOCKED_RUNTIME",
-] as const;
+export const VERIFY_OUTCOMES = ["PROVISIONED", "BLOCKED_RUNTIME"] as const;
+export const VERIFY_SCHEMA_VERSION = 3;
 
 const CAPABILITIES = ["docker-compose", "c8run", "c8ctl", "source"] as const;
+export const RESOURCE_KINDS = ["container", "network", "image", "volume", "tempdir"] as const;
+export type ResourceKind = (typeof RESOURCE_KINDS)[number];
 const LOOPBACK = /^(localhost|127\.\d+\.\d+\.\d+|\[?::1\]?)$/;
+
+/** Ownership prefix every resource a verify node creates must carry. */
+export const ownershipPrefix = (runId: string): string => `dagrun-${runId}-`;
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj =>
@@ -69,30 +77,37 @@ export function normalizeDirty(list: readonly string[]): string[] {
 export function validateVerifyReport(
   report: unknown,
   wt: WorktreeState,
+  runIdArg?: string,
 ): { ok: true } | { ok: false; error: string } {
   const fail = (m: string) => ({ ok: false as const, error: `verify-report: ${m}` });
   if (!isObj(report)) return fail("not a JSON object");
-  if (report["schemaVersion"] !== 2) {
-    return fail(`schemaVersion must be 2 (runtime-demonstration report), got ${JSON.stringify(report["schemaVersion"])}`);
+  if (report["schemaVersion"] !== VERIFY_SCHEMA_VERSION) {
+    return fail(`schemaVersion must be ${VERIFY_SCHEMA_VERSION} (provision-and-hand-off report), got ${JSON.stringify(report["schemaVersion"])}`);
   }
   const outcome = report["outcome"];
   if (!(VERIFY_OUTCOMES as readonly unknown[]).includes(outcome)) {
     return fail(`outcome must be one of ${VERIFY_OUTCOMES.join("|")}`);
   }
   // Non-passing outcomes only need an honest reason; outcomeGate already fails them.
-  if (outcome !== "DEMONSTRATED") {
+  if (outcome !== "PROVISIONED") {
     return str(report["reason"]) === ""
       ? fail(`${String(outcome)} requires a non-empty "reason"`)
       : { ok: true };
+  }
+  const runId = runIdArg ?? str(report["run_id"]);
+  if (runId === "") return fail("run_id missing — cannot check resource ownership");
+  if (runIdArg !== undefined && str(report["run_id"]) !== "" && str(report["run_id"]) !== runIdArg) {
+    return fail(`run_id "${String(report["run_id"])}" != this run "${runIdArg}"`);
   }
 
   if (!(CAPABILITIES as readonly unknown[]).includes(report["capability"])) {
     return fail(`capability must be one of ${CAPABILITIES.join("|")}`);
   }
-  // A source-level demonstration is a deliberate, per-case decision (no sensible
-  // runtime scenario), never the default: it must say why a real runtime was not used.
-  if (report["capability"] === "source" && str(report["sourceRationale"]) === "") {
-    return fail(`capability "source" requires a non-empty "sourceRationale" — why a real runtime (docker/c8run) could not demonstrate this change`);
+  const isSource = report["capability"] === "source";
+  // A source-only hand-off is a deliberate, per-case decision (no user-observable runtime
+  // surface), never the default: it must say why a real runtime was not provisioned.
+  if (isSource && str(report["sourceRationale"]) === "") {
+    return fail(`capability "source" requires a non-empty "sourceRationale" — why a real runtime (docker/c8run) could not be provisioned for this change`);
   }
   const target = report["target"];
   if (!isObj(target) || target["kind"] !== "local-disposable") {
@@ -101,6 +116,34 @@ export function validateVerifyReport(
   const host = str(target["host"]);
   if (!LOOPBACK.test(host)) {
     return fail(`target.host "${host}" is not loopback — never an ambient/remote endpoint`);
+  }
+  const owned = target["ownedResources"];
+  if (!Array.isArray(owned)) return fail("target.ownedResources must be an array");
+  if (isSource) {
+    if (owned.length !== 0) return fail(`capability "source" provisions nothing — target.ownedResources must be empty`);
+  } else {
+    if (owned.length === 0) {
+      return fail("target.ownedResources must be non-empty — record every container/network/image/volume/tempdir so a later cleanup needs no other memory");
+    }
+    const prefix = ownershipPrefix(runId);
+    for (const r of owned) {
+      if (!isObj(r) || !(RESOURCE_KINDS as readonly unknown[]).includes(r["kind"]) || str(r["name"]) === "") {
+        return fail(`every ownedResources entry must be {kind: ${RESOURCE_KINDS.join("|")}, name}`);
+      }
+      const name = str(r["name"]);
+      const leaf = r["kind"] === "tempdir" ? basename(name) : name;
+      if (!leaf.startsWith(prefix)) {
+        return fail(`ownedResources "${name}" does not carry the ownership prefix "${prefix}"`);
+      }
+    }
+    const port = target["port"];
+    if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) {
+      return fail("target.port (the host port the environment is reachable on) must be an integer 1-65535");
+    }
+    const ready = report["readiness"];
+    if (!isObj(ready) || str(ready["command"]) === "" || str(ready["result"]) === "") {
+      return fail("readiness {command, result} missing — an environment that was not probed as reachable is not PROVISIONED");
+    }
   }
   const cand = report["candidate"];
   if (!isObj(cand)) return fail("candidate missing");
@@ -114,7 +157,7 @@ export function validateVerifyReport(
   }
   // Uncommitted fix changes are part of the candidate: the report must name them
   // as `git status --porcelain -uall` shows them NOW (compared via normalizeDirty) (also catches a
-  // verifier that edited the worktree while demonstrating).
+  // verifier that edited the worktree while provisioning). Cleanup re-checks the same list.
   const dirty = cand["dirtyFiles"];
   if (!Array.isArray(dirty) || !dirty.every((d) => typeof d === "string")) {
     return fail("candidate.dirtyFiles must be an array of paths from `git status --porcelain -uall` (empty when committed)");
@@ -131,24 +174,12 @@ export function validateVerifyReport(
   if (str(cand["artifact"]) === "" || str(cand["artifactIdentity"]) === "") {
     return fail("candidate.artifact and candidate.artifactIdentity (digest/sha256) are required");
   }
-  const obs = report["observations"];
-  if (!Array.isArray(obs) || obs.length === 0) return fail("observations must be a non-empty array");
-  let candidateSeen = false;
-  for (const o of obs) {
-    if (!isObj(o) || (o["kind"] !== "baseline" && o["kind"] !== "candidate")) {
-      return fail(`every observation needs kind "baseline" or "candidate"`);
-    }
-    if (str(o["command"]) === "" || str(o["result"]) === "") {
-      return fail("every observation needs command and result");
-    }
-    if (o["kind"] === "candidate") candidateSeen = true;
+  const teardown = report["teardown"];
+  const wantTeardown = isSource ? "not-applicable" : "pending";
+  if (!isObj(teardown) || teardown["status"] !== wantTeardown) {
+    return fail(`teardown.status must be "${wantTeardown}" at provision time (the human's verdict triggers the teardown, not this node)`);
   }
-  if (!candidateSeen) return fail("no candidate observation — baseline evidence cannot demonstrate the fix");
-  const cleanup = report["cleanup"];
-  if (!isObj(cleanup) || !["clean", "leftovers"].includes(String(cleanup["status"]))) {
-    return fail(`cleanup.status must be "clean" or "leftovers" (a failed cleanup is not a demonstration)`);
-  }
-  if (str(report["demoFile"]) === "") return fail("demoFile (manual reproduction steps for the human) missing");
+  if (str(report["demoFile"]) === "") return fail("demoFile (manual verification steps for the human) missing");
   return { ok: true };
 }
 
@@ -164,7 +195,7 @@ export function checkEvidence(
   const path = join(runDir, nodeId, file);
   if (!existsSync(path)) return { ok: false, error: `evidenceCheck: ${file} not found` };
   try {
-    return validateVerifyReport(JSON.parse(readFileSync(path, "utf8")), wt);
+    return validateVerifyReport(JSON.parse(readFileSync(path, "utf8")), wt, basename(runDir));
   } catch (e) {
     return { ok: false, error: `evidenceCheck: ${file} unreadable — ${(e as Error).message}` };
   }

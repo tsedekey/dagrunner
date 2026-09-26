@@ -28,7 +28,7 @@ Then tell the human: **"Gate approved. Type `/exit` to return to dagrun and star
 
 **Exception — gates that decide a downstream node** (`$DAGRUN_GATE_DECIDES_NODE` is set): before
 concluding an approval, make sure Eddie has said whether that node (e.g. `verify`, the optional
-runtime demonstration) should run or be skipped; present the fix summary's `## Verify recommendation`
+runtime hand-off for manual testing) should run or be skipped; present the fix summary's `## Verify recommendation`
 as your advice, and record his answer via `/gate-conclude`.
 
 ## Recognising rejection

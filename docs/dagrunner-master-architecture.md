@@ -139,7 +139,8 @@ workflows share the same `payload/commands/verify.md`.
 
 > **SUPERSEDED (v0.1.50) — read §3g first.** `verify` is no longer the autonomous MultiDbTest
 > acceptance-test author/runner described in the rest of §3d (that duplicated CI on the PR). It is an
-> OPTIONAL runtime demonstration for Eddie, chosen at the fix gate, sharing one prompt
+> OPTIONAL runtime hand-off for Eddie's manual testing (v0.1.57: provisioned, not self-verified),
+> chosen at the fix gate, sharing one prompt
 > (`payload/commands/verify.md`) across both workflows. The text below is retained as history of the
 > reasoning behind the old shape (self-heal, stall detection, deferred-to-CI); none of its outcome
 > names (`PASS`/`FAIL_*`/`DEFERRED_TO_CI`/`ERROR_INFRA`) exist any more.
@@ -583,7 +584,7 @@ needed. `smoke:live` was deferred — see `DECISIONS.md § digest-node`.
 
 ---
 
-## 3g. Companion gates and the optional runtime-demonstration verify (v0.1.50)
+## 3g. Companion gates and the optional provision-and-hand-off verify (v0.1.50, reshaped v0.1.57)
 
 **Companion gates (`Workflow.companionGates`, bugfix only).** Eddie plans in one local companion
 conversation. `dagrun start bugfix … --companion-session <id>` records that conversation's
@@ -615,13 +616,49 @@ only after the pre-PR gate is approved (`runPrPostProcess`).
 `--run-next yes|no` (agent advice lives in `fix/summary.md` § *Verify recommendation*). The decision is
 persisted as `fix/next-node-decision.json`; `verify`'s `when` reads it (missing/garbled → loud error).
 `pr`/`digest` use `joinRule: none-failed-min-one-success` so a *skipped* verify does not block them
-while a *failed* one still does. verify builds the candidate from the worktree, runs it on a local
-loopback-only disposable target (docker-compose / C8 Run / c8ctl / source — selection, not a mandatory
-sequence), and writes `verify-report.json` (schema 2: `DEMONSTRATED | NOT_DEMONSTRATED |
-BLOCKED_RUNTIME`) plus `demo.md` (manual replay steps). Only `DEMONSTRATED` passes, and
-`evidenceCheck: "verify-runtime"` (`core/verify-evidence.ts`) mechanically refuses a claim without a
-worktree-built candidate at HEAD, a matching dirty-file list (normalized on both sides; `node_modules` and untracked-dir summaries ignored; `capability: source` needs a `sourceRationale`), a candidate observation, a loopback
-target and honest cleanup. It does not replace unit/integration/regression checks or CI.
+while a *failed* one still does.
+
+**verify is provision-and-hand-off, not self-test-and-teardown (v0.1.57).** verify builds the
+candidate from the worktree, deploys it on a local loopback-only disposable target (docker
+default; C8 Run / c8ctl where the repo has them), seeds demo data, proves the environment reachable
+with one readiness probe, writes `demo.md` (how to reach it, exact manual steps + expected results)
+and **stops with the environment still running**. It renders no verdict (the node is a one-shot
+session and must never wait for a human). Eddie tests by hand and reports his verdict to the
+*companion*, which makes the gate decision; only then is the environment removed. `verify-report.json`
+is schema 3: `PROVISIONED | BLOCKED_RUNTIME` (only `PROVISIONED` passes; `DEMONSTRATED`/
+`NOT_DEMONSTRATED` no longer exist). `evidenceCheck: "verify-runtime"` (`core/verify-evidence.ts`)
+refuses a `PROVISIONED` claim without: a worktree-built candidate at HEAD, a matching dirty-file list
+(normalized on both sides; `node_modules` and untracked-dir summaries ignored), a loopback
+`local-disposable` target with a host `port`, a non-empty **typed** `target.ownedResources`
+(`{kind: container|network|image|volume|tempdir, name}`, every name carrying `dagrun-<run-id>-` —
+the durable inventory a later cleanup needs, since the node session is gone), `readiness`
+evidence (an unreachable environment is not PROVISIONED), and `teardown: {status: "pending"}`.
+A pure refactor with no user-observable runtime surface keeps the light path: `capability: "source"` +
+`sourceRationale`, `ownedResources: []`, `teardown: not-applicable` — nothing provisioned, nothing to
+clean up. On its own failure (`BLOCKED_RUNTIME`) the node cleans up its partial resources itself,
+since no human will ever test them.
+
+**Teardown is deterministic engine code, triggered by the verdict.** `core/verify-cleanup.ts` reads
+the report (schema 3, and legacy schema 2 so old runs stay cleanable; a v2 report that already says
+`cleanup: clean` is not pending), removes ONLY resources that are named in `ownedResources` AND carry
+this run's `dagrun-<run-id>-` prefix (anything else is refused and reported, never touched), verifies
+absence via `docker ps -a / network ls / image ls / volume ls` rather than trusting rm exit codes,
+re-checks `git status --porcelain -uall` against the recorded `dirtyFiles`, and writes
+`verify/teardown.json` (`{status: clean|leftovers, leftovers, removed, at, trigger, worktree}`; the
+report is never rewritten). It is idempotent, and docker is reached only through an injectable
+`execFile` seam. Two entry points share it: the standalone `dagrun verify cleanup <run-id>` (also the
+retry path; non-zero exit + loud output on leftovers or worktree drift), and — reusing the
+`gate decide` machinery, applied in `resumeRun` right where the decision is recorded — **any decide
+action (approve / amend / hold) at a gate downstream of `verify`** (the pre-PR gate) tears the
+environment down. A teardown failure is loud but never corrupts the recorded decision; an amend that
+leaves leftovers records the decision then stops instead of re-provisioning under colliding names.
+Amend tears down *before* the reset archives `verify/` (the report is the only inventory);
+`rerun <run> verify` tears down a still-provisioned earlier environment first. The gate brief carries
+`verifyEnvironment` (running, host:port, "manual testing pending", path to `demo.md`) and the
+proposal statement warns that the decision tears the environment down, so the companion tells Eddie.
+`dagrun status` / `dagrun list` flag a PROVISIONED-but-not-torn-down environment (no reaper).
+The feature workflow has no pre-PR gate, so there only `dagrun verify cleanup` (plus that warning)
+removes the environment. verify does not replace unit/integration/regression checks or CI.
 
 ## 3b. Validation — smoke:mock (per-plan gate) and smoke:live (occasional)
 
