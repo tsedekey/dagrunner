@@ -14,7 +14,9 @@
  * imports it from dag.ts (see dag.test.ts), not from here.
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname } from "node:path";
+import { appendEvent, deriveEvents } from "./events.js";
 
 // ---------------------------------------------------------------------------
 // Status unions
@@ -97,6 +99,23 @@ export type NodeState = {
   error?: string;
   /** Number of interrupt-driven retries consumed. Absent = 0. */
   interruptRetries?: number;
+  /**
+   * One entry per completed execution of this node (done / failed / paused at a
+   * gate), in order. The top-level startedAt/endedAt/cost describe only the
+   * latest execution; this keeps earlier iterations (amend / gate revise / rerun)
+   * from being overwritten. Carried across resets by the engine.
+   */
+  attempts?: NodeAttempt[];
+};
+
+export type NodeAttempt = {
+  iteration: number;
+  status: NodeStatus;
+  startedAt: string;
+  endedAt: string;
+  durationMs: number;
+  /** Cost of THIS execution only (not cumulative). */
+  cost: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -142,5 +161,17 @@ export function readState(path: string): RunState {
  * Overwrites atomically (single writeFileSync call).
  */
 export function writeState(path: string, state: RunState): void {
+  // Derive the run's event log from this transition (state.json only). Best
+  // effort: an unreadable previous file or a failed append never blocks the write.
+  let events: ReturnType<typeof deriveEvents> = [];
+  if (basename(path) === "state.json") {
+    try {
+      const prev = existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as RunState) : null;
+      events = deriveEvents(prev, state, new Date().toISOString());
+    } catch {
+      events = [];
+    }
+  }
   writeFileSync(path, JSON.stringify(state, null, 2), "utf8");
+  for (const ev of events) appendEvent(dirname(path), ev);
 }

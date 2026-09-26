@@ -370,6 +370,24 @@ export async function runDag(
     writeState(stateFile, run);
   }
 
+  /**
+   * Append this execution to the node's attempts history (call once the node
+   * has left "running" with startedAt/endedAt set). The top-level fields keep
+   * only the latest execution; a re-run (gate revise / amend) must not erase
+   * the timing of earlier iterations.
+   */
+  function closeAttempt(id: string, cost: number): void {
+    const ns = run.nodes[id];
+    if (ns?.startedAt === undefined || ns.endedAt === undefined) return;
+    const durationMs = Math.max(0, Date.parse(ns.endedAt) - Date.parse(ns.startedAt));
+    updateNode(id, {
+      attempts: [
+        ...(ns.attempts ?? []),
+        { iteration: ns.iteration, status: ns.status, startedAt: ns.startedAt, endedAt: ns.endedAt, durationMs, cost },
+      ],
+    });
+  }
+
   // Main scheduling loop.
   while (!allTerminal()) {
     // Evaluate when predicates: skip pending nodes whose predicate returns false.
@@ -514,12 +532,17 @@ export async function runDag(
             error: result.error,
             endedAt: now,
           });
+          closeAttempt(id, 0);
           run = { ...run, status: "failed" };
           save();
           return run;
         }
       }
 
+      // A retry resets to pending (same attempt continues); anything else closes it.
+      if (run.nodes[id]?.status !== "pending") {
+        closeAttempt(id, result.status === "done" ? result.cost : 0);
+      }
       save();
     }
 
@@ -539,6 +562,7 @@ export async function runDag(
         cost: (run.nodes[id]?.cost ?? 0) + gateRes.cost,
         endedAt: now,
       });
+      closeAttempt(id, gateRes.cost);
       run = { ...run, status: "paused" };
       save();
       return run; // Checkpoint-and-exit.

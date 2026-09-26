@@ -13,7 +13,7 @@
  */
 
 import assert from "node:assert/strict";
-import { execSync } from "node:child_process";
+import { execSync, spawn as spawnChild, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -526,6 +526,126 @@ async function toPrGate(over: { runNext: boolean } = { runNext: true }) {
   await quiet(() => gateDecide({ homeDir: Q.home, config, runId: Q.runId, gate: "pr", revision: pb.revision, action: "approve", confirm: qid, executorFactory: factory(), dockerExec: never2.exec } as never));
   assert.equal(never2.calls.length, 0, "source-only verify: no docker calls");
   say("13e passed: no teardown when verify was skipped or source-only");
+}
+
+// ===========================================================================
+// 14. Agent-driven driving: `--detach` + `status --json` through the REAL CLI
+//     (mock executor via DAGRUN_MOCK_SCENARIOS; no API call, no SDK).
+// ===========================================================================
+{
+  const { home, plan } = newHome();
+  for (const d of ["inbox", "store"]) mkdirSync(join(home, d), { recursive: true });
+  writeFileSync(join(home, "config.json"), JSON.stringify({ DEVHARNESS_SRC: TOY_REPO }));
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    DAGRUNNER_HOME: home,
+    CLAUDE_CONFIG_DIR: CFG,
+    ANTHROPIC_API_KEY: "smoke-dummy",
+    DAGRUN_MOCK_SCENARIOS: JSON.stringify({ reproduce: "gate-pause", implement: "success", review: "success", fix: "gate-pause", verify: "success", pr: "gate-pause", digest: "success" }),
+  };
+  delete env["CLAUDE_CODE_SESSION_ID"];
+  const CLI = join(__dirname, "..", "..", "src", "cli", "cli.ts");
+  const cli = (args: string[]) =>
+    spawnSync(process.execPath, ["--import", "tsx", CLI, ...args], { env, encoding: "utf8", cwd: join(__dirname, "..", "..") });
+  type SJ = { status: string; stale: boolean; currentNodes: string[]; awaitingGate: { nodeId: string; revision: string | null; since: string | null; reason: string } | null; nodes: Record<string, { status: string; attempts: { status: string; durationMs: number }[]; durationMs: number | null }>; companion: { sessionId: string } | null; lastEventAt: string | null; driver: { pid: number } | null };
+  const statusJson = (runId: string): SJ => {
+    const r = cli(["status", runId, "--json"]);
+    assert.equal(r.status, 0, `status --json failed: ${r.stderr}`);
+    return JSON.parse(r.stdout) as SJ;
+  };
+  const waitFor = async (runId: string, want: (s: SJ) => boolean, what: string): Promise<SJ> => {
+    let last = "";
+    for (let i = 0; i < 400; i++) {
+      const r = cli(["status", runId, "--json"]);
+      if (r.status === 0) {
+        const j = JSON.parse(r.stdout) as SJ;
+        last = `${j.status} nodes=${j.currentNodes.join(",")}`;
+        if (want(j)) return j;
+      } else last = r.stderr.trim();
+      await new Promise((res) => setTimeout(res, 250));
+    }
+    throw new Error(`timed out waiting for ${what}; last: ${last}`);
+  };
+  const detachedOut = (out: string): { runId: string; pid: number; log: string } => {
+    const m = /detached — run (\S+)\s+pid (\d+)\s+log (\S+)/.exec(out);
+    assert.ok(m, `expected detach announcement, got: ${out}`);
+    return { runId: m[1] as string, pid: Number(m[2]), log: m[3] as string };
+  };
+
+  // start --detach: returns at once (exit 0) with run id, pid, log path; nothing but the child drives.
+  const t0 = Date.now();
+  const st = cli(["start", "bugfix", "--plan", plan, "--companion-session", SESSION, "--detach"]);
+  assert.equal(st.status, 0, `start --detach failed: ${st.stdout}${st.stderr}`);
+  const d = detachedOut(st.stdout);
+  assert.ok(d.log.endsWith(join("runs", d.runId, "driver.log")));
+  const runDir = join(home, "runs", d.runId);
+  const paused = await waitFor(d.runId, (j) => j.status === "awaiting-gate", "awaiting-gate at reproduce");
+  assert.equal(paused.awaitingGate?.nodeId, "reproduce");
+  assert.equal(paused.awaitingGate?.revision, briefOf(runDir, "reproduce").revision, "status reports the gate revision");
+  assert.equal(paused.stale, false);
+  assert.deepEqual(paused.currentNodes, []);
+  assert.equal(paused.companion?.sessionId, SESSION);
+  assert.equal(paused.nodes["reproduce"]?.attempts.length, 1, "per-iteration timing recorded");
+  assert.ok(paused.lastEventAt !== null);
+  assert.ok(readFileSync(d.log, "utf8").includes("PAUSED at gate"), "driver output went to driver.log");
+  say(`14a passed: start --detach returned in ${Date.now() - t0}ms; status --json reports awaiting-gate/revision/companion/attempts`);
+
+  // Confirmed decide --detach. First prove a LIVE driver blocks it (state untouched), then a STALE lock does not.
+  const rb = briefOf(runDir, "reproduce");
+  const decideArgs = (b: GateBrief, extra: string[] = []) => ["gate", "decide", d.runId, "--gate", b.gateNodeId, "--revision", b.revision, "--action", "approve", "--session", SESSION, ...extra];
+  const proposal = cli(decideArgs(rb));
+  assert.equal(proposal.status, 0, proposal.stderr);
+  const cid = /--confirm ([0-9a-f]{16})/.exec(proposal.stdout)?.[1] as string;
+  assert.ok(cid);
+  assert.notEqual(cli([...decideArgs(rb), "--detach"]).status, 0, "--detach without --confirm is refused");
+
+  const sleeper = spawnChild(process.execPath, ["-e", "setTimeout(()=>{},60000)"], { stdio: "ignore" });
+  try {
+    const stateBefore = readFileSync(join(runDir, "state.json"), "utf8");
+    writeFileSync(join(home, "active.lock"), JSON.stringify({ runId: d.runId, pid: sleeper.pid, startedAt: new Date().toISOString() }));
+    const refused = cli([...decideArgs(rb, ["--confirm", cid]), "--detach"]);
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /already being driven by pid \d+/);
+    assert.equal(readFileSync(join(runDir, "state.json"), "utf8"), stateBefore, "refused second driver must not touch state");
+    assert.equal(statusJson(d.runId).driver?.pid, sleeper.pid, "status reports the live lock holder");
+  } finally {
+    sleeper.kill();
+  }
+  // Stale lock: a dead pid (an exited child) is recovered by the next driver, exactly as before.
+  const deadPid = spawnSync(process.execPath, ["-e", "0"]).pid;
+  writeFileSync(join(home, "active.lock"), JSON.stringify({ runId: d.runId, pid: deadPid, startedAt: new Date().toISOString() }));
+  assert.equal(statusJson(d.runId).driver, null, "a dead pid is not a live driver");
+  const dec1 = cli([...decideArgs(rb, ["--confirm", cid]), "--detach"]);
+  assert.equal(dec1.status, 0, `decide --detach failed: ${dec1.stdout}${dec1.stderr}`);
+  assert.equal(detachedOut(dec1.stdout).runId, d.runId);
+  const atFix = await waitFor(d.runId, (j) => j.status === "awaiting-gate" && j.awaitingGate?.nodeId === "fix", "awaiting-gate at fix");
+  assert.equal(atFix.stale, false);
+  assert.equal(atFix.nodes["reproduce"]?.status, "done");
+  say("14b passed: live lock refuses a second driver (state untouched, reported by status); stale lock recovered; decide --detach advanced to fix");
+
+  // Drive the remaining gates detached and poll to done.
+  const fb2 = briefOf(runDir, "fix");
+  const fp = cli(decideArgs(fb2, ["--run-next", "yes"]));
+  const fid = /--confirm ([0-9a-f]{16})/.exec(fp.stdout)?.[1] as string;
+  assert.equal(cli([...decideArgs(fb2, ["--run-next", "yes", "--confirm", fid]), "--detach"]).status, 0);
+  await waitFor(d.runId, (j) => j.status === "awaiting-gate" && j.awaitingGate?.nodeId === "pr", "awaiting-gate at pr");
+  const pb2 = briefOf(runDir, "pr");
+  const pp = cli(decideArgs(pb2));
+  const pid2 = /--confirm ([0-9a-f]{16})/.exec(pp.stdout)?.[1] as string;
+  assert.equal(cli([...decideArgs(pb2, ["--confirm", pid2]), "--detach"]).status, 0);
+  const done = await waitFor(d.runId, (j) => j.status === "done", "done");
+  assert.equal(done.stale, false);
+  assert.equal(done.awaitingGate, null);
+  assert.equal(done.driver, null, "lock released at the end");
+  // Event log: derived, ordered, complete.
+  const evs = readFileSync(join(runDir, "events.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l) as { ts: string; type: string; node?: string; detail?: Record<string, unknown> });
+  const kinds = new Set(evs.map((e) => e.type));
+  for (const k of ["run.started", "node.started", "node.finished", "gate.opened", "gate.decision", "run.status"]) assert.ok(kinds.has(k), `events.jsonl missing ${k}`);
+  assert.ok(evs.filter((e) => e.type === "gate.opened").every((e) => typeof e.detail?.["revision"] === "string"), "gate.opened carries the revision");
+  assert.ok(evs.some((e) => e.type === "gate.decision" && e.node === "reproduce" && e.detail?.["action"] === "approve" && typeof e.detail?.["decisionId"] === "string"));
+  assert.equal(evs.at(-1)?.type, "run.status");
+  assert.ok(evs.every((e, i) => i === 0 || (evs[i - 1] as { ts: string }).ts <= e.ts), "events are time-ordered");
+  say("14c passed: detached decides drove the run to done; status --json done/not stale; events.jsonl complete and ordered");
 }
 
 console.log("smoke-gates: ALL PASSED");

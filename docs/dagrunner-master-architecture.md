@@ -699,6 +699,45 @@ force-completed via `rerun` do NOT tear down, so bypassing the pre-PR gate leave
 environment running: use `dagrun verify cleanup <run>` (flagged by `status`/`list`). `rerun <run>
 verify` tears down a still-provisioned earlier environment first and refuses if that fails.
 
+**Agent-driven operation: `--detach`, `status --json`, `events.jsonl` (v0.1.61).** A companion agent drives
+the run instead of a terminal human, so foreground phases (minutes) and the lack of a cheap machine-readable
+status are the gap. All of it is plumbing around the one engine; no new execution path.
+
+- **`--detach`** (`start`, `resume`, `gate decide --confirm`; `runtime/detach.ts`): the parent re-invokes the
+  *same* CLI command minus `--detach` as a `detached` child (`stdio` → `<runDir>/driver.log`, `unref`),
+  prints run id / pid / log path, exits 0. The parent never takes the run lock and applies nothing; the child
+  is a normal driver and re-validates everything. Because an exit 0 that hides a doomed child would be a lie,
+  the parent first runs every check the child would refuse *synchronously*: `validateStartOptions` (workflow,
+  companion association — extracted from `startRun`), the confirmed-decision validation in `gateDecide`
+  (`DecideArgs.detach` replaces the `resumeRun` call), the lock check (`assertLockAvailable` /
+  `assertNoLiveDriver`), and a refusal of `--detach` where the child would need a terminal (legacy gate review,
+  a decide without `--confirm`). For `start`, the parent allocates the run id (`makeRunId`), claims `runs/<id>/`
+  (so `driver.log` has a home) and passes it as the internal `--run-id`; `startRun`'s clobber backstop
+  tolerates a dir holding only `driver.log`.
+- **Lock liveness is the run lock's pid, nothing new** (`core/lock.ts`). Before: same-run re-acquire always
+  succeeded, and `resumeRun` released-then-acquired unconditionally, so a second `resume` could steal a live
+  run and reconcile its running nodes to `failed`. Now `isPidAlive` (signal 0, EPERM = alive) gates it: a
+  same-run lock held by another *live* pid is refused ("already being driven by pid N") before any state is
+  touched; a dead pid is a stale lock and is recovered by overwriting, exactly as before; a *different* run's
+  lock (even stale) still needs `--force`; a corrupt lock still fails loud.
+- **`dagrun status [<run>] --json`** (`cli/status-json.ts`): read-only (no lock write, no `emitGateBrief` —
+  the gate revision comes from the latest `gate.opened` event). `status`: terminal states pass through
+  (`done|failed|aborted`), otherwise `awaiting-gate` iff a node is (per-node scan, as everywhere), else the
+  top-level status. `stale` = top-level `running`, no gate pending, no live lock holder for this run. Human
+  output without `--json` is unchanged. A run dir holding only `driver.log` errors loudly pointing at the log.
+- **`<runDir>/events.jsonl`** (`core/events.ts`): append-only `{ts,type,node?,iteration?,detail?}` history —
+  `run.started`, `run.status`, `node.started`, `node.finished` (status/duration/cost), `node.retry`,
+  `node.invalidated`, `gate.decision` (action/decisionId/target/revision/invalidated), `gate.opened`
+  (revision). It is *derived*, not a second source of truth: `writeState` diffs the previous `state.json` on
+  disk against the state it is about to write and appends the resulting events, so every existing transition
+  point (runDag, resumeRun, night mode, amend, abort) is covered by one choke point. Only `gate.opened` is an
+  explicit emit (`emitGateBrief`, once per revision), because the revision exists only once the brief is
+  built. An append failure warns and is swallowed — observability never fails a run.
+- **Per-iteration timing**: `NodeState.attempts[]` (`{iteration,status,startedAt,endedAt,durationMs,cost}`)
+  is appended by `runDag` whenever a node leaves `running` (done/failed/paused at a gate) and carried across
+  amend/reset, so a re-run no longer overwrites earlier iterations' timing. The existing `<node>-attempts/`
+  dirs archive *artifacts* only and hold no timing, so they are unchanged.
+
 ## 3b. Validation — smoke:mock (per-plan gate) and smoke:live (occasional)
 
 `npm run verify-baseline` = `npm ci && typecheck && unit tests && smoke:mock`. The standing gate: run on every plan change.

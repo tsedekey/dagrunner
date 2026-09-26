@@ -32,6 +32,7 @@ import { homedir, tmpdir } from "node:os";
 import type { Workflow } from "../core/types.js";
 import type { DagrunnerConfig } from "../config/xdg.js";
 import { readState, writeState } from "../core/state.js";
+import { appendEvent } from "../core/events.js";
 import { formatTeardown, teardownRun, type DockerExec } from "../core/verify-cleanup.js";
 import {
   ancestorsOf,
@@ -642,7 +643,7 @@ import {
   checkNodeReport,
   checkNoPlaceholders,
 } from "../core/dag.js";
-import { acquireLock, releaseLock } from "../core/lock.js";
+import { acquireLock, assertNoLiveDriver, releaseLock } from "../core/lock.js";
 import { makeSDKRunner } from "./sdk-runner.js";
 import { featureWorkflow } from "../workflow/feature-workflow.js";
 import { bugfixWorkflow } from "../workflow/bugfix-workflow.js";
@@ -737,6 +738,15 @@ function announcePause(
       ),
     );
   } else {
+    if (gate !== undefined) {
+      // Legacy gate: no brief/revision, but the gate opening is still a timeline event.
+      appendEvent(runDir, {
+        ts: new Date().toISOString(),
+        type: "gate.opened",
+        node: gate,
+        iteration: st.nodes[gate]?.iteration ?? 0,
+      });
+    }
     process.stdout.write(`dagrun: resume with: dagrun resume ${runId}\n`);
   }
 }
@@ -745,25 +755,21 @@ function announcePause(
 // startRun
 // ---------------------------------------------------------------------------
 
-export async function startRun(opts: {
+/**
+ * Everything startRun can refuse BEFORE any side effect: workflow validity and
+ * the explicit companion association. Exported so a `--detach` parent can fail
+ * synchronously (exit non-zero) instead of reporting success for a child that
+ * would die on the same check. Returns the companion's config dir (null = none).
+ */
+export function validateStartOptions(opts: {
   workflow: Workflow;
-  planPath: string;
-  homeDir: string;
   config: DagrunnerConfig;
-  maxBudgetUsd?: number;
-  force?: boolean;
-  executorFactory?: ExecutorFactory;
-  /** Run unattended: auto-approve agent-decidable gates when no concerns are flagged. */
   nightMode?: boolean;
-  /** CLAUDE_CODE_SESSION_ID of the originating planning companion (companion-gate workflows). */
   companionSessionId?: string;
-  /** Explicit opt-out: use legacy fresh-session gates for a companion-gate workflow. */
   noCompanion?: boolean;
-  /** Test seam: config dirs searched for the companion's transcript. */
   sessionConfigDirs?: string[];
-}): Promise<void> {
-  const { workflow, planPath, homeDir, config, force } = opts;
-
+}): { companionId: string | undefined; companionConfigDir: string | null } {
+  const { workflow, config } = opts;
   // Validate workflow at load time (hard rule: fail at load, not at runtime).
   loadWorkflow(workflow);
 
@@ -799,15 +805,47 @@ export async function startRun(opts: {
       `dagrun start: companion session "${companionId}" has no transcript in any known Claude config dir — refusing to record an association that could never be returned to`,
     );
   }
+  return { companionId, companionConfigDir };
+}
 
-  const runId = makeRunId(planPath, join(homeDir, "runs"));
+export async function startRun(opts: {
+  workflow: Workflow;
+  planPath: string;
+  homeDir: string;
+  config: DagrunnerConfig;
+  maxBudgetUsd?: number;
+  force?: boolean;
+  executorFactory?: ExecutorFactory;
+  /** Run unattended: auto-approve agent-decidable gates when no concerns are flagged. */
+  nightMode?: boolean;
+  /** CLAUDE_CODE_SESSION_ID of the originating planning companion (companion-gate workflows). */
+  companionSessionId?: string;
+  /** Explicit opt-out: use legacy fresh-session gates for a companion-gate workflow. */
+  noCompanion?: boolean;
+  /** Test seam: config dirs searched for the companion's transcript. */
+  sessionConfigDirs?: string[];
+  /**
+   * Run id pre-claimed by a `--detach` parent (which created runs/<id>/ to hold
+   * driver.log). Absent = allocate as usual.
+   */
+  runId?: string;
+}): Promise<void> {
+  const { workflow, planPath, homeDir, config, force } = opts;
+
+  const { companionId, companionConfigDir } = validateStartOptions(opts);
+
+  const runId = opts.runId ?? makeRunId(planPath, join(homeDir, "runs"));
   const runDir = join(homeDir, "runs", runId);
   const stateFile = join(runDir, "state.json");
   const worktreePath = join(homeDir, "worktrees", runId);
 
   // Defensive backstop: the run-count scheme ensures a unique ID is computed by
   // scanning existing dirs, but we assert loudly rather than silently clobber.
-  if (existsSync(runDir)) {
+  // A pre-claimed dir (--detach) may hold only the parent's driver.log.
+  const leftovers = existsSync(runDir)
+    ? readdirSync(runDir).filter((f) => !(opts.runId !== undefined && f === "driver.log"))
+    : [];
+  if (existsSync(runDir) && (opts.runId === undefined || leftovers.length > 0)) {
     throw new Error(
       `dagrun: run directory "${runDir}" already exists — this should never happen with the unique run-id scheme; aborting to avoid clobbering an existing run`,
     );
@@ -1240,6 +1278,11 @@ export async function resumeRun(opts: {
     process.exit(1);
   }
 
+  // A LIVE driver already owns this run: refuse BEFORE touching state — reconcile
+  // below would otherwise mark the live driver's running nodes failed. A stale
+  // lock (dead pid) falls through and is recovered as before.
+  assertNoLiveDriver(homeDir, runId);
+
   // Reconcile: running → failed (crash recovery). Then re-acquire lock.
   let state = reconcileRunningNodes(readState(stateFile));
   releaseLock(homeDir);
@@ -1444,6 +1487,8 @@ export async function resumeRun(opts: {
               iteration: 0,
               cost: ns.cost,
               gateHistory: ns.gateHistory,
+              // Earlier executions' timing survives an invalidation.
+              ...(ns.attempts !== undefined ? { attempts: ns.attempts } : {}),
               ...(ns.model !== undefined ? { model: ns.model } : {}),
             };
           }

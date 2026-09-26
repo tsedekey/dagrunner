@@ -7,6 +7,7 @@
  */
 
 import { mkdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
+import { appendEvent, readEvents } from "../core/events.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { DagrunnerConfig } from "../config/xdg.js";
@@ -56,6 +57,20 @@ export function emitGateBrief(args: {
     gateNodeId,
     configDirs: args.configDirs ?? sessionConfigDirs(config, state),
   });
+  // Gate-opened event (needs the revision, so it is emitted here, not derived
+  // from the state diff). `gate show` re-emits the brief: log each revision once.
+  const seen = readEvents(runDir).some(
+    (e) => e.type === "gate.opened" && e.node === gateNodeId && e.detail?.["revision"] === brief.revision,
+  );
+  if (!seen) {
+    appendEvent(runDir, {
+      ts: new Date().toISOString(),
+      type: "gate.opened",
+      node: gateNodeId,
+      iteration: brief.iteration,
+      detail: { revision: brief.revision },
+    });
+  }
   const dir = join(runDir, gateNodeId);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "gate.json"), JSON.stringify(brief, null, 2), "utf8");

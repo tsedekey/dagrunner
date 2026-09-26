@@ -16,7 +16,14 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
-import { acquireLock, releaseLock, readLock } from "./lock.js";
+import {
+  acquireLock,
+  releaseLock,
+  readLock,
+  isPidAlive,
+  liveDriver,
+} from "./lock.js";
+import { spawn } from "node:child_process";
 
 // ---------------------------------------------------------------------------
 // Absolute path to lock.ts — needed by spawnSync helper scripts.
@@ -195,4 +202,82 @@ test("readLock: corrupt file returns null (soft failure)", () => {
 
   const lock = readLock(homeDir);
   assert.equal(lock, null, "readLock must return null for corrupt file");
+});
+
+// ---------------------------------------------------------------------------
+// Liveness: a second driver on a run with a LIVE holder is refused; a stale
+// lock (dead pid) is recovered exactly as before.
+// ---------------------------------------------------------------------------
+
+function writeRawLock(homeDir: string, runId: string, pid: number): void {
+  writeFileSync(
+    join(homeDir, "active.lock"),
+    JSON.stringify({ runId, pid, startedAt: new Date().toISOString() }),
+    "utf8",
+  );
+}
+
+/** A pid that is certainly dead: a child that has already exited. */
+function deadPid(): number {
+  const r = spawnSync(process.execPath, ["-e", "0"]);
+  assert.equal(r.status, 0);
+  return r.pid;
+}
+
+test("isPidAlive: own pid alive, exited child dead", () => {
+  assert.equal(isPidAlive(process.pid), true);
+  assert.equal(isPidAlive(deadPid()), false);
+});
+
+test("liveDriver: live holder of THIS run is reported; dead pid / other run / none is null", () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "dr-lock-"));
+  assert.equal(liveDriver(homeDir, "r1"), null);
+  // Another live process (parent of this test process is alive and is not us).
+  writeRawLock(homeDir, "r1", process.ppid);
+  assert.equal(liveDriver(homeDir, "r1")?.pid, process.ppid);
+  assert.equal(liveDriver(homeDir, "other"), null);
+  writeRawLock(homeDir, "r1", deadPid());
+  assert.equal(liveDriver(homeDir, "r1"), null);
+  // Our own pid is never "another driver".
+  writeRawLock(homeDir, "r1", process.pid);
+  assert.equal(liveDriver(homeDir, "r1"), null);
+});
+
+test("acquireLock: same run held by a LIVE other pid → exits 1 with a clear message", () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "dr-lock-"));
+  const holder = spawn(process.execPath, ["-e", "setTimeout(()=>{},30000)"], {
+    stdio: "ignore",
+  });
+  try {
+    writeRawLock(homeDir, "live-run", holder.pid as number);
+    const result = runLockScript(homeDir, "live-run");
+    assert.equal(result.status, 1, `stderr: ${String(result.stderr)}`);
+    assert.match(
+      String(result.stderr),
+      /live-run is already being driven by pid \d+/,
+    );
+    assert.equal(
+      readLock(homeDir)?.pid,
+      holder.pid,
+      "the live holder's lock must be left untouched",
+    );
+  } finally {
+    holder.kill();
+  }
+});
+
+test("acquireLock: same run with a STALE lock (dead pid) is recovered, as before", () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "dr-lock-"));
+  writeRawLock(homeDir, "stale-run", deadPid());
+  const result = runLockScript(homeDir, "stale-run");
+  assert.equal(result.status, 0, `stderr: ${String(result.stderr)}`);
+  assert.notEqual(readLock(homeDir)?.pid, undefined);
+});
+
+test("acquireLock: a stale lock of a DIFFERENT run still needs --force (unchanged)", () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "dr-lock-"));
+  writeRawLock(homeDir, "dead-run", deadPid());
+  const result = runLockScript(homeDir, "new-run");
+  assert.equal(result.status, 1);
+  assert.match(String(result.stderr), /dead-run/);
 });

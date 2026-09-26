@@ -141,6 +141,21 @@ export function resumeOpensCompanion(args: {
   return gateOpen(args);
 }
 
+/**
+ * True when `dagrun resume <run>` with these flags would spawn the interactive
+ * `claude` review session (a legacy, non-companion gate with no decision flags) —
+ * impossible in a detached child (no terminal), so `--detach` must refuse it.
+ */
+export function resumeNeedsInteractiveReview(args: {
+  homeDir: string;
+  runId: string;
+  hasDecisionFlags: boolean;
+}): boolean {
+  const r = load(args.homeDir, args.runId);
+  if (r === null || args.hasDecisionFlags || awaitingGateId(r.state) === undefined) return false;
+  return !(r.state.companion !== undefined && r.workflow.companionGates === true);
+}
+
 export type DecideArgs = {
   homeDir: string;
   config: DagrunnerConfig;
@@ -154,6 +169,12 @@ export type DecideArgs = {
   session?: string;
   confirm?: string;
   configDirs?: string[];
+  /**
+   * `--detach`: called INSTEAD of resumeRun once the confirmed decision has been
+   * fully validated. It hands execution to a detached child (which re-validates
+   * and takes the run lock); the parent applies nothing itself.
+   */
+  detach?: (decisionId: string) => number;
   executorFactory?: Parameters<typeof resumeRun>[0]["executorFactory"];
   /** Test seam: docker exec for the verify-environment teardown the verdict triggers. */
   dockerExec?: Parameters<typeof resumeRun>[0]["dockerExec"];
@@ -239,6 +260,8 @@ export async function gateDecide(a: DecideArgs): Promise<number> {
   if (a.confirm !== id) {
     return err(`refused [confirm-mismatch] --confirm ${a.confirm} does not match this exact decision (${id}); re-propose`);
   }
+
+  if (a.detach !== undefined) return a.detach(id);
 
   await resumeRun({
     runId: a.runId,

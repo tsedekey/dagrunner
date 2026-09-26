@@ -114,6 +114,28 @@ Teardown: only a `gate decide --confirm` at a gate downstream of `verify` tears 
 environment. If a gate was bypassed with `rerun`, or the run was resumed without a decision, clean up with
 `dagrun verify cleanup <run>`; `dagrun rerun <run> verify` tears down a still-provisioned environment first.
 
+## Running in the background (`--detach`)
+
+`start` and `gate decide --confirm` normally run phases in the foreground until the next pause — minutes
+in which you cannot answer Eddie. Add `--detach` to either (and to `resume`, where it continues execution):
+dagrun spawns the same command as a detached child (output in `<run>/driver.log`), prints the run id, pid and
+log path, and exits 0 at once. The child is the only process that drives the run and takes the run lock.
+
+- Start: `dagrun start bugfix --plan <file> --companion-session "$CLAUDE_CODE_SESSION_ID" --detach`.
+  `status` may say "no state.json yet" for a few seconds while the worktree is created — retry, or read `driver.log`.
+- Confirm a decision: `dagrun gate decide … --confirm <id> --detach` (`--detach` without `--confirm` is refused;
+  a proposal changes nothing and returns immediately anyway).
+- Poll: `dagrun status <run> --json` (read-only). Read `status` — `running` | `awaiting-gate` | `done` |
+  `failed` | `paused` | `aborted`; `currentNodes`; `awaitingGate {nodeId, revision, since, reason}`; per-node
+  `attempts` (timing/cost per iteration); `lastEventAt`. `stale: true` means status `running` with no live
+  process holding the run lock (the driver crashed): recover with `dagrun resume <run>` (add `--detach`).
+  `driver.pid` is the live lock holder, if any. The timeline is `<run>/events.jsonl` (append-only, derived).
+- A second driver on a run whose lock has a live holder is refused ("already being driven by pid N"). Do not
+  work around it; poll instead.
+- After ANY compaction or a resumed conversation, re-run `dagrun gate show <run>` before deciding: the
+  revision in your memory may be stale, and `status --json` deliberately does not rewrite the brief.
+- Legacy (non-companion) gates that need an interactive terminal refuse `--detach`.
+
 ## Recovery
 
 - **Original conversation unavailable** (`companion.status: blocked`): pause and explain. Choices: locate
