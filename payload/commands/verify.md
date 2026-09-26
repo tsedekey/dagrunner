@@ -59,12 +59,42 @@ command -v c8ctl >/dev/null 2>&1 && echo c8ctl=present || echo c8ctl=absent
 ls "$DAGRUN_WORKTREE"/c8run "$DAGRUN_WORKTREE"/docker-compose* "$DAGRUN_WORKTREE"/*/docker-compose* 2>/dev/null
 ```
 
-Options: **docker-compose** (setup from a compose file in the repo), **c8run** (repo's C8 Run
-distribution, as an alternative), **source** (run the built module directly, when the bug is
-reproducible without a full cluster), and **c8ctl** for operations it actually supports (check
-`c8ctl --help`; never assume a subcommand). Skill/guide text mentioning a tool does not make it
-available — only a command that ran does. If the guide's scenario needs no cluster (pure library
-behavior), a source-level demonstration is the right, smaller answer.
+**Default for anything with a runtime surface (web app, REST endpoint, config property, engine
+behavior): a real process on a bound loopback port**, using only pre-approved executables
+(`./mvnw`, `docker`). Preference order:
+
+1. **`docker`** — build the distribution from the worktree, wrap it in an image, `docker run` it:
+
+   ```bash
+   ./mvnw install -pl dist -am -Dquickly -T1C            # -> dist/target/camunda-zeebe*.tar.gz
+   docker build --build-arg BASE=public --build-arg DISTBALL=<that tar.gz> \
+     -f camunda.Dockerfile -t dagrun-$DAGRUN_RUN_ID-camunda .
+   docker run -d --name dagrun-$DAGRUN_RUN_ID-camunda -p 127.0.0.1:<free-port>:8080 \
+     dagrun-$DAGRUN_RUN_ID-camunda
+   ```
+
+   (Pattern from `docs/zeebe/building_docker_images.md`; adjust to what the repo actually has —
+   probe, do not assume. Give the container the minimum config the scenario needs, e.g. an opt-out
+   property via `-e`.) Then `curl` the real endpoint — that is your `candidate` observation and the
+   manual steps for `demo.md`. Image digest = `artifactIdentity`.
+2. **compose / c8run** — only if the repo already ships a ready compose file or a built `c8run`
+   binary (packaging c8run needs Go + credentials: not available here — do not try).
+3. **c8ctl** — for seeding/observing an already-running cluster, only if `c8ctl` is present.
+   (`/seed-data` + `seeding-spec.json` belong to the on-demand `/manual-smoke` sibling and a
+   human-started cluster; this node neither produces nor consumes them. Seed minimal demo data
+   yourself with `curl`/`c8ctl` against your own container when the scenario needs any.)
+
+**Forbidden — these are known dead ends, do not attempt them:** hand-writing a scratch Spring Boot
+app / `main` class / harness; assembling a classpath with `dependency:build-classpath`; raw
+`java`/`javac` (not pre-approved); adding any source file or editing any `pom.xml` in the worktree;
+compiling inside a stock image (JRE only, no `javac`).
+
+**Source-level demonstration is a deliberate exception, not a fallback.** Use `capability: "source"`
+only when there is genuinely no runtime scenario to stand up (e.g. pure library logic), and then
+state why in `sourceRationale` in the report (the engine rejects `source` without it). "Docker build
+was slow/hard" is not a rationale; re-running an existing test is at best a supplement, never the
+demonstration of a change that has a runtime surface. If the docker path fails for a real reason,
+classify `BLOCKED_RUNTIME` with that reason rather than substituting a weaker demonstration.
 
 ## Step 3 — Pin the candidate (provenance)
 
@@ -75,6 +105,11 @@ The artifact you demonstrate MUST be built from this worktree. A stock released 
 git -C "$DAGRUN_WORKTREE" rev-parse HEAD
 git -C "$DAGRUN_WORKTREE" status --porcelain -uall
 ```
+
+`dirtyFiles` may be given either as those raw porcelain lines or as bare paths — the engine
+normalizes both sides. It ignores anything under `node_modules` (dependency output written by
+unrelated processes such as an IDE's background install); every other tracked or untracked file is
+still compared exactly.
 
 The fix may be uncommitted (`pr` commits later); the candidate is HEAD **plus** those dirty files.
 Build from the working tree, then record: the built artifact path, its identity (image digest or
@@ -121,6 +156,7 @@ Always written, on every path. Valid JSON. Schema (`schemaVersion` is literally 
   "outcome": "DEMONSTRATED | NOT_DEMONSTRATED | BLOCKED_RUNTIME",
   "reason": "<required unless DEMONSTRATED: one or two honest sentences>",
   "capability": "docker-compose | c8run | c8ctl | source",
+  "sourceRationale": "<required only when capability is source: why no real runtime could demonstrate this>",
   "toolVersions": { "docker": "...", "java": "..." },
   "target": {
     "kind": "local-disposable",

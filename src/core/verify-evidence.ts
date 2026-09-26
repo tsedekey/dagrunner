@@ -34,6 +34,38 @@ const str = (v: unknown): string =>
 
 export type WorktreeState = { head: string | null; dirty: string[] | null };
 
+const PORCELAIN_PREFIX = /^[ MTADRCU?!]{2} /;
+const hasNodeModules = (p: string) => p.split("/").includes("node_modules");
+
+/**
+ * Canonical form of a dirty-file list, applied to BOTH the reported and the
+ * live list so the two can never disagree on representation:
+ *  - a `git status --porcelain` line and a bare path both reduce to the bare path
+ *    (rename `old -> new` keeps `new`, quotes stripped);
+ *  - anything under a `node_modules` directory is dropped — untracked/ignored
+ *    dependency output that IDE indexers or background installs write into the
+ *    worktree is never part of the candidate;
+ *  - an untracked DIRECTORY summary (`?? dir/`, no `-uall`) is dropped: it cannot
+ *    be compared to the file-level live list, and any real file inside it still
+ *    appears in the live list, so hiding it would fail loud, not pass silently.
+ * Tracked changes and untracked real files are still compared exactly.
+ */
+export function normalizeDirty(list: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const raw of list) {
+    let p = raw;
+    let untrackedDir = false;
+    if (PORCELAIN_PREFIX.test(p)) {
+      untrackedDir = p.startsWith("??") && p.trimEnd().endsWith("/");
+      p = p.slice(3);
+    }
+    p = p.replace(/^.* -> /, "").replace(/^"|"$/g, "");
+    if (p === "" || untrackedDir || hasNodeModules(p)) continue;
+    out.push(p);
+  }
+  return out.sort();
+}
+
 export function validateVerifyReport(
   report: unknown,
   wt: WorktreeState,
@@ -57,6 +89,11 @@ export function validateVerifyReport(
   if (!(CAPABILITIES as readonly unknown[]).includes(report["capability"])) {
     return fail(`capability must be one of ${CAPABILITIES.join("|")}`);
   }
+  // A source-level demonstration is a deliberate, per-case decision (no sensible
+  // runtime scenario), never the default: it must say why a real runtime was not used.
+  if (report["capability"] === "source" && str(report["sourceRationale"]) === "") {
+    return fail(`capability "source" requires a non-empty "sourceRationale" — why a real runtime (docker/c8run) could not demonstrate this change`);
+  }
   const target = report["target"];
   if (!isObj(target) || target["kind"] !== "local-disposable") {
     return fail(`target.kind must be "local-disposable"`);
@@ -76,14 +113,20 @@ export function validateVerifyReport(
     return fail(`candidate.sourceRevision ${rev} != worktree HEAD ${wt.head} — evidence is for a different revision`);
   }
   // Uncommitted fix changes are part of the candidate: the report must name them
-  // exactly as `git status --porcelain -uall` shows them NOW (also catches a
+  // as `git status --porcelain -uall` shows them NOW (compared via normalizeDirty) (also catches a
   // verifier that edited the worktree while demonstrating).
   const dirty = cand["dirtyFiles"];
   if (!Array.isArray(dirty) || !dirty.every((d) => typeof d === "string")) {
     return fail("candidate.dirtyFiles must be an array of paths from `git status --porcelain -uall` (empty when committed)");
   }
-  if (wt.dirty !== null && JSON.stringify([...dirty].sort()) !== JSON.stringify([...wt.dirty].sort())) {
-    return fail(`candidate.dirtyFiles does not match the worktree now (reported ${JSON.stringify(dirty)}, actual ${JSON.stringify(wt.dirty)})`);
+  if (wt.dirty !== null) {
+    const reported = normalizeDirty(dirty as string[]);
+    const actual = normalizeDirty(wt.dirty);
+    if (JSON.stringify(reported) !== JSON.stringify(actual)) {
+      const missing = actual.filter((p) => !reported.includes(p));
+      const extra = reported.filter((p) => !actual.includes(p));
+      return fail(`candidate.dirtyFiles does not match the worktree now (unreported: ${JSON.stringify(missing)}, reported but not dirty: ${JSON.stringify(extra)})`);
+    }
   }
   if (str(cand["artifact"]) === "" || str(cand["artifactIdentity"]) === "") {
     return fail("candidate.artifact and candidate.artifactIdentity (digest/sha256) are required");
@@ -140,19 +183,19 @@ export function gitHead(worktreePath: string): string | null {
   }
 }
 
-/** Sorted paths from `git status --porcelain -uall`, or null when not a git checkout. */
+/** Sorted bare paths from `git status --porcelain -uall` (see normalizeDirty), or null when not a git checkout. */
 export function gitDirtyPaths(worktreePath: string): string[] | null {
   try {
-    return execFileSync(
-      "git",
-      ["-C", worktreePath, "status", "--porcelain", "-uall"],
-      { stdio: ["ignore", "pipe", "ignore"] },
-    )
-      .toString()
-      .split("\n")
-      .filter((l) => l.trim() !== "")
-      .map((l) => l.slice(3).replace(/^"|"$/g, ""))
-      .sort();
+    return normalizeDirty(
+      execFileSync(
+        "git",
+        ["-C", worktreePath, "status", "--porcelain", "-uall"],
+        { stdio: ["ignore", "pipe", "ignore"] },
+      )
+        .toString()
+        .split("\n")
+        .filter((l) => l.trim() !== ""),
+    );
   } catch {
     return null;
   }

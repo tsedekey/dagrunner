@@ -620,7 +620,7 @@ loopback-only disposable target (docker-compose / C8 Run / c8ctl / source — se
 sequence), and writes `verify-report.json` (schema 2: `DEMONSTRATED | NOT_DEMONSTRATED |
 BLOCKED_RUNTIME`) plus `demo.md` (manual replay steps). Only `DEMONSTRATED` passes, and
 `evidenceCheck: "verify-runtime"` (`core/verify-evidence.ts`) mechanically refuses a claim without a
-worktree-built candidate at HEAD, a matching dirty-file list, a candidate observation, a loopback
+worktree-built candidate at HEAD, a matching dirty-file list (normalized on both sides; `node_modules` and untracked-dir summaries ignored; `capability: source` needs a `sourceRationale`), a candidate observation, a loopback
 target and honest cleanup. It does not replace unit/integration/regression checks or CI.
 
 ## 3b. Validation — smoke:mock (per-plan gate) and smoke:live (occasional)

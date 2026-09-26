@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkEvidence, validateVerifyReport } from "./verify-evidence.js";
+import { checkEvidence, gitDirtyPaths, normalizeDirty, validateVerifyReport } from "./verify-evidence.js";
 import type { Node } from "./types.js";
 
 const wt = { head: "abc123", dirty: ["src/Fix.java", "src/FixTest.java"] };
@@ -99,4 +100,47 @@ test("checkEvidence: no-op without evidenceCheck; fails loud on missing/garbled 
   assert.match((checkEvidence(dir, "verify", node, wt) as { error: string }).error, /unreadable/);
   writeFileSync(join(dir, "verify", "verify-report.json"), JSON.stringify(good()));
   assert.deepEqual(checkEvidence(dir, "verify", node, wt), { ok: true });
+});
+
+test("dirtyFiles: porcelain-prefixed reported lines match the bare-path live list (59478-2 format mismatch)", () => {
+  const r = bad((x) => { x.candidate.dirtyFiles = [" M src/Fix.java", "A  src/FixTest.java"]; });
+  assert.deepEqual(r, { ok: true });
+});
+
+test("dirtyFiles: node_modules / untracked-dir noise on either side is ignored (59478-2 race)", () => {
+  const live = { head: "abc123", dirty: ["src/Fix.java", "src/FixTest.java", "webapp/client/node_modules", "testing/x/node_modules/a/b.js"] };
+  const r = good();
+  r.candidate.dirtyFiles = ["?? webapp/", "?? testing/x/", " M src/Fix.java", "M  src/FixTest.java"];
+  assert.deepEqual(validateVerifyReport(r, live), { ok: true });
+});
+
+test("dirtyFiles: real differences still fail (edited, extra untracked source, missing) and name the paths", () => {
+  const extra = validateVerifyReport(good(), { head: "abc123", dirty: ["src/Fix.java", "src/FixTest.java", "src/Scratch.java"] });
+  assert.match((extra as { error: string }).error, /unreported: \["src\/Scratch.java"\]/);
+  const swapped = bad((x) => { x.candidate.dirtyFiles = ["src/Fix.java", "src/Other.java"]; });
+  assert.match((swapped as { error: string }).error, /does not match/);
+  // a path that merely contains "node_modules" as a substring is NOT noise
+  assert.deepEqual(normalizeDirty(["src/my_node_modules_x/a.ts"]), ["src/my_node_modules_x/a.ts"]);
+});
+
+test("normalizeDirty: renames keep the new path; quotes stripped; both forms equal", () => {
+  assert.deepEqual(normalizeDirty(["R  old.ts -> new.ts", '?? "sp ace.ts"']), ["new.ts", "sp ace.ts"]);
+});
+
+test("gitDirtyPaths returns normalized bare paths and skips node_modules", () => {
+  const dir = mkdtempSync(join(tmpdir(), "gd-"));
+  execFileSync("git", ["-C", dir, "init", "-q"]);
+  mkdirSync(join(dir, "node_modules", "p"), { recursive: true });
+  writeFileSync(join(dir, "node_modules", "p", "i.js"), "x");
+  writeFileSync(join(dir, "a.txt"), "x");
+  assert.deepEqual(gitDirtyPaths(dir), ["a.txt"]);
+});
+
+test("capability source requires a sourceRationale; runtime capabilities do not", () => {
+  const src = bad((x) => { x.capability = "source"; });
+  assert.match((src as { error: string }).error, /sourceRationale/);
+  const ok = good() as Record<string, unknown>;
+  ok["capability"] = "source";
+  ok["sourceRationale"] = "pure library change; no runtime surface to seed";
+  assert.deepEqual(validateVerifyReport(ok, wt), { ok: true });
 });

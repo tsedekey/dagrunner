@@ -60,6 +60,7 @@ function producesFileContent(
         schemaVersion: 2,
         outcome: gate.passValues[0],
         capability: "source",
+        sourceRationale: "mock fixture",
         target: {
           kind: "local-disposable",
           host: "localhost",
