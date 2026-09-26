@@ -337,8 +337,8 @@ await resumeRun({
   };
   assert.strictEqual(
     report.outcome,
-    "PASS",
-    `A4: verify-report.json outcome must be PASS, got ${String(report.outcome)}`,
+    "DEMONSTRATED",
+    `A4: verify-report.json outcome must be DEMONSTRATED, got ${String(report.outcome)}`,
   );
   assert.strictEqual(
     state.nodes["pr"]?.status,
@@ -373,6 +373,7 @@ const PLAN_B = makePlanPath(HOME_B, BASE_TS + 1);
 
 await startRun({
   workflow: bugfixWorkflow,
+  noCompanion: true, // legacy fresh-session gates; companion gates are covered by smoke-gates.ts
   planPath: PLAN_B,
   homeDir: HOME_B,
   config,
@@ -438,7 +439,7 @@ await resumeRun({
   const report = JSON.parse(readFileSync(reportPath, "utf8")) as {
     outcome?: string;
   };
-  assert.strictEqual(report.outcome, "PASS");
+  assert.strictEqual(report.outcome, "DEMONSTRATED");
   assert.strictEqual(
     state.nodes["pr"]?.status,
     "done",
@@ -919,7 +920,7 @@ await rerunNode({
   ) as { outcome?: string };
   assert.strictEqual(
     newReport.outcome,
-    "PASS",
+    "DEMONSTRATED",
     `I: rerun must land a fresh, passing verify-report.json in the live dir, got ${String(newReport.outcome)}`,
   );
 

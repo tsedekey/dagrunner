@@ -32,7 +32,25 @@ import { homedir, tmpdir } from "node:os";
 import type { Workflow } from "../core/types.js";
 import type { DagrunnerConfig } from "../config/xdg.js";
 import { readState, writeState } from "../core/state.js";
-import type { RunState, NodeState, NodeStatus } from "../core/state.js";
+import {
+  findSessionConfigDir,
+  planAmend,
+  validateGateRequest,
+  type GateRequest,
+} from "../core/gate.js";
+import {
+  awaitingGateId,
+  describeGatePause,
+  emitGateBrief,
+  sessionConfigDirs,
+  writeNextNodeDecision,
+} from "./gate-files.js";
+import type {
+  RunState,
+  NodeState,
+  NodeStatus,
+  GateHistoryEntry,
+} from "../core/state.js";
 import type { ExecutionCtx, NodeExecutor } from "./mock-executor.js";
 
 type ExecutorFactory = (
@@ -62,7 +80,7 @@ type ExecutorFactory = (
  */
 export function parseGateDecision(
   content: string,
-): { decision: "approve" | "reject"; body: string } | null {
+): { decision: "approve" | "reject"; body: string; runNext?: boolean } | null {
   if (!content || content.trim() === "") return null;
 
   const lines = content.split("\n");
@@ -89,11 +107,19 @@ export function parseGateDecision(
     body = restLines.slice(start).join("\n").trimEnd();
   }
 
-  return { decision: value, body };
+  // Optional `run-next: yes|no` line (approve at a gate that decides a downstream node).
+  const rn = /^run-next:\s*(yes|no)\s*$/im.exec(content);
+  return {
+    decision: value,
+    body,
+    ...(value === "approve" && rn?.[1] !== undefined
+      ? { runNext: rn[1].toLowerCase() === "yes" }
+      : {}),
+  };
 }
 
-/** Node IDs that night-mode may auto-approve (Gate 1 + Gate 2). */
-const AGENT_DECIDABLE_GATES = new Set(["define", "reproduce", "fix"]);
+/** Node IDs that night-mode may auto-approve (Gate 1 + Gate 2; "pr" = bugfix pre-PR gate, previously ungated so unattended behavior is preserved). */
+const AGENT_DECIDABLE_GATES = new Set(["define", "reproduce", "fix", "pr"]);
 
 /**
  * True when night-mode may auto-decide the gate for nodeId.
@@ -611,7 +637,7 @@ import {
   resetInterruptedNodes,
   MAX_INTERRUPT_RETRIES,
   runDag,
-  checkOutcomeGate,
+  checkNodeReport,
   checkNoPlaceholders,
 } from "../core/dag.js";
 import { acquireLock, releaseLock } from "../core/lock.js";
@@ -681,6 +707,39 @@ function workflowFromState(state: RunState): Workflow {
 }
 
 // ---------------------------------------------------------------------------
+// announcePause — what to print when a run checkpoints at a gate
+// ---------------------------------------------------------------------------
+
+/**
+ * Companion-mode runs write the gate brief and point at the originating
+ * companion (or say honestly that it is unavailable); legacy runs keep the
+ * `dagrun resume` hint.
+ */
+function announcePause(
+  runId: string,
+  runDir: string,
+  stateFile: string,
+  workflow: Workflow,
+  config: DagrunnerConfig,
+): void {
+  const st = readState(stateFile);
+  const gate = awaitingGateId(st);
+  if (
+    gate !== undefined &&
+    st.companion !== undefined &&
+    workflow.companionGates === true
+  ) {
+    process.stdout.write(
+      describeGatePause(
+        emitGateBrief({ runDir, state: st, workflow, gateNodeId: gate, config }),
+      ),
+    );
+  } else {
+    process.stdout.write(`dagrun: resume with: dagrun resume ${runId}\n`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // startRun
 // ---------------------------------------------------------------------------
 
@@ -694,11 +753,50 @@ export async function startRun(opts: {
   executorFactory?: ExecutorFactory;
   /** Run unattended: auto-approve agent-decidable gates when no concerns are flagged. */
   nightMode?: boolean;
+  /** CLAUDE_CODE_SESSION_ID of the originating planning companion (companion-gate workflows). */
+  companionSessionId?: string;
+  /** Explicit opt-out: use legacy fresh-session gates for a companion-gate workflow. */
+  noCompanion?: boolean;
+  /** Test seam: config dirs searched for the companion's transcript. */
+  sessionConfigDirs?: string[];
 }): Promise<void> {
   const { workflow, planPath, homeDir, config, force } = opts;
 
   // Validate workflow at load time (hard rule: fail at load, not at runtime).
   loadWorkflow(workflow);
+
+  // Companion association: explicit, never a silent default (fail before any side effect).
+  const companionId = opts.companionSessionId?.trim();
+  if (workflow.companionGates === true) {
+    if (companionId === undefined && opts.noCompanion !== true) {
+      throw new Error(
+        `dagrun start: workflow "${workflow.name}" returns every gate to the originating planning companion — ` +
+          `pass --companion-session <id> (the companion's CLAUDE_CODE_SESSION_ID) or --no-companion to use legacy fresh-session gates`,
+      );
+    }
+    if (companionId !== undefined && opts.noCompanion === true) {
+      throw new Error(`dagrun start: --companion-session and --no-companion are mutually exclusive`);
+    }
+    if (companionId !== undefined && opts.nightMode === true) {
+      throw new Error(
+        `dagrun start: --night auto-approves gates, which contradicts companion gates — use --no-companion for unattended runs`,
+      );
+    }
+  } else if (companionId !== undefined) {
+    throw new Error(`dagrun start: workflow "${workflow.name}" has no companion gates; --companion-session does not apply`);
+  }
+  const companionConfigDir =
+    companionId === undefined
+      ? null
+      : findSessionConfigDir(
+          companionId,
+          opts.sessionConfigDirs ?? sessionConfigDirs(config),
+        );
+  if (companionId !== undefined && companionConfigDir === null) {
+    throw new Error(
+      `dagrun start: companion session "${companionId}" has no transcript in any known Claude config dir — refusing to record an association that could never be returned to`,
+    );
+  }
 
   const runId = makeRunId(planPath, join(homeDir, "runs"));
   const runDir = join(homeDir, "runs", runId);
@@ -847,6 +945,19 @@ export async function startRun(opts: {
     worktreePath,
     branch: branchName,
     sourcePlanPath: planPath,
+    ...(companionId !== undefined
+      ? {
+          companion: {
+            sessionId: companionId,
+            ...(companionConfigDir !== null
+              ? { configDir: companionConfigDir }
+              : {}),
+            associatedAt: new Date().toISOString(),
+            source: "handoff" as const,
+            reconstructed: false,
+          },
+        }
+      : {}),
     nodes: makeInitialNodeStates(workflow),
     // Frontmatter fields — survive resume via state.json.
     ...(baseBranch !== "main" ? { baseBranch } : {}),
@@ -898,7 +1009,7 @@ export async function startRun(opts: {
         process.stdout.write(
           `dagrun: [night] paused — "${gateNodeId}" requires human decision\n`,
         );
-        process.stdout.write(`dagrun: resume with: dagrun resume ${runId}\n`);
+        announcePause(runId, runDir, stateFile, workflow, config);
         return;
       }
 
@@ -909,7 +1020,7 @@ export async function startRun(opts: {
         process.stdout.write(
           `dagrun: [night] paused at gate "${gateNodeId}" — severity "${nightState.severity ?? ""}" requires human review\n`,
         );
-        process.stdout.write(`dagrun: resume with: dagrun resume ${runId}\n`);
+        announcePause(runId, runDir, stateFile, workflow, config);
         return;
       }
 
@@ -934,7 +1045,7 @@ export async function startRun(opts: {
         process.stdout.write(
           `dagrun: [night] paused at gate "${gateNodeId}" — concerns flagged in artifact\n`,
         );
-        process.stdout.write(`dagrun: resume with: dagrun resume ${runId}\n`);
+        announcePause(runId, runDir, stateFile, workflow, config);
         return;
       }
 
@@ -954,6 +1065,16 @@ export async function startRun(opts: {
         gateNode !== undefined
           ? checkNoPlaceholders(runDir, gateNodeId, gateNode)
           : { ok: true as const };
+      if (gateNode?.gate?.decidesNode !== undefined) {
+        // Unattended default preserves prior behavior: the decided node runs.
+        writeNextNodeDecision({
+          runDir,
+          gateNodeId,
+          node: gateNode.gate.decidesNode,
+          run: true,
+          basis: "night-mode default (node runs, as before the fix-gate decision existed)",
+        });
+      }
       nightState = {
         ...nightState,
         nodes: {
@@ -1017,7 +1138,7 @@ export async function startRun(opts: {
     process.stdout.write(
       `dagrun: checkpointed at gate — node "${gateNode?.[0] ?? "unknown"}" awaiting review\n`,
     );
-    process.stdout.write(`dagrun: resume with: dagrun resume ${runId}\n`);
+    announcePause(runId, runDir, stateFile, workflow, config);
     return;
   }
 
@@ -1031,7 +1152,7 @@ export async function startRun(opts: {
     process.stdout.write(
       `dagrun: checkpointed at gate — node "${gateNode?.[0] ?? "unknown"}" awaiting review\n`,
     );
-    process.stdout.write(`dagrun: resume with: dagrun resume ${runId}\n`);
+    announcePause(runId, runDir, stateFile, workflow, config);
   } else {
     releaseLock(homeDir);
     process.stdout.write(`dagrun: run ${runId} ${result.status}\n`);
@@ -1049,6 +1170,12 @@ export async function resumeRun(opts: {
   config: DagrunnerConfig;
   approve?: boolean;
   rejectComment?: string;
+  /** Legacy `--approve` at a gate with `decidesNode`: run/skip that node (default: run, recorded). */
+  runNext?: boolean;
+  /** Companion gates: the validated-by-CLI request; re-validated here against fresh state. */
+  gateRequest?: GateRequest & { decisionId: string };
+  /** Test seam: config dirs searched for the companion's transcript. */
+  sessionConfigDirs?: string[];
   executorFactory?: ExecutorFactory;
 }): Promise<void> {
   const { runId, homeDir, config } = opts;
@@ -1134,7 +1261,164 @@ export async function resumeRun(opts: {
     } else {
       const maxIterations = gateNode.gate?.maxIterations ?? 10;
 
-      if (opts.rejectComment !== undefined) {
+      // ---- Companion gates: the decision comes from the originating companion
+      // via `dagrun gate decide`, never a fresh spawned session or a bare flag.
+      const companionMode =
+        state.companion !== undefined && workflow.companionGates === true;
+      let approveNow = opts.approve === true;
+      let rejectNow = opts.rejectComment;
+      let boundMeta: Partial<GateHistoryEntry> = {};
+      let runNext = opts.runNext;
+      let nextFocus: string | undefined;
+      if (companionMode) {
+        if (opts.approve === true || opts.rejectComment !== undefined) {
+          process.stderr.write(
+            `dagrun: run "${runId}" uses companion gates — bare --approve/--reject is refused. ` +
+              `Use \`dagrun gate show ${runId}\` then \`dagrun gate decide ${runId} …\`\n`,
+          );
+          releaseLock(homeDir);
+          process.exit(1);
+        }
+        const brief = emitGateBrief({
+          runDir,
+          state,
+          workflow,
+          gateNodeId,
+          config,
+          ...(opts.sessionConfigDirs !== undefined ? { configDirs: opts.sessionConfigDirs } : {}),
+        });
+        if (opts.gateRequest === undefined) {
+          process.stdout.write(describeGatePause(brief));
+          releaseLock(homeDir);
+          process.exit(0);
+        }
+        const req = opts.gateRequest;
+        const v = validateGateRequest({ state, workflow, brief, req });
+        if (!v.ok) {
+          process.stderr.write(`dagrun: gate decision refused [${v.code}] ${v.message}\n`);
+          releaseLock(homeDir);
+          process.exit(1);
+        }
+        const now = new Date().toISOString();
+        boundMeta = {
+          revision: req.revision,
+          action: v.action,
+          target: v.target,
+          decisionId: req.decisionId,
+        };
+        if (v.action === "hold") {
+          const note = (req.comment ?? "").trim();
+          state = {
+            ...state,
+            nodes: {
+              ...state.nodes,
+              [gateNodeId]: {
+                ...gateNodeState,
+                gateHistory: [
+                  ...gateNodeState.gateHistory,
+                  {
+                    decision: "hold",
+                    comment: note,
+                    timestamp: now,
+                    ...boundMeta,
+                    resumePoint: `stay paused at gate "${gateNodeId}" (${note})`,
+                  },
+                ],
+              },
+            },
+            updatedAt: now,
+          };
+          writeState(stateFile, state);
+          process.stdout.write(`dagrun: hold recorded at gate "${gateNodeId}" — still paused, nothing advanced\n`);
+          releaseLock(homeDir);
+          process.exit(0);
+        }
+        if (v.action === "approve") {
+          approveNow = true;
+          if (req.runNext !== undefined) runNext = req.runNext;
+          const c = (req.comment ?? "").trim();
+          if (c !== "") nextFocus = c;
+          boundMeta = {
+            ...boundMeta,
+            resumePoint: `run ${brief.pendingDecision.approveContinuesTo.join(", ") || "(end)"}${
+              runNext === false && gateNode.gate?.decidesNode !== undefined
+                ? ` — "${gateNode.gate.decidesNode}" skipped by decision`
+                : ""
+            }`,
+          };
+        } else if (v.target === gateNodeId) {
+          rejectNow = (req.comment ?? "").trim();
+          boundMeta = { ...boundMeta, resumePoint: `re-run "${gateNodeId}" with feedback, then pause again` };
+        } else {
+          // Amend an ancestor: revise it with the feedback and invalidate everything
+          // downstream (including this gate and finished siblings) — no stale evidence,
+          // and no publication effect can have happened (this gate was still open).
+          const plan = planAmend(workflow, gateNodeId, v.target);
+          const tState = state.nodes[plan.revise];
+          const tNode = workflow.nodes.find((n) => n.id === plan.revise);
+          if (tState === undefined || tNode === undefined) {
+            process.stderr.write(`dagrun: amend target "${plan.revise}" not in run\n`);
+            releaseLock(homeDir);
+            process.exit(1);
+          }
+          const tMax = tNode.gate?.maxIterations ?? 10;
+          if (tState.iteration >= tMax) {
+            process.stderr.write(`dagrun: maxIterations (${tMax}) reached for "${plan.revise}" — cannot amend further\n`);
+            releaseLock(homeDir);
+            process.exit(1);
+          }
+          const nodesNext = { ...state.nodes };
+          for (const id of plan.reset) {
+            const ns = nodesNext[id];
+            if (ns === undefined) continue;
+            const dir = join(runDir, id);
+            archivePriorAttempt(runDir, id, dir);
+            rmSync(dir, { recursive: true, force: true });
+            mkdirSync(dir, { recursive: true });
+            nodesNext[id] = {
+              status: "pending",
+              artifacts: [],
+              iteration: 0,
+              cost: ns.cost,
+              gateHistory: ns.gateHistory,
+              ...(ns.model !== undefined ? { model: ns.model } : {}),
+            };
+          }
+          const n = tState.iteration + 1;
+          writeFileSync(join(runDir, plan.revise, `feedback-${n}.md`), (req.comment ?? "").trim(), "utf8");
+          const decided = tNode.gate?.decidesNode;
+          if (decided !== undefined) {
+            rmSync(join(runDir, plan.revise, "next-node-decision.json"), { force: true });
+          }
+          nodesNext[plan.revise] = {
+            ...tState,
+            status: "pending",
+            iteration: n,
+            gateHistory: [
+              ...tState.gateHistory,
+              {
+                decision: "reject",
+                comment: (req.comment ?? "").trim(),
+                timestamp: now,
+                ...boundMeta,
+                invalidated: plan.reset,
+                resumePoint: `re-run "${plan.revise}" with feedback, then re-run ${plan.reset.join(", ")} from fresh evidence`,
+              },
+            ],
+          };
+          state = { ...state, nodes: nodesNext, status: "running", updatedAt: now };
+          writeState(stateFile, state);
+          process.stdout.write(
+            `dagrun: amend — "${plan.revise}" will revise (iteration ${n}); invalidated: ${plan.reset.join(", ")}\n`,
+          );
+        }
+      }
+      const amendedAncestor =
+        boundMeta.action === "amend" && boundMeta.target !== gateNodeId;
+
+      if (amendedAncestor) {
+        // State already rewritten above; fall through to re-run the DAG.
+      } else if (rejectNow !== undefined) {
         // Check maxIterations — at the limit, do not auto-revise (spec: terminal choice).
         if (gateNodeState.iteration >= maxIterations) {
           process.stdout.write(
@@ -1149,7 +1433,7 @@ export async function resumeRun(opts: {
         const n = gateNodeState.iteration + 1;
         writeFileSync(
           join(artifactsDir, `feedback-${n}.md`),
-          opts.rejectComment,
+          rejectNow,
           "utf8",
         );
 
@@ -1166,8 +1450,9 @@ export async function resumeRun(opts: {
                 ...gateNodeState.gateHistory,
                 {
                   decision: "reject",
-                  comment: opts.rejectComment,
+                  comment: rejectNow,
                   timestamp: new Date().toISOString(),
+                  ...boundMeta,
                 },
               ],
             },
@@ -1179,7 +1464,7 @@ export async function resumeRun(opts: {
         process.stdout.write(
           `dagrun: rejected — node "${gateNodeId}" will revise (iteration ${n})\n`,
         );
-      } else if (opts.approve === true) {
+      } else if (approveNow) {
         // Approve: mark done, collect artifacts from disk, continue. A
         // mechanical noPlaceholders violation still fails the node even after
         // human approval — gated nodes (define/reproduce) always return
@@ -1195,6 +1480,26 @@ export async function resumeRun(opts: {
             ? checkNoPlaceholders(runDir, gateNodeId, gateNode)
             : { ok: true as const };
         const approveTs = new Date().toISOString();
+        if (gateNode.gate?.decidesNode !== undefined) {
+          // The fix-gate decision: does the downstream node run? Companion path
+          // requires an explicit answer (validated); legacy path defaults to
+          // "run" (the prior behavior) and records that it was a default.
+          writeNextNodeDecision({
+            runDir,
+            gateNodeId,
+            node: gateNode.gate.decidesNode,
+            run: runNext ?? true,
+            basis:
+              runNext === undefined
+                ? "legacy default — no explicit run/skip choice (node runs, as before)"
+                : companionMode
+                  ? "companion gate decision"
+                  : "legacy --run-next flag",
+            ...(boundMeta.revision !== undefined ? { revision: boundMeta.revision } : {}),
+            ...(boundMeta.decisionId !== undefined ? { decisionId: boundMeta.decisionId } : {}),
+            ...(nextFocus !== undefined ? { focus: nextFocus } : {}),
+          });
+        }
         state = {
           ...state,
           nodes: {
@@ -1213,6 +1518,7 @@ export async function resumeRun(opts: {
                 {
                   decision: "approve",
                   timestamp: approveTs,
+                  ...boundMeta,
                 },
               ],
             },
@@ -1295,6 +1601,9 @@ export async function resumeRun(opts: {
             env: {
               ...process.env,
               DAGRUN_GATE_NODE_ID: gateNodeId,
+              ...(gateNode?.gate?.decidesNode !== undefined
+                ? { DAGRUN_GATE_DECIDES_NODE: gateNode.gate.decidesNode }
+                : {}),
               DAGRUN_GATE_CONTEXT_FILE: contextFilePath,
               DAGRUN_GATE_DECISION_FILE: decisionFilePath,
             },
@@ -1332,7 +1641,11 @@ export async function resumeRun(opts: {
         }
 
         if (parsed.decision === "approve") {
-          await resumeRun({ ...opts, approve: true });
+          await resumeRun({
+            ...opts,
+            approve: true,
+            ...(parsed.runNext !== undefined ? { runNext: parsed.runNext } : {}),
+          });
           return;
         } else {
           // reject: pass the consensus feedback body as the rejectComment.
@@ -1388,7 +1701,7 @@ export async function resumeRun(opts: {
     process.stdout.write(
       `dagrun: re-paused at gate — node "${gateNode?.[0] ?? "unknown"}"\n`,
     );
-    process.stdout.write(`dagrun: resume with: dagrun resume ${runId}\n`);
+    announcePause(runId, runDir, stateFile, workflow, config);
   } else {
     releaseLock(homeDir);
     process.stdout.write(`dagrun: run ${runId} ${result.status}\n`);
@@ -1741,7 +2054,7 @@ export async function rerunNode(opts: {
         endedAt: now,
       };
     } else {
-      const gateCheck = checkOutcomeGate(runDir, nodeId, node);
+      const gateCheck = checkNodeReport(runDir, nodeId, node, worktreePath);
       if (!gateCheck.ok) {
         newStatus = "failed";
         updates = {

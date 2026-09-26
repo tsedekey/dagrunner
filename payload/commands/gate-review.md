@@ -26,6 +26,11 @@ Do not start implementing. Do not summarise further. Just run:
 
 Then tell the human: **"Gate approved. Type `/exit` to return to dagrun and start the next node."**
 
+**Exception — gates that decide a downstream node** (`$DAGRUN_GATE_DECIDES_NODE` is set): before
+concluding an approval, make sure Eddie has said whether that node (e.g. `verify`, the optional
+runtime demonstration) should run or be skipped; present the fix summary's `## Verify recommendation`
+as your advice, and record his answer via `/gate-conclude`.
+
 ## Recognising rejection
 
 When the human raises concerns, changes, or objections, facilitate the feedback — help them make it

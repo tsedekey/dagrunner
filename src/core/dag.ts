@@ -13,6 +13,7 @@ import type { Node, Workflow, Ctx } from "./types.js";
 import type { NodeStatus, RunState } from "./state.js";
 import { writeState } from "./state.js";
 import type { NodeExecutor } from "../runtime/mock-executor.js";
+import { checkEvidence, gitDirtyPaths, gitHead } from "./verify-evidence.js";
 
 // ---------------------------------------------------------------------------
 // computeReadyNodes
@@ -49,10 +50,6 @@ export function computeReadyNodes(
     const status = statuses[node.id];
     if (status !== "pending") continue;
 
-    // Evaluate when predicate → skip (mark pending caller's job; just exclude from ready).
-    if (node.when !== undefined && ctx !== undefined && !node.when(ctx))
-      continue;
-
     const deps = node.dependsOn ?? [];
 
     if (node.joinRule === "none-failed-min-one-success") {
@@ -87,10 +84,35 @@ export function computeReadyNodes(
       if (blocked) continue;
     }
 
+    // Evaluate `when` only AFTER dependencies are satisfied: a predicate may read
+    // an upstream artifact (e.g. the fix gate's next-node decision) that does not
+    // exist yet. Same outcome as before for every predicate that never threw.
+    if (node.when !== undefined && ctx !== undefined && !node.when(ctx))
+      continue;
+
     ready.push(node.id);
   }
 
   return ready;
+}
+
+/**
+ * outcomeGate + evidenceCheck in one call — the report contract every call
+ * site (runDag, rerunNode) must apply identically.
+ */
+export function checkNodeReport(
+  runDir: string,
+  nodeId: string,
+  node: Node,
+  worktreePath: string,
+): { ok: true } | { ok: false; error: string } {
+  const gate = checkOutcomeGate(runDir, nodeId, node);
+  if (!gate.ok) return gate;
+  if (node.evidenceCheck === undefined) return gate;
+  return checkEvidence(runDir, nodeId, node, {
+    head: gitHead(worktreePath),
+    dirty: gitDirtyPaths(worktreePath),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -444,7 +466,7 @@ export async function runDag(
             endedAt: now,
           });
         } else {
-          const gateCheck = checkOutcomeGate(runDir, id, node);
+          const gateCheck = checkNodeReport(runDir, id, node, run.worktreePath);
           if (!gateCheck.ok) {
             updateNode(id, {
               status: "failed",

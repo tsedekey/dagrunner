@@ -2,29 +2,28 @@
  * bugfix-workflow.ts — bug fix pipeline workflow definition.
  *
  * Pipeline shape:
- *   reproduce (Gate 1) -> implement -> review -> fix (Gate 2) -> verify -> pr
+ *   reproduce (Gate 1) -> implement -> review -> fix (Gate 2) -> verify -> pr (Gate 3, pre-PR)
  *
- * verify (added by the verify-autonomy change — see DECISIONS.md
- * § verify-autonomy-bugfix-conditional): the unit/integration regression test
- * written in reproduce/guide.md and exercised during implement/fix does NOT
- * prove the fix holds at the @MultiDbTest acceptance-test layer. verify's
- * first step (unique to bugfix) searches the worktree's qa/acceptance-tests
- * for an EXISTING @MultiDbTest that already covers the user-facing flow the
- * bug touches (grounded from reproduce/guide.md); if found, it is reused
- * as-is (no new AT authored) and recorded in verify-plan.md. If none covers
- * it, verify authors one exactly as the feature workflow does. From there
- * (independent build+test rerun, run+classify, verify-report.json +
- * outcomeGate) the logic is identical to the feature workflow — see
- * payload/commands/verify.md, which is shared by both workflows.
+ * verify is OPTIONAL and no longer the MultiDbTest acceptance-test duplicate of CI.
+ * It is (shared with the feature workflow) a runtime DEMONSTRATION for the human (payload/commands/verify.md): build
+ * the candidate from the worktree, run it on a local disposable target, and show
+ * how the fix behaves so it can be reproduced manually. Whether it runs is decided
+ * by Eddie + the companion AT THE FIX GATE (gate.decidesNode) and persisted as
+ * fix/next-node-decision.json, which verify's `when` reads. See DECISIONS.md
+ * § companion-gates / § verify-runtime-demo.
  *
  * base_branch is read from plan frontmatter and stored in state.json;
  * run-engine wires it into the worktree start-point and the gh pr create call.
  */
 
 import type { Workflow } from "../core/types.js";
+import { readNextNodeDecision } from "../core/gate.js";
 
 export const bugfixWorkflow: Workflow = {
   name: "bugfix",
+  // Every gate (reproduce, fix, pr) returns to the originating planning companion
+  // via `dagrun gate show|decide` — see DECISIONS.md § companion-gates.
+  companionGates: true,
   nodes: [
     {
       id: "reproduce",
@@ -57,7 +56,7 @@ export const bugfixWorkflow: Workflow = {
       model: "sonnet",
       effort: "medium",
       produces: ["summary.md"],
-      gate: { maxIterations: 5, onReject: "revise-self" },
+      gate: { maxIterations: 5, onReject: "revise-self", decidesNode: "verify" },
       revisionInstruction:
         "Review the feedback below and revise the code changes in the worktree accordingly. " +
         "Then update {artifactsDir}/summary.md to reflect all changes made (which findings were addressed, what files changed, what was deferred).",
@@ -68,34 +67,34 @@ export const bugfixWorkflow: Workflow = {
       dependsOn: ["fix"],
       command: "/verify",
       model: "sonnet",
-      // verify-plan.md is conditional, not unconditional — payload/commands/verify.md's
-      // legitimate short-circuit paths (Docker unreachable at Step 0; unrecoverable
-      // stall with no usable report, ERROR_INFRA) explicitly instruct "Do NOT write a
-      // verify-plan.md — no authoring work happened." Only verify-report.json is
-      // load-bearing here; it remains gated via outcomeGate below. See DECISIONS.md
-      // § verify-run-56962-1-forensics.
-      produces: ["verify-report.json"],
-      formatCommand: "./mvnw spotless:apply --no-transfer-progress",
-      // DEFERRED_TO_CI (verify-defer-to-ci-and-drop-diff-scoped-rerun change,
-      // 2026-07-14, see DECISIONS.md § verify-defer-to-ci-and-drop-diff-scoped-rerun,
-      // motivated by run 56954-1) is non-blocking, alongside PASS: it means
-      // verify confirmed Step 4's build broke on a pre-existing, diff-unrelated
-      // trunk issue (mechanically proven byte-identical against the merge-base)
-      // and deferred acceptance-test confirmation to CI, NOT that the build was
-      // skipped or the diff itself is broken. FAIL_BUILD/FAIL_TEST/FAIL_ASSERTION/
-      // ERROR_INFRA remain blocking — unchanged.
+      // Runs only when the fix gate decided so. Missing decision artifact is a
+      // loud error (never a silent skip/run): every approve path writes it.
+      when: (ctx) =>
+        readNextNodeDecision(ctx.read("fix", "next-node-decision.json"), "verify"),
+      produces: ["verify-report.json", "demo.md"],
+      // Only a DEMONSTRATED report passes; NOT_DEMONSTRATED / BLOCKED_RUNTIME fail
+      // the node loudly. evidenceCheck rejects a DEMONSTRATED claim that lacks
+      // candidate provenance / local-disposable target (core/verify-evidence.ts).
       outcomeGate: {
         file: "verify-report.json",
         field: "outcome",
-        passValues: ["PASS", "DEFERRED_TO_CI"],
+        passValues: ["DEMONSTRATED"],
       },
+      evidenceCheck: "verify-runtime",
     },
     {
       id: "pr",
       dependsOn: ["fix", "verify"],
+      // verify may be legitimately skipped (fix-gate decision) — a skipped verify
+      // must not block pr; a FAILED verify still does (requiredFailed).
+      joinRule: "none-failed-min-one-success",
       command: "/pr",
       model: "haiku",
       produces: ["body.md"],
+      // Pre-PR gate: pr only COMPOSES the body/meta in-session; push + draft-PR
+      // creation happen in runPrPostProcess after this gate is approved, so the
+      // human decision genuinely precedes publication (and sees verify's evidence).
+      gate: { maxIterations: 5, onReject: "revise-self", amendTargets: ["fix"] },
     },
     // Terminal-adjacent, informational, read-only — same deps as pr so it runs
     // in parallel with pr and adds no wall-clock time (see DECISIONS.md §
@@ -111,6 +110,7 @@ export const bugfixWorkflow: Workflow = {
     {
       id: "digest",
       dependsOn: ["fix", "verify"],
+      joinRule: "none-failed-min-one-success",
       command: "/digest",
       model: "sonnet",
       produces: ["knowledge-map.md"],

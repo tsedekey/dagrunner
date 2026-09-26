@@ -80,39 +80,49 @@ test("bugfixWorkflow: fix depends on review and has a gate", () => {
   assert.ok(node.gate !== undefined, "fix must have a gate");
 });
 
-test("bugfixWorkflow: verify depends on fix, is required (non-optional), and has an outcomeGate", () => {
+test("bugfixWorkflow: verify is an OPTIONAL runtime demonstration decided at the fix gate", () => {
   const node = bugfixWorkflow.nodes.find((n) => n.id === "verify");
   assert.ok(node !== undefined, "verify node must exist");
   assert.ok(node.dependsOn?.includes("fix"), "verify must depend on fix");
-  assert.notEqual(
-    node.optional,
-    true,
-    "verify must be required (non-optional) — it blocks pr on a bad outcome",
-  );
   assert.equal(node.gate, undefined, "verify must have no human gate");
-  // DEFERRED_TO_CI (added by the verify-defer-to-ci change, see DECISIONS.md
-  // § verify-defer-to-ci-and-drop-diff-scoped-rerun) is a non-blocking outcome:
-  // a confirmed pre-existing, diff-unrelated build break in Step 4 must not
-  // hard-fail the node and block pr the way a genuine FAIL_BUILD does.
+  assert.equal(node.command, "/verify", "shared /verify prompt — no bugfix-only verify command");
+  assert.ok(node.when !== undefined, "verify must be skippable via a `when` reading the fix-gate decision");
+  assert.equal(
+    bugfixWorkflow.nodes.find((n) => n.id === "fix")?.gate?.decidesNode,
+    "verify",
+    "the fix gate decides whether verify runs",
+  );
+  // Only a DEMONSTRATED report passes; NOT_DEMONSTRATED / BLOCKED_RUNTIME fail the node.
   assert.deepEqual(node.outcomeGate, {
     file: "verify-report.json",
     field: "outcome",
-    passValues: ["PASS", "DEFERRED_TO_CI"],
+    passValues: ["DEMONSTRATED"],
   });
+  assert.equal(node.evidenceCheck, "verify-runtime");
 });
 
-// Run 56962-1 forensic fix (bug 1): verify.md documents legitimate
-// short-circuit paths (Docker unreachable at Step 0; unrecoverable stall
-// with no usable report, ERROR_INFRA) where it explicitly instructs "Do NOT
-// write a verify-plan.md — no authoring work happened." A hard produces
-// requirement on verify-plan.md trips the DAG's produces-contract check even
-// on these correct, prompt-following paths. verify-report.json remains
-// load-bearing (already gated via outcomeGate above); only the unconditional
-// verify-plan.md requirement is dropped.
-test("bugfixWorkflow: verify's produces contract does not hard-require verify-plan.md (conditional per verify.md's short-circuit paths)", () => {
+test("bugfixWorkflow: verify produces the report and the manual demo write-up", () => {
   const node = bugfixWorkflow.nodes.find((n) => n.id === "verify");
   assert.ok(node !== undefined);
-  assert.deepEqual(node.produces, ["verify-report.json"]);
+  assert.deepEqual(node.produces, ["verify-report.json", "demo.md"]);
+});
+
+test("bugfixWorkflow: pr and digest tolerate a skipped verify (joinRule) but a failed verify still blocks", () => {
+  for (const id of ["pr", "digest"]) {
+    const n = bugfixWorkflow.nodes.find((x) => x.id === id);
+    assert.equal(n?.joinRule, "none-failed-min-one-success", id);
+  }
+});
+
+test("bugfixWorkflow: every gate returns to the companion; pr is a pre-PR gate that can amend fix", () => {
+  assert.equal(bugfixWorkflow.companionGates, true);
+  const pr = bugfixWorkflow.nodes.find((n) => n.id === "pr");
+  assert.ok(pr?.gate !== undefined, "pr must be gated (pre-PR decision)");
+  assert.deepEqual(pr.gate.amendTargets, ["fix"]);
+  assert.deepEqual(
+    bugfixWorkflow.nodes.filter((n) => n.gate !== undefined).map((n) => n.id),
+    ["reproduce", "fix", "pr"],
+  );
 });
 
 test("bugfixWorkflow: pr depends on fix and verify", () => {

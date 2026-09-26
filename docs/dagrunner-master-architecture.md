@@ -89,6 +89,10 @@ Reviewer selection (from diff-triage): correctness + test-adequacy always; api-s
 
 ## 3c. The bugfix pipeline
 
+> **Since v0.1.50** the diagram below has a third gate (pre-PR, on `pr`), an OPTIONAL `verify` decided at
+> the fix gate, and every gate returns to the originating companion — see §3g. The verify description
+> in this section is historical.
+
 ```
 [Bug fix plan in inbox — YAML frontmatter: base_branch, severity, issue URL]
    [PREFLIGHT] (same as feature)
@@ -132,6 +136,14 @@ workflows share the same `payload/commands/verify.md`.
 ---
 
 ## 3d. verify — autonomous acceptance-test author/runner/judge/gate
+
+> **SUPERSEDED (v0.1.50) — read §3g first.** `verify` is no longer the autonomous MultiDbTest
+> acceptance-test author/runner described in the rest of §3d (that duplicated CI on the PR). It is an
+> OPTIONAL runtime demonstration for Eddie, chosen at the fix gate, sharing one prompt
+> (`payload/commands/verify.md`) across both workflows. The text below is retained as history of the
+> reasoning behind the old shape (self-heal, stall detection, deferred-to-CI); none of its outcome
+> names (`PASS`/`FAIL_*`/`DEFERRED_TO_CI`/`ERROR_INFRA`) exist any more.
+
 
 **Why this changed:** verify was originally read-only/INFO-ONLY (haiku, no cluster) because
 cluster bring-up was believed to conflict with the runtime sandbox (Seatbelt kernel enforcement).
@@ -502,6 +514,12 @@ see `DECISIONS.md § structural-upgrades-smoke-live-deferred`.
 
 ## 3f. digest — bottom-up knowledge map (terminal-adjacent, parallel with `pr`)
 
+> **Reshaped (v0.1.50, decided with Eddie):** digest stays an optional, read-only, parallel-with-`pr`
+> node but writes only two sections — deferred findings/unresolved risks and open reviewer questions
+> (incl. whether the optional verify demonstration ran). The six-section bottom-up map described below
+> is historical. Artifact name (`knowledge-map.md`) and node shape are unchanged.
+
+
 **Why this exists:** an external task-intake tool (Glean, §2) gives Eddie a problem-first knowledge
 map at the *start* of a run, before any planning happens. Nothing gave him the equivalent *after*
 implementation — grounded in what actually got built, not what was planned — before he reviews the
@@ -564,6 +582,45 @@ writing every declared `produces` file) exercises the wiring end-to-end with no 
 needed. `smoke:live` was deferred — see `DECISIONS.md § digest-node`.
 
 ---
+
+## 3g. Companion gates and the optional runtime-demonstration verify (v0.1.50)
+
+**Companion gates (`Workflow.companionGates`, bugfix only).** Eddie plans in one local companion
+conversation. `dagrun start bugfix … --companion-session <id>` records that conversation's
+`CLAUDE_CODE_SESSION_ID` in `state.companion` (or `--no-companion` explicitly opts into the legacy
+fresh-session gates; no silent default; `--night` is incompatible). At every gate (`reproduce`, `fix`,
+and the new pre-PR gate on `pr`) the run pauses and dagrunner spawns **nothing**: it writes
+`<gate>/gate.json` (run, gate, iteration, `revision`, plan sha, worktree HEAD, evidence hashes,
+mechanical validation, pending decision) and `gate-context.md`, and prints how to return
+(`CLAUDE_CONFIG_DIR=<dir> claude --resume <id>`). The companion drives the run with:
+
+- `dagrun gate show <run>` — the brief.
+- `dagrun gate decide <run> --gate <g> --revision <rev> --action approve|amend|hold …` — **two-step**:
+  without `--confirm` it only PROPOSES (prints the exact action/scope and a decision id); only
+  `--confirm <id>` executes. The id binds run, gate, revision, action, target, comment and run-next, so
+  understanding / "continue explaining" / "looks good" can never advance a run, stale or wrong-run
+  revisions are refused, and a repeated confirmed decision is a no-op (`gateHistory[].decisionId`).
+- `dagrun gate attach <run> --session <id> [--reconstructed]` — recovery when the original session is
+  gone (transcript missing) or for a legacy run; a reconstructed session is flagged, never the default.
+
+Actions map onto existing machinery only: `approve` (existing approve), `amend` (revise the gate node
+via feedback-N.md, or a workflow-declared `gate.amendTargets` ancestor — bugfix `pr` → `fix` — which
+archives and resets every downstream node so no stale evidence is reused), `hold` (record, stay
+paused). Legacy `resume --approve/--reject` is refused on companion runs. Independently, nothing here
+authorizes merge, reviewer requests, marking ready, or backport labels; the draft PR is pushed/created
+only after the pre-PR gate is approved (`runPrPostProcess`).
+
+**Optional verify.** The `fix` gate has `decidesNode: "verify"`: approving requires an explicit
+`--run-next yes|no` (agent advice lives in `fix/summary.md` § *Verify recommendation*). The decision is
+persisted as `fix/next-node-decision.json`; `verify`'s `when` reads it (missing/garbled → loud error).
+`pr`/`digest` use `joinRule: none-failed-min-one-success` so a *skipped* verify does not block them
+while a *failed* one still does. verify builds the candidate from the worktree, runs it on a local
+loopback-only disposable target (docker-compose / C8 Run / c8ctl / source — selection, not a mandatory
+sequence), and writes `verify-report.json` (schema 2: `DEMONSTRATED | NOT_DEMONSTRATED |
+BLOCKED_RUNTIME`) plus `demo.md` (manual replay steps). Only `DEMONSTRATED` passes, and
+`evidenceCheck: "verify-runtime"` (`core/verify-evidence.ts`) mechanically refuses a claim without a
+worktree-built candidate at HEAD, a matching dirty-file list, a candidate observation, a loopback
+target and honest cleanup. It does not replace unit/integration/regression checks or CI.
 
 ## 3b. Validation — smoke:mock (per-plan gate) and smoke:live (occasional)
 

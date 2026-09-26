@@ -42,6 +42,7 @@ import {
   seedWorktreeSiblings,
 } from "../runtime/run-engine.js";
 import { readState, writeState } from "../core/state.js";
+import { gateAttach, gateDecide, gateShow } from "../runtime/gate-cli.js";
 import {
   runPreflight,
   printPreflightResult,
@@ -113,7 +114,7 @@ async function cmdStart(argv: string[]): Promise<void> {
   if (workflowName === undefined || workflowName.startsWith("--")) {
     process.stderr.write(
       `dagrun start: missing <workflow> argument.\n` +
-        `Usage: dagrun start <workflow> --plan <file> [--max-budget-usd <n>] [--force] [--night]\n`,
+        `Usage: dagrun start <workflow> --plan <file> [--max-budget-usd <n>] [--force] [--night] [--companion-session <id> | --no-companion]\n`,
     );
     process.exit(1);
   }
@@ -135,6 +136,8 @@ async function cmdStart(argv: string[]): Promise<void> {
   const maxBudgetUsd =
     maxBudgetStr !== undefined ? parseFloat(maxBudgetStr) : undefined;
   const configFlag = flagValue(argv, "--config");
+  const companionSession = flagValue(argv, "--companion-session");
+  const noCompanion = hasFlag(argv, "--no-companion");
 
   // Resolve home (fails loud if missing).
   const homeDir = resolveHome();
@@ -173,6 +176,8 @@ async function cmdStart(argv: string[]): Promise<void> {
     ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
     ...(force ? { force: true } : {}),
     ...(nightMode ? { nightMode: true } : {}),
+    ...(companionSession !== undefined ? { companionSessionId: companionSession } : {}),
+    ...(noCompanion ? { noCompanion: true } : {}),
   });
 }
 
@@ -189,6 +194,11 @@ async function cmdResume(argv: string[]): Promise<void> {
   const approve = hasFlag(argv, "--approve");
   const rejectComment = flagValue(argv, "--reject");
   const configFlag = flagValue(argv, "--config");
+  const runNextRaw = flagValue(argv, "--run-next");
+  if (runNextRaw !== undefined && runNextRaw !== "yes" && runNextRaw !== "no") {
+    process.stderr.write(`dagrun resume: --run-next must be yes or no\n`);
+    process.exit(1);
+  }
 
   const homeDir = resolveHome();
   const config = resolveConfig(homeDir, configFlag);
@@ -200,7 +210,83 @@ async function cmdResume(argv: string[]): Promise<void> {
     config,
     ...(approve ? { approve: true } : {}),
     ...(rejectComment !== undefined ? { rejectComment } : {}),
+    ...(runNextRaw !== undefined ? { runNext: runNextRaw === "yes" } : {}),
   });
+}
+
+async function cmdGate(argv: string[]): Promise<void> {
+  const sub = argv[0];
+  const runId = argv[1];
+  if (
+    (sub !== "show" && sub !== "decide" && sub !== "attach") ||
+    runId === undefined ||
+    runId.startsWith("--")
+  ) {
+    process.stderr.write(
+      `Usage:\n` +
+        `  dagrun gate show <run-id>\n` +
+        `  dagrun gate decide <run-id> --gate <node> --revision <rev> --action approve|amend|hold\n` +
+        `      [--run-next yes|no] [--target <node>] [--comment "<text>"] [--session <id>] [--confirm <decision-id>]\n` +
+        `  dagrun gate attach <run-id> --session <id> [--reconstructed] [--replace]\n`,
+    );
+    process.exit(1);
+  }
+  const homeDir = resolveHome();
+  const config = resolveConfig(homeDir, flagValue(argv, "--config"));
+  let code = 0;
+  if (sub === "show") {
+    code = gateShow({ homeDir, config, runId });
+  } else if (sub === "attach") {
+    const session = flagValue(argv, "--session");
+    if (session === undefined) {
+      process.stderr.write(`dagrun gate attach: --session <id> is required\n`);
+      process.exit(1);
+    }
+    code = gateAttach({
+      homeDir,
+      config,
+      runId,
+      session,
+      reconstructed: hasFlag(argv, "--reconstructed"),
+      replace: hasFlag(argv, "--replace"),
+    });
+  } else {
+    const gate = flagValue(argv, "--gate");
+    const revision = flagValue(argv, "--revision");
+    const action = flagValue(argv, "--action");
+    if (gate === undefined || revision === undefined || action === undefined) {
+      process.stderr.write(`dagrun gate decide: --gate, --revision and --action are all required\n`);
+      process.exit(1);
+    }
+    const rn = flagValue(argv, "--run-next");
+    if (rn !== undefined && rn !== "yes" && rn !== "no") {
+      process.stderr.write(`dagrun gate decide: --run-next must be yes or no\n`);
+      process.exit(1);
+    }
+    const target = flagValue(argv, "--target");
+    const comment = flagValue(argv, "--comment");
+    // Default to the caller's own Claude session so any OTHER Claude session (a dev
+    // agent, a node) cannot confirm a decision by omitting --session. A bare
+    // terminal has no such env var and stays allowed.
+    const session =
+      flagValue(argv, "--session") ?? process.env["CLAUDE_CODE_SESSION_ID"];
+    const confirm = flagValue(argv, "--confirm");
+    if (confirm !== undefined) assertAuth(config.claudeConfigDir);
+    code = await gateDecide({
+      homeDir,
+      config,
+      runId,
+      gate,
+      revision,
+      action,
+      ...(target !== undefined ? { target } : {}),
+      ...(comment !== undefined ? { comment } : {}),
+      ...(rn !== undefined ? { runNext: rn === "yes" } : {}),
+      ...(session !== undefined ? { session } : {}),
+      ...(confirm !== undefined ? { confirm } : {}),
+    });
+  }
+  if (code !== 0) process.exit(code);
 }
 
 function cmdStatus(argv: string[]): void {
@@ -708,8 +794,11 @@ function printHelp(): void {
       "Commands:",
       "  dagrun init [--home <path>]",
       "  dagrun preflight [--base-branch <branch>] [--config <file>]",
-      "  dagrun start <workflow> --plan <file> [--max-budget-usd <n>] [--force] [--night]",
-      '  dagrun resume <run-id> [--approve] [--reject "<comment>"]',
+      "  dagrun start <workflow> --plan <file> [--max-budget-usd <n>] [--force] [--night] [--companion-session <id> | --no-companion]",
+      '  dagrun resume <run-id> [--approve [--run-next yes|no]] [--reject "<comment>"]   (legacy gates)',
+      "  dagrun gate show <run-id>                                    (companion gates)",
+      "  dagrun gate decide <run-id> --gate <node> --revision <rev> --action approve|amend|hold [--run-next yes|no] [--target <node>] [--comment <text>] [--confirm <id>]",
+      "  dagrun gate attach <run-id> --session <id> [--reconstructed] [--replace]",
       "  dagrun status [<run-id>]",
       "  dagrun list",
       "  dagrun abort <run-id>",
@@ -772,6 +861,10 @@ async function main(argv: string[]): Promise<number> {
 
     case "resume":
       await cmdResume(rest);
+      return 0;
+
+    case "gate":
+      await cmdGate(rest);
       return 0;
 
     case "status":

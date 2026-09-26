@@ -49,29 +49,12 @@ cat "$DAGRUN_RUN_DIR/verify/manual-test.md" 2>/dev/null
 
 - Guide: use `define/guide.md` if it printed something; otherwise use `reproduce/guide.md` (bugfix workflow).
 - `verify/manual-test.md` is optional — absent is fine, skip it.
-- `verify/verify-report.json`'s `outcome` field matters for Step 2 below: if it is
-  `"DEFERRED_TO_CI"`, the PR body must carry a visible callout — see Step 2's "Deferred-to-CI
-  callout" note. If the file is absent (verify never ran on this workflow shape) or `outcome` is
-  anything else, no callout is needed.
+- `verify/` exists only when Eddie chose the optional runtime demonstration at the fix gate. If
+  `verify/verify-report.json` is present and its `outcome` is `DEMONSTRATED`, the description may
+  say so in one sentence (what was shown, on what local target). If absent, say nothing about verify.
+  Never claim CI-level acceptance-test coverage from it.
 
 ## Step 2 — Compose the PR body
-
-**Deferred-to-CI callout (only if Step 1 found `verify/verify-report.json`'s `outcome` is
-`"DEFERRED_TO_CI"`):** insert a short, clearly-labeled callout block immediately after the
-`## Description` section, before `## Checklist` — a reviewer merging this PR needs to know verify
-did NOT independently confirm a green build, and why, before they trust the checklist below. This
-callout is explicitly exempt from the "no bullet lists"/plain-prose rule that governs the
-Description paragraph itself (they are separate sections with separate purposes) — name the
-specific unrelated trunk module/file/error from `stages.build.detail`, verbatim or close to it, not
-a vague "build issue":
-
-```markdown
-> **⚠️ Verify deferred to CI:** the independent build rerun hit a confirmed pre-existing,
-> diff-unrelated issue in `<module/file from stages.build.detail>` (`<one-line error summary>`) —
-> mechanically confirmed unchanged from the merge-base, unrelated to this PR. Acceptance-test
-> confirmation was deferred to CI as a result; verify did NOT independently confirm a green build
-> for this change.
-```
 
 Follow the Camunda PR template exactly:
 
@@ -82,10 +65,7 @@ cat > "$DAGRUN_ARTIFACTS/body.md" << 'BODY'
 
 <2–4 sentences. What this PR does and why — goal and purpose only.
 Draw from guide.md and implement/summary.md. No bullet lists, no sub-headers,
-no review/fix recap. If verify ran, one sentence noting it was produced.>
-
-<Insert the Deferred-to-CI callout block here, verbatim, ONLY if outcome was "DEFERRED_TO_CI" per
-Step 1 — omit this line and the callout entirely otherwise.>
+no review/fix recap. If the verify demonstration ran (`DEMONSTRATED`), one sentence noting it.>
 
 ## Checklist
 

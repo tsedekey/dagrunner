@@ -1,16 +1,11 @@
-# /digest — Bottom-Up Knowledge Map
+# /digest — Review Notes (deferred findings + open questions)
 
-You are running the **digest node** of a dagrunner pipeline. Your job is to read the run's own
-artifacts (guide, implementation, review, fix, verify) and the diff itself, and synthesize a single
-**bottom-up knowledge map** — `$DAGRUN_ARTIFACTS/knowledge-map.md` — so a human reviewer has the
-full context of what was actually built (and why) in their head *before* they open the PR diff or
-read pr-triage's drafted replies.
-
-This mirrors what an external task-intake tool (Glean) gives at the *start* of a run — a
-problem-first knowledge map before any planning happens. digest gives the equivalent *after*
-implementation: grounded in what actually got built (the diff, the review findings, what fix
-addressed vs. deferred, what verify proved), not what was originally planned. Bottom-up means:
-establish the terrain (Background) before the diff, not the diff before the terrain.
+You are running the **digest node** of a dagrunner pipeline. Your job is deliberately small: read the
+run's own artifacts (guide, review, fix, verify) and the diff, and write
+`$DAGRUN_ARTIFACTS/knowledge-map.md` — a short page of what the planning-companion gate conversations
+do NOT persist: the findings that were deferred or left unresolved, and the open questions a PR
+reviewer will likely ask. (Before v0.1.50 this node wrote a six-section bottom-up knowledge map; the
+teaching now happens in those gate conversations, so that recap was dropped.)
 
 **CRITICAL: Do NOT modify any files in the worktree. This node is read-only, exactly like `review`
 — its whole contract is one artifact.** There is no gate on this node (informational only, same
@@ -73,7 +68,7 @@ with no authoring source has nothing to restate the intent from.
 **Do not run `git add` or `git diff --cached` here** — see the parallel-with-`pr` warning above.
 Use a form that reads the working tree directly against the merge-base, so it is correct whether or
 not `pr`'s backstop commit has landed yet (the same `git merge-base origin/main HEAD` idiom
-`payload/commands/verify.md`'s deferred-to-CI check already establishes):
+`payload/commands/review.md` uses):
 
 ```bash
 cd "$DAGRUN_WORKTREE"
@@ -103,7 +98,7 @@ cat "$DAGRUN_RUN_DIR/implement/summary.md" 2>/dev/null
 cat "$DAGRUN_RUN_DIR/fix/summary.md" 2>/dev/null
 cat "$DAGRUN_RUN_DIR/review/findings.json" 2>/dev/null
 cat "$DAGRUN_RUN_DIR/verify/verify-report.json" 2>/dev/null
-cat "$DAGRUN_RUN_DIR/verify/verify-plan.md" 2>/dev/null
+cat "$DAGRUN_RUN_DIR/verify/demo.md" 2>/dev/null
 ```
 
 - `implement/summary.md` and `fix/summary.md` record what changed and why — including design
@@ -116,64 +111,38 @@ cat "$DAGRUN_RUN_DIR/verify/verify-plan.md" 2>/dev/null
   addressed and which were explicitly deferred (with a reason) — your source for Section 4's "what
   was addressed vs. deferred" half. Do not treat an absent/empty findings array as a gap to explain
   — "no high-confidence blocker/major findings" is a legitimate, common outcome.
-- `verify/verify-report.json`'s `outcome` field and `verify/verify-plan.md` (when present — it is
-  conditionally written, absent is fine, see `payload/commands/verify.md`) are your source for
-  Section 5.
+- `verify/verify-report.json`'s `outcome` field and `verify/demo.md` are your source for Section 5.
+  `verify` is an OPTIONAL runtime demonstration chosen at the fix gate — when `verify/` is absent it
+  was skipped by decision, which is a normal outcome, not a gap.
 
-## Step 4 — Write `$DAGRUN_ARTIFACTS/knowledge-map.md`
+## Step 4 — Write `$DAGRUN_ARTIFACTS/knowledge-map.md` (short — two sections only)
 
-Write exactly these six sections, in this order. This is a knowledge map for a human about to
-review the PR — write for a reader who has NOT yet looked at the diff, not a recap for someone who
-already has.
+Understanding of what was built now happens in the planning-companion gate conversations, so this
+node no longer re-teaches it. Record only what those conversations do not persist, for a reader about
+to review the PR:
 
 ```bash
 cat > "$DAGRUN_ARTIFACTS/knowledge-map.md" << 'EOF'
-# Knowledge map — <feature/fix name from the guide>
+# Review notes — <feature/fix name from the guide>
 
-## 1. Background
+## 1. Deferred findings and unresolved risks
 
-<The subsystem/area of the codebase this change touches, and whatever context a reader needs
-before the diff will make sense — module boundaries, key existing types/classes the diff builds
-on, relevant invariants. Bottom-up: establish the terrain BEFORE describing the diff.>
+<From review/findings.json and fix/summary.md: each finding that fix explicitly DEFERRED (or left
+unresolved), with dimension/severity, the claim, and the reason given. Plain prose or a short table.
+If nothing was deferred, say so in one line — that is a normal outcome.>
 
-## 2. The problem / feature
+## 2. Open questions a reviewer will likely ask
 
-<Restate the INTENT from guide.md — what was broken or requested, and WHY. This is the problem
-statement, not the implementation plan. If guide.md's plan diverged from this restated intent
-during implementation, note that here too — it's exactly the kind of thing a reviewer asks about.>
-
-## 3. What was implemented
-
-<Walk through the actual diff, grounded in file:line citations, organized BY CONCERN/COMPONENT —
-not a mechanical file-by-file dump. Call out notable design choices or tradeoffs made during
-implement/fix, drawn from implement/summary.md and fix/summary.md, not invented from the diff
-alone.>
-
-## 4. Review & fix
-
-<What review flagged (review/findings.json) — dimension, severity, and the claim, in prose, not
-a raw JSON dump. What fix addressed, and what was explicitly deferred and why, per fix/summary.md.
-If findings.json was empty, say so plainly rather than treating it as a gap.>
-
-## 5. How it was verified
-
-<The acceptance test that was authored or reused (verify/verify-plan.md's "Flow covered" and
-"Acceptance test" sections, when present), and what verify's outcome does and does not prove. Be
-precise: PASS means the acceptance test ran and passed. DEFERRED_TO_CI means the independent
-build rerun hit a confirmed pre-existing, diff-unrelated trunk issue — acceptance-test confirmation
-itself was deferred to CI, NOT that it passed at that layer. Name which one this run got.>
-
-## 6. Open questions
-
-<Things a PR reviewer is likely to ask, so the human is ready for them going into review/pr-triage
-— e.g. an explicitly deferred finding, a design tradeoff that has a reasonable alternative, a
-scope boundary the guide drew that a reviewer might push on.>
+<Design tradeoffs with a reasonable alternative, scope boundaries the guide drew, and one line on
+verification: whether the optional verify demonstration ran (verify/ absent = skipped by the fix-gate
+decision) and, if it did, its outcome (`DEMONSTRATED` is one scenario shown locally — not regression
+coverage, not CI). Ground file/line claims in the diff from Step 2; otherwise stay at file/component
+level.>
 EOF
 ```
 
-Ground Section 3's citations in the actual `git diff` output from Step 2 — do not fabricate line
-numbers. If a claim can't be grounded to a specific file:line, describe it at the file/component
-level instead of inventing precision that isn't there.
+Keep it to roughly one page. Do not restate the background, the implementation walkthrough or the
+review process — the diff, the guide and the gate discussions already carry those.
 
 ## Step 5 — Reflections (optional, do this last)
 
@@ -189,7 +158,7 @@ fine.
 - Read-only: do not edit, write to, or run commands that modify files in the worktree (only write
   to `$DAGRUN_ARTIFACTS/`). No `git add`, no `git commit`, no `formatCommand`.
 - `knowledge-map.md` must be written to `$DAGRUN_ARTIFACTS/knowledge-map.md` — NOT to the worktree.
-- Six sections, in the order given in Step 4 — do not reorder, merge, or drop one, even when the
+- Two sections, in the order given in Step 4 — do not reorder, merge, or drop one, even when the
   underlying artifact is thin (e.g. an empty findings array still gets a Section 4 that says so).
 - This node does not feed pr-triage or any other sibling — it is a standalone artifact for the
   human reviewing the run. Do not assume anything downstream reads it.

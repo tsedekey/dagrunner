@@ -31,6 +31,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Node } from "../core/types.js";
+import { gitDirtyPaths, gitHead } from "../core/verify-evidence.js";
 
 /**
  * Content to write for a produces filename. Every produces file gets canned
@@ -41,8 +42,45 @@ import type { Node } from "../core/types.js";
  * for a non-PASS outcome should write verify-report.json itself via a
  * dedicated executor rather than the generic 'success'/'gate-pause' scenarios.
  */
-function producesFileContent(node: Node, filename: string): string {
+function producesFileContent(
+  node: Node,
+  filename: string,
+  worktreePath: string,
+): string {
   const gate = node.outcomeGate;
+  if (
+    gate !== undefined &&
+    gate.file === filename &&
+    node.evidenceCheck === "verify-runtime"
+  ) {
+    // A schema-2 runtime-demonstration report that satisfies the evidence
+    // contract for the CURRENT worktree — plumbing fixture, not model output.
+    return JSON.stringify(
+      {
+        schemaVersion: 2,
+        outcome: gate.passValues[0],
+        capability: "source",
+        target: {
+          kind: "local-disposable",
+          host: "localhost",
+          ownedResources: [],
+        },
+        candidate: {
+          sourceRevision: gitHead(worktreePath) ?? "mock",
+          dirtyFiles: gitDirtyPaths(worktreePath) ?? [],
+          builtFromWorktree: true,
+          buildCommand: "mock",
+          artifact: "mock",
+          artifactIdentity: "mock-sha256",
+        },
+        observations: [{ kind: "candidate", command: "mock", result: "mock" }],
+        cleanup: { status: "clean", leftovers: [] },
+        demoFile: "demo.md",
+      },
+      null,
+      2,
+    );
+  }
   if (gate !== undefined && gate.file === filename) {
     return JSON.stringify({ [gate.field]: gate.passValues[0] }, null, 2);
   }
@@ -146,7 +184,7 @@ export function createMockExecutor(scenarios: ScenarioMap = {}): NodeExecutor {
             const fullPath = join(ctx.artifactsDir, filename);
             writeFileSync(
               fullPath,
-              producesFileContent(node, filename),
+              producesFileContent(node, filename, ctx.worktreePath),
               "utf8",
             );
             artifacts.push(fullPath);
@@ -204,7 +242,7 @@ export function createMockExecutor(scenarios: ScenarioMap = {}): NodeExecutor {
             const fullPath = join(ctx.artifactsDir, filename);
             writeFileSync(
               fullPath,
-              producesFileContent(node, filename),
+              producesFileContent(node, filename, ctx.worktreePath),
               "utf8",
             );
           }
@@ -304,7 +342,7 @@ export function createMockExecutor(scenarios: ScenarioMap = {}): NodeExecutor {
             const content =
               gate !== undefined && gate.file === filename
                 ? JSON.stringify({ [gate.field]: "FAIL_ASSERTION" })
-                : producesFileContent(node, filename);
+                : producesFileContent(node, filename, ctx.worktreePath);
             writeFileSync(fullPath, content, "utf8");
             artifacts.push(fullPath);
           }

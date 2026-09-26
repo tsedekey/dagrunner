@@ -394,32 +394,23 @@ test("featureWorkflow: verify uses sonnet (raised from haiku for authoring reaso
   assert.equal(node.model, "sonnet");
 });
 
-test("featureWorkflow: verify declares outcomeGate on verify-report.json's outcome field, passValues include DEFERRED_TO_CI", () => {
+test("featureWorkflow: verify is the same optional runtime demonstration, decided at the fix gate", () => {
   const node = featureWorkflow.nodes.find((n) => n.id === "verify");
   assert.ok(node !== undefined);
-  // DEFERRED_TO_CI (added by the verify-defer-to-ci change, see DECISIONS.md
-  // § verify-defer-to-ci-and-drop-diff-scoped-rerun) is a non-blocking outcome:
-  // a confirmed pre-existing, diff-unrelated build break in Step 4 must not
-  // hard-fail the node and block pr the way a genuine FAIL_BUILD does.
+  assert.equal(node.command, "/verify");
+  assert.ok(node.when !== undefined);
+  assert.equal(featureWorkflow.nodes.find((n) => n.id === "fix")?.gate?.decidesNode, "verify");
   assert.deepEqual(node.outcomeGate, {
     file: "verify-report.json",
     field: "outcome",
-    passValues: ["PASS", "DEFERRED_TO_CI"],
+    passValues: ["DEMONSTRATED"],
   });
+  assert.deepEqual(node.produces, ["verify-report.json", "demo.md"]);
+  assert.equal(node.evidenceCheck, "verify-runtime");
 });
 
-// Run 56962-1 forensic fix (bug 1): verify.md documents legitimate
-// short-circuit paths (Docker unreachable at Step 0; unrecoverable stall
-// with no usable report, ERROR_INFRA) where it explicitly instructs "Do NOT
-// write a verify-plan.md — no authoring work happened." A hard produces
-// requirement on verify-plan.md trips the DAG's produces-contract check even
-// on these correct, prompt-following paths. verify-report.json remains
-// load-bearing (already gated via outcomeGate above); only the unconditional
-// verify-plan.md requirement is dropped.
-test("featureWorkflow: verify's produces contract does not hard-require verify-plan.md (conditional per verify.md's short-circuit paths)", () => {
-  const node = featureWorkflow.nodes.find((n) => n.id === "verify");
-  assert.ok(node !== undefined);
-  assert.deepEqual(node.produces, ["verify-report.json"]);
+test("featureWorkflow: companion gates are NOT enabled (legacy fresh-session gates preserved)", () => {
+  assert.equal(featureWorkflow.companionGates, undefined);
 });
 
 test("featureWorkflow: pr depends on both fix and verify", () => {

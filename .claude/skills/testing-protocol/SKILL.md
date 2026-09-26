@@ -54,6 +54,11 @@ Use Node's built-in `node:test` + `node:assert`. NO test framework dependency. C
 
 ## smoke:mock — the per-plan gate (fast, free, deterministic)
 
+`npm run smoke:mock` now also runs `test/smoke/smoke-gates.ts` (companion gates end-to-end on the bugfix
+workflow: association, blocked/recovery, propose-vs-confirm, stale/duplicate/wrong-run, fix-gate verify
+decision, amend + invalidation, verify evidence contract). It cannot prove real `claude --resume`
+re-entry — that stays a manual/harness check.
+
 `npm run smoke:mock` (`test/smoke/smoke-mock.ts`) drives the **full gated pipeline in-process** using
 the mock executor. Zero API calls. Runs in ~150 ms. Deterministic by construction.
 

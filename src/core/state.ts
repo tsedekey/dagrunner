@@ -30,13 +30,47 @@ export type RunStatus = "running" | "paused" | "done" | "failed" | "aborted";
 // ---------------------------------------------------------------------------
 
 export type GateHistoryEntry = {
-  decision: "approve" | "reject";
+  /** "hold" records a paused-with-reason decision; it never changes node status. */
+  decision: "approve" | "reject" | "hold";
   comment?: string;
   timestamp: string;
   /** "night" when this was an auto-approval in unattended mode. */
   mode?: "night";
   /** Human-readable rationale for an auto-decision (e.g. "no concerns flagged"). */
   basis?: string;
+  /** Companion-gate binding: the gate revision this decision was made against. */
+  revision?: string;
+  /** Companion-gate action as issued ("amend" is recorded as decision "reject"). */
+  action?: "approve" | "amend" | "hold";
+  /** Node re-run by an amend (the gate node itself, or a gated ancestor). */
+  target?: string;
+  /** Deterministic id of the decision — a repeat of the same id is a no-op. */
+  decisionId?: string;
+  /** Nodes reset to pending by this decision (evidence invalidated). */
+  invalidated?: string[];
+  /** Exact resume point after this decision, e.g. "run implement,review,fix". */
+  resumePoint?: string;
+};
+
+// ---------------------------------------------------------------------------
+// Originating companion association
+// ---------------------------------------------------------------------------
+
+/**
+ * The planning-companion conversation that handed this run off. Gates return
+ * to it (see core/gate.ts). Absent on legacy runs, which keep the old
+ * fresh-session gate behavior.
+ */
+export type CompanionAssociation = {
+  /** CLAUDE_CODE_SESSION_ID of the originating companion. */
+  sessionId: string;
+  associatedAt: string;
+  /** Claude config dir that held the session transcript when it was recorded. */
+  configDir?: string;
+  /** How the association was made. */
+  source: "handoff" | "attach";
+  /** True when Eddie agreed to a reconstructed fallback session. */
+  reconstructed: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -86,6 +120,8 @@ export type RunState = {
   severity?: string;
   /** Issue URL from plan frontmatter. Used by pr node for "closes #" line. */
   issueUrl?: string;
+  /** Originating companion conversation; presence switches gates to companion mode. */
+  companion?: CompanionAssociation;
 };
 
 // ---------------------------------------------------------------------------

@@ -318,8 +318,8 @@ test("agentDecidable: verify is NOT agent-decidable", () => {
   assert.equal(agentDecidable("verify"), false);
 });
 
-test("agentDecidable: pr is NOT agent-decidable", () => {
-  assert.equal(agentDecidable("pr"), false);
+test("agentDecidable: pr (bugfix pre-PR gate) is night-decidable — preserves prior unattended behavior", () => {
+  assert.equal(agentDecidable("pr"), true);
 });
 
 test("agentDecidable: unknown node is NOT agent-decidable (safe default)", () => {

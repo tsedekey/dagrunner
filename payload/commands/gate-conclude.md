@@ -16,6 +16,20 @@ consensus decision to `$DAGRUN_GATE_DECISION_FILE` so dagrunner can continue the
 decision: approve
 ```
 
+### Gate that also decides a downstream node
+
+If `$DAGRUN_GATE_DECIDES_NODE` is set (e.g. `verify`), approving this gate ALSO decides whether that
+node runs. It is an optional runtime demonstration for Eddie, not a CI duplicate — ask explicitly
+("run verify, or skip it?") using the fix summary's `## Verify recommendation` as the agent's advice,
+then add one extra line to an approve decision:
+
+```
+decision: approve
+run-next: yes
+```
+
+(`run-next: no` to skip). Do not guess: if Eddie has not answered, ask before writing the file.
+
 ### Reject format
 
 ```

@@ -59,6 +59,20 @@ export type GateConfig = {
    * the run instead of halting. Used for post-PR gates that must never block shipping.
    */
   skippable?: boolean;
+  /**
+   * Id of a downstream node whose execution THIS gate decides (e.g. fix → verify).
+   * Approving the gate then requires an explicit run/skip choice, persisted as
+   * `<gate>/next-node-decision.json`; the target's `when` reads that artifact.
+   */
+  decidesNode?: string;
+  /**
+   * Gated ANCESTORS a companion amendment at this gate may send back for
+   * revision (the gate node itself is always allowed). Explicit per workflow
+   * because re-running an ancestor leaves its downstream worktree effects —
+   * only list a target whose revise path re-edits the existing worktree
+   * (e.g. bugfix pr → fix). Validated at load.
+   */
+  amendTargets?: string[];
 };
 
 // ---------------------------------------------------------------------------
@@ -150,6 +164,12 @@ export type Node = {
   noPlaceholders?: string[];
   /** Human-review gate config. */
   gate?: GateConfig;
+  /**
+   * Extra content check on this node's report, run after outcomeGate passes.
+   * "verify-runtime" enforces the runtime-evidence contract in
+   * core/verify-evidence.ts (no false pass on missing/blocked runtime evidence).
+   */
+  evidenceCheck?: "verify-runtime";
   /** Autonomous loop config (stop-hook driven). */
   loop?: LoopConfig;
   /** When true, a failed run degrades this node to 'skipped' instead of 'failed'. */
@@ -188,4 +208,11 @@ export type Workflow = {
   nodes: Node[];
   /** Max concurrent SDK sessions. Default 6. */
   maxParallel?: number;
+  /**
+   * When true, every gate returns to the originating planning companion
+   * (`dagrun gate show|decide`, see core/gate.ts) instead of spawning a fresh
+   * `claude` review session. `dagrun start` then requires an explicit
+   * `--companion-session <id>` or `--no-companion` — no silent default.
+   */
+  companionGates?: boolean;
 };

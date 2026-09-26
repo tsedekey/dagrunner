@@ -1,920 +1,180 @@
-# /verify — Autonomous Acceptance-Test Author, Runner, Bounded Self-Healer, and Judge
+# /verify — Runtime Demonstration of the Change
 
-You are running the **verify node** of a dagrunner pipeline. Your job: author (or, on the bugfix
-workflow, reuse) an `@MultiDbTest` acceptance test that proves the promised user flow works,
-independently rebuild the `qa/acceptance-tests` module (a genuine prerequisite for Step 5 — see
-Step 4), run the acceptance test, classify the result, and write
-`$DAGRUN_ARTIFACTS/verify-report.json` — the artifact that gates `pr`. **No human reviews this
-node. It runs to a terminal classification on its own.** verify does NOT independently rerun the
-unit/integration test suite (removed by the verify-defer-to-ci-and-drop-diff-scoped-rerun change —
-see `DECISIONS.md`): CI already reruns build/test on every push, and `implement`/`fix` already
-self-report their own build/test status, so a redundant diff-scoped rerun here added cost without
-adding a signal nothing else already provides.
+You are running the **verify node** of a dagrunner pipeline (bugfix and feature workflows share this
+prompt). Eddie chose to run you at the fix gate because seeing the change work is worth it for this
+case. Your job: build the **actual candidate** from the worktree, run it on a **local disposable
+target**, and **demonstrate** — with evidence Eddie can replay by hand — that the change does what
+the guide promised, and show _how_ it works.
 
-When a build/acceptance failure's root cause is genuinely test-side, you have narrow, bounded
-authority to fix it yourself and retry, instead of failing immediately — e.g. a checkstyle/spotless
-violation in a test file, or (only after independently proving production code is correct) a stale
-assertion or fixture in the acceptance test itself. This is NOT license to patch anything that gets
-in your way: you may only ever touch files under test paths, never production source; every
-self-heal is capped at a small retry budget; and acceptance-test self-heal specifically requires an
-isolated-context subagent to confirm production correctness before you touch anything — your own
-say-so is never sufficient for that one. See "Self-heal authority and boundary" below, which Step 4
-and Step 5 both reference. If a failure's root cause lives in production code, self-heal is
-categorically off the table — write the matching `FAIL_*` outcome and stop, exactly as before.
+**What this node is NOT.** It is not a second copy of CI. Do not author, extend or run an
+`@MultiDbTest` acceptance test to duplicate what CI runs on the PR. It also does not replace the
+unit/integration/regression checks `implement`/`fix` already ran (do not delete, weaken or skip
+them; do not claim they ran if you did not run them). No human reviews this node while it runs —
+it ends in a terminal classification and Eddie reads `demo.md` at the pre-PR gate.
 
-You have access to the following env vars:
+Env vars you have:
 
-- `$DEVHARNESS_SRC` — permanent camunda/camunda checkout
-- `$DAGRUN_ARTIFACTS` — write `verify-plan.md` and `verify-report.json` here (nowhere else); a
-  `.verify-launch-marker` scratch file for launch-freshness bookkeeping (stall detection in Step 5)
-  is the one exception, see "Constraints" at the end of this file
-- `$DAGRUN_RUN_ID` — the current dagrunner run ID
-- `$DAGRUN_WORKTREE` — the worktree path (your cwd) — the acceptance test itself is written HERE,
-  under `qa/acceptance-tests`, because it is real, committed Camunda test code, not an artifact
-- `$DAGRUN_RUN_DIR` — the run directory (parent of all node artifact dirs)
+- `$DEVHARNESS_SRC` — permanent camunda/camunda checkout (do not modify)
+- `$DAGRUN_ARTIFACTS` — write `verify-report.json` and `demo.md` here (nowhere else)
+- `$DAGRUN_RUN_ID`, `$DAGRUN_WORKTREE` (your cwd), `$DAGRUN_RUN_DIR` (read upstream artifacts here)
 
----
+> **Do not print or discover the literal value of any `$DAGRUN_*` variable** (`echo`, `printenv`,
+> `env`, `node -e ...`) — the sandbox blocks it. Use the variable inline inside a real command
+> (`cat "$DAGRUN_RUN_DIR/..."`, heredoc writes to `"$DAGRUN_ARTIFACTS/..."`).
 
-## Known environment constraints (read before starting)
+## Known constraints (pre-verified — do not re-investigate)
 
-These facts are pre-verified — do not re-investigate them:
+- **Maven:** `./mvnw <goal>` directly; no `JAVA_HOME=...` prefix. If it says "No version is set for
+  command java": `grep '^java ' "$DEVHARNESS_SRC/.tool-versions" >> "$DAGRUN_WORKTREE/.tool-versions"`.
+- **This session is one-shot and non-resumable.** `ScheduleWakeup` is disallowed. If a command
+  auto-backgrounds, poll it to completion in this same turn with `TaskOutput(task_id, block: true,
+timeout: <bounded>)`. A denied/errored `Monitor`/`TaskOutput` setup is NOT "something is watching".
+  Stop polling a build after ~20 minutes with no progress and classify `BLOCKED_RUNTIME`.
+- **Permissions are not yours to widen.** Use only what the seeded settings already allow (`docker *`
+  is allow-listed). If a tool you need (e.g. `c8ctl`) is denied, that is a blocked capability, not a
+  prompt to work around — do not install tools, pull unrelated images or edit settings.
 
-- **Maven:** use `./mvnw <goal>` directly. Do NOT prefix with `JAVA_HOME=...` or any other env
-  variable — that pattern is not allow-listed and will be blocked.
-- **`.tool-versions` / Java version:** the worktree lives at
-  `~/.local/share/dagrunner/worktrees/<run-id>/` — a separate directory tree from the main repo.
-  If Maven fails with "No version is set for command java":
-  ```bash
-  grep '^java ' "$DEVHARNESS_SRC/.tool-versions" >> "$DAGRUN_WORKTREE/.tool-versions"
-  ```
-- **`qa/acceptance-tests` module isolation:** this module resolves its ENTIRE dependency chain
-  from `~/.m2`, NOT from the source tree — not just `clients/java`. Install the full transitive
-  closure before any compile/test run in this module:
-  ```bash
-  ./mvnw install -pl qa/acceptance-tests -am -Dquickly -T1C
-  ```
-  Skipping this step, or installing only a narrower subset (e.g. `clients/java` alone), leaves
-  `~/.m2` holding stale/skewed transitive jars after a rebase or any multi-module production
-  change. This does not just cause visible compile failures — a version-mismatched transitive
-  class can also break the actor scheduler's future-chain in a way that never resolves, causing
-  the embedded broker to **hang silently and indefinitely in `Broker.internalStart()`**, with no
-  error and no timeout. `-am` ("also make") has Maven compute and install the full transitive
-  dependency closure `qa/acceptance-tests` actually needs, so it structurally can't under-enumerate
-  the way a hand-picked module list can. Run this once per session before touching
-  `qa/acceptance-tests`.
-- **`docker *` is allow-listed.** Testcontainers itself talks to the Docker daemon directly from
-  the JVM (not through the Bash tool) — this allowlist entry only covers the preflight/diagnostic
-  commands below, not the actual acceptance-test execution.
-- **This session is one-shot and non-resumable — nothing will ever re-invoke it.** A long-running
-  Bash command may be auto-converted into a background task. This realistically means Step 5's
-  acceptance-test run (10+ minutes with an Elasticsearch testcontainer); Step 4 is now just the
-  `-am` module-isolation install + a compile (see Step 4 below) and normally completes quickly, but
-  the sandbox can still auto-background it if it judges the command long-running (the `-am` closure
-  can pull in a non-trivial number of modules), so the same "don't trust a background notification"
-  rule applies there too. If a Bash result says something like "running in background... you will
-  be notified when it completes," do NOT trust that notification and do NOT end your turn expecting
-  to be woken up later — there is no external process that will ever resume this session.
-  `ScheduleWakeup` is disallowed for this exact reason and calling it will fail. Instead, poll the
-  backgrounded task synchronously, inside this same turn, using `TaskOutput(task_id, block: true,
-timeout: <bounded>)` (or `Monitor`) — issuing several sequential poll calls in a row is normal and
-  does NOT end the turn. The bound differs by step:
-  - **Step 5:** poll **until the task completes OR the stall threshold below is hit, whichever comes
-    first.** Polling is not unbounded: on the same launch, once you've spent ~20 minutes of
-    wall-clock time with no terminal status (however you polled — repeated `TaskOutput` calls or
-    `Monitor`), stop polling blindly and switch to the progress-aware check in "Stall detection and
-    recovery" below before your next poll — reaching this floor is NOT itself a stall verdict, only
-    the point where that check starts applying. This matters because a hung process can look
-    identical to a slow-but-healthy one from `status: running` alone — see that section for what
-    actually distinguishes them past the floor.
-  - **Step 4:** the full progress-aware apparatus in "Stall detection and recovery" below is Step
-    5-specific and does not apply — a build/install command has no report directory to track
-    progress against, so a simple bounded poll-until-done is enough. Poll until the task completes;
-    if it is still `status: running` after ~10 minutes of wall-clock with no terminal status, treat
-    that as a genuine stall: terminate it (`TaskStop`, falling back to `ps`/`kill -TERM` if it
-    errors) and write `"outcome": "ERROR_INFRA"` — a killed build has no partial-report analog to
-    recover a real pass/fail signal from (unlike Step 5's Surefire/Failsafe reports), so this is
-    never retried on the spot regardless of remaining self-heal budget, exactly like the "no usable
-    report" bright line below.
-- **A denied or errored `Monitor`/`TaskOutput` SETUP call is NOT "a monitor is now watching."**
-  Run `56962-1` ended its turn on exactly this false premise: two `Monitor` setup attempts were
-  both denied outright by the Bash sandbox (a `Monitor` script combining a variable assignment, a
-  `while` loop, a conditional, and `xargs` trips the sandbox's multi-statement approval policy —
-  see the single-call guidance in Step 0 below for the general shape of this constraint), yet the
-  session still ended its turn saying "I'll wait for the monitor to notify me when the suite
-  completes" — no monitor was ever actually running. Since this session is one-shot and
-  non-resumable (above), nothing ever woke it back up, and `verify-report.json` was never written.
-  Only treat a background task as being watched if the setup call itself returned a genuine,
-  non-denied, non-error tool result confirming it. A denied or errored setup call is identical to
-  having no progress signal at all — fall back to manual, single-command `TaskOutput(task_id,
-block: true, timeout: <bounded>)` polls (never a compound script), or, if no viable polling
-  mechanism exists at all, treat this per "Stall detection and recovery" below. Never end the turn
-  on the assumption that something is watching in the background unless you have that direct
-  confirmation.
-
----
-
-## Step 0 — Docker daemon preflight (mandatory, first, fail loud)
-
-`@MultiDbTest` only auto-provisions its own Elasticsearch testcontainer for `DatabaseType.LOCAL`.
-For the `ES`/`OS` database types — which Step 5 selects via
-`-Dtest.integration.camunda.database.type=ES|OS` — `CamundaMultiDBExtension` does NOT start
-anything itself: it hardcodes the connection to `http://localhost:9200` and polls it for up to 3
-minutes (`TIMEOUT_DATABASE_READINESS`) before failing with `ConditionTimeout`. If no container is
-listening on `:9200` yet, this reads exactly like a hang, not a fast failure — Step 5 has the exact
-`docker run` command you must issue yourself before an `ES`/`OS` invocation. Separately, if the
-Docker daemon itself is not reachable, neither the `LOCAL` testcontainer path nor a manual `ES`/`OS`
-container start in Step 5 can work — check for that NOW, before doing any authoring work:
-
-Issue this as **one single Bash call** — do not split it into two calls (`docker info ...` then a
-separate `echo "docker_reachable=$?"`): a prior call's shell state, including `$?`, does not
-survive into a separate Bash tool invocation in this sandbox, so the two-call form would silently
-read the wrong exit code. Do not write it as a semicolon-chained two-command line either
-(`docker info ...; echo ...`) — that form has been observed denied outright as "multiple operations
-requiring approval." The single logical `&&`/`||` expression below is self-contained (no
-semicolon, no variable assignment, no reliance on a previous call) and captures the same
-reachable/unreachable signal in one call:
-
-```bash
-docker info > /dev/null 2>&1 && echo docker_reachable=0 || echo docker_reachable=1
-```
-
-If `docker_reachable` is not `0`:
-
-- Do NOT attempt Step 4/5 (build/acceptance execution) — there is no point.
-- Write `$DAGRUN_ARTIFACTS/verify-report.json` immediately with `"outcome": "ERROR_INFRA"` (see
-  Step 6 for the exact schema) and a clear, actionable `stages.acceptance.detail` message: e.g.
-  `"Docker daemon is not reachable from this worktree — start Docker Desktop (or the local Docker
-daemon) and rerun this node with: dagrun rerun verify --branch <branch>"`. Never a raw
-  testcontainer stack trace — the human resuming this run needs one sentence, not a Java trace.
-- Skip straight to Step 7 (reflections, optional) and stop. Do not write a `verify-plan.md` — no
-  authoring work happened.
-
-If `docker_reachable` is `0`, continue to Step 1.
-
----
-
-## Step 1 — Read the promised user flow
-
-Find the **authoring source** (the promised user flow/contract, not the diff). `define/guide.md`
-means the feature workflow; `reproduce/guide.md` means the bugfix workflow. Run this — do not try to
-resolve `$DAGRUN_RUN_DIR` to a literal path first; use the variable inline, as below:
+## Step 1 — Read what to demonstrate
 
 ```bash
 cat "$DAGRUN_RUN_DIR/define/guide.md" 2>/dev/null || cat "$DAGRUN_RUN_DIR/reproduce/guide.md"
+cat "$DAGRUN_RUN_DIR/fix/summary.md"
+cat "$DAGRUN_RUN_DIR/fix/next-node-decision.json"
 ```
 
-Whichever one prints tells you which workflow you are running under — remember this, it decides
-whether Step 2 (search-existing-coverage) applies. If neither prints, stop and report it: a verify
-run with no authoring source cannot gate anything.
+From the guide take the expected behavior / acceptance criteria and, for a bug, the failing
+scenario. `fix/summary.md` should carry a `## Verify recommendation` (what worth showing, and why);
+`next-node-decision.json` may carry a `focus` from Eddie — if present it overrides your own choice
+of what to show. Decide the **smallest scenario** that demonstrates the change; do not build a
+broad test matrix.
 
-Also read, for context (not as an authoring source):
+## Step 2 — Choose the runtime capability (least intrusive that works)
+
+This is capability _selection_, not a mandatory sequence. Probe read-only first and record what you
+find; do not assume anything below exists:
 
 ```bash
-cat "$DAGRUN_RUN_DIR/implement/summary.md" 2>/dev/null
-cat "$DAGRUN_RUN_DIR/fix/summary.md" 2>/dev/null
-cat "$DAGRUN_RUN_DIR/review/findings.json" 2>/dev/null
+docker info > /dev/null 2>&1 && echo docker_reachable=0 || echo docker_reachable=1
+command -v c8ctl >/dev/null 2>&1 && echo c8ctl=present || echo c8ctl=absent
+ls "$DAGRUN_WORKTREE"/c8run "$DAGRUN_WORKTREE"/docker-compose* "$DAGRUN_WORKTREE"/*/docker-compose* 2>/dev/null
 ```
 
----
+Options: **docker-compose** (setup from a compose file in the repo), **c8run** (repo's C8 Run
+distribution, as an alternative), **source** (run the built module directly, when the bug is
+reproducible without a full cluster), and **c8ctl** for operations it actually supports (check
+`c8ctl --help`; never assume a subcommand). Skill/guide text mentioning a tool does not make it
+available — only a command that ran does. If the guide's scenario needs no cluster (pure library
+behavior), a source-level demonstration is the right, smaller answer.
 
-## Step 2 — Bugfix workflow only: search for existing acceptance-test coverage
+## Step 3 — Pin the candidate (provenance)
 
-**Skip this entire step if `define/guide.md` exists (feature workflow) — go straight to Step 3.**
-
-If `reproduce/guide.md` exists (bugfix workflow), the regression test already written during
-`implement`/`fix` only proves the fix at the unit/integration layer — it does NOT prove the
-user-facing flow is covered at the acceptance-test layer. Before authoring a new AT, check whether
-one already exists:
-
-1. Identify the user-facing flow the bug touches, grounded from `reproduce/guide.md` (not the
-   diff — the guide is the authoritative description of the promised/expected behavior).
-2. Search the worktree's acceptance-test module for an existing `@MultiDbTest` that already
-   exercises that flow:
-   ```bash
-   grep -rl "@MultiDbTest" "$DAGRUN_WORKTREE/qa/acceptance-tests" --include="*.java"
-   ```
-   Read the candidates whose class/method names or comments suggest they touch the same area
-   (process/resource type, REST endpoint, job type) as the bug.
-3. **If an existing AT already covers the flow:** do NOT author a new one. Record which file was
-   reused and why in `verify-plan.md` (Step 6b). Proceed directly to Step 4 (build prerequisite for
-   Step 5) using that existing AT as the one to execute in Step 5 — skip Step 3 (author) entirely,
-   but do NOT skip Step 3b (the diff-grounding self-check) — the self-check still applies to a
-   reused AT (see the diff-grounding subagent's own note on this).
-4. **If no existing AT covers the flow:** proceed to Step 3 exactly as the feature workflow does.
-
----
-
-## Step 3 — Author the acceptance test (feature workflow, or bugfix with no existing coverage)
-
-**Scope discipline: author ONE (or a small few) acceptance test(s) covering the WHOLE promised
-user journey from the guide — not a re-run of unit/integration coverage.** That is `implement`'s
-job, already done. You are proving the end-to-end user-facing contract, not re-testing internals.
-
-1. Inspect existing conventions before writing anything:
-   ```bash
-   find "$DAGRUN_WORKTREE/qa/acceptance-tests" -name "*.java" | xargs grep -l "@MultiDbTest" | head -5
-   ```
-   Read 2-3 of these in full. Mirror their package structure, imports, `CamundaClient` injection
-   pattern, and assertion/await style exactly. **Do not invent new structure.**
-2. Identify the single (or few) end-to-end flow(s) the guide promises — e.g. "deploy a process
-   with the new escalation boundary event, start an instance, confirm the escalation is observable
-   via the REST API." Write the test to deploy/start/act/assert that flow using the existing
-   `@MultiDbTest` framework primitives (`TestStandaloneBroker`/`TestSimpleCamundaApplication`
-   started in-process, injected `CamundaClient`) — do not reimplement any part of that framework.
-   **A promised flow with an authorization/security-boundary case does not have to live in the
-   same file as the rest of the coverage.** If a dedicated `*AuthorizationIT` class already exists
-   for this resource type with the fixture (multi-user auth setup, `@Authenticated` client) the
-   auth case needs, bolting one method onto it is usually the right call — duplicating that
-   fixture in the new file just to keep everything in one place is not required and often worse.
-   Whichever files end up covering the guide's promised flow, list all of them in `verify-plan.md`
-   (Step 6b) and carry every one of them into Step 3b — do not let the diff-grounding self-check
-   see only the new file.
-3. Use the framework's own await/poll semantics for timing-sensitive assertions (e.g. its existing
-   `Awaitility`-style helpers, if the reference tests use one) — **no fixed `Thread.sleep`**.
-4. Run the formatter after writing the file:
-   ```bash
-   ./mvnw spotless:apply --no-transfer-progress
-   ```
-5. Stage the new file (and anything else outstanding in the worktree) so it is visible to the
-   diff-grounding self-check's diff comparison and eventually reaches the PR:
-   ```bash
-   cd "$DAGRUN_WORKTREE" && git add -A && git status --short
-   ```
-
----
-
-## Step 3b — isolated diff-grounding self-check (mandatory, before Step 4)
-
-Dispatch the **`verify-diff-grounding-checker`** subagent via the Agent tool — this is a deliberate
-isolated-context check, not a self-assessment, mirroring how `review`'s adversarial verifier
-grounds findings independently rather than trusting the reviewer that raised them.
-
-Pass it in the prompt:
-
-1. The diff:
-   ```bash
-   cd "$DAGRUN_WORKTREE" && git diff "$(git merge-base origin/main HEAD)"
-   ```
-   Diffed against the merge-base commit, not `origin/main` directly — `origin/main` can drift
-   arbitrarily far ahead of this branch's actual base (observed live on run `56962-1`: ~1300 commits
-   of drift, which pollutes a direct `origin/main` diff with unrelated files); merge-base finds the
-   actual common ancestor, giving a clean diff regardless of how stale `origin/main` looks locally.
-   This still covers both staged and unstaged changes (no `..HEAD` suffix — a plain `git diff <ref>`
-   compares `<ref>` against the working tree), i.e. everything `implement`/`fix`/you have changed so
-   far; this is a self-check input ONLY, never an authoring input — you already authored from the
-   guide in Step 1/3. Recompute the merge-base inline, as a command substitution, in every diff
-   command below — do not assign it to a shell variable in one Bash call and read it in another;
-   shell state does not persist across separate Bash tool calls in this sandbox (see
-   `verify-run-56962-1-forensics` in `DECISIONS.md` for the same constraint in a different guise).
-2. The full content of **every** acceptance-test file/method that covers the guide's promised
-   flow — whether newly authored in Step 3, an existing file identified as a reuse match in
-   Step 2, or an existing `*AuthorizationIT`-style class you added a method to per the note above.
-   Coverage for one promised flow is frequently split across more than one file (e.g. the happy
-   path in a new class, the unauthorized-caller case bolted onto an existing auth IT) — grounding
-   only the file you happened to author first will miss real coverage that lives elsewhere. Use
-   the file list you recorded in Step 3/verify-plan.md, not just the newest file.
-3. A one-paragraph description of the flow it's supposed to cover.
-
-**If the subagent returns `grounded: false`:** do NOT proceed to Step 4/5. Write
-`$DAGRUN_ARTIFACTS/verify-report.json` immediately with `"outcome": "FAIL_ASSERTION"` — this is
-the same classification used for "feature behavior wrong" because an AT that cannot be confirmed
-to exercise the diff means the pipeline cannot confirm the feature works, which is operationally
-equivalent to a failed assertion. Include the subagent's `rationale` verbatim in
-`stages.selfCheck.detail`. Skip straight to Step 7 (reflections) and stop.
-
-**If `grounded: true`:** record the subagent's verdict in `verify-plan.md` (Step 6b) and proceed
-to Step 4.
-
----
-
-## Self-heal authority and boundary (read before Step 4/5)
-
-verify has no human review, which is exactly why this boundary is mechanical, not a matter of
-"use good judgment." It applies every time a self-heal is considered in Step 4 or Step 5 below.
-
-**What qualifies as self-heal-able, per stage:**
-
-- **Build-stage (Step 4):** ONLY a lint/style/format violation (checkstyle, spotless, or
-  equivalent) — never a genuine compile error. A style violation is not a behavioral question, so
-  same-session judgment is sufficient; no isolated subagent is required for this stage. A genuine
-  compile error is never self-heal-able, but MAY be classified `DEFERRED_TO_CI` instead of
-  `FAIL_BUILD` if it is mechanically confirmed pre-existing and diff-unrelated — see Step 4's
-  "Deferred-to-CI check" below. That classification is not a self-heal (nothing is fixed or
-  retried) — it is a narrower failure classification.
-- **Acceptance-stage (Step 5):** an assertion failure MAY be self-healed, but only after the
-  isolated `verify-production-correctness-checker` subagent independently confirms the production
-  code is correct (see Rule 3 below). Never self-heal on your own conclusion alone, no matter how
-  rigorous your own tracing felt — same-session self-grading has a known bias problem in this
-  codebase, which is exactly why the diff-grounding self-check (`verify-diff-grounding-checker`)
-  already exists as an isolated dispatch elsewhere in this command.
-- `ERROR_INFRA` is never self-heal territory at any stage — an infra problem isn't a code defect to
-  fix.
-
-**Rule 1 — directory-scoped hard rule (mechanically enforced, not just an instruction):** you may
-only ever edit files under test paths — `**/src/test/**`, `qa/acceptance-tests/**`, and their
-resource/fixture subdirectories. NEVER edit anything under `**/src/main/**` or any other production
-source path. **`**/src/main/**` is a deny that always wins, even when nested under an
-otherwise-allowed prefix** — e.g. a hypothetical `qa/acceptance-tests/src/main/**` (shared test-
-harness code some modules keep in a `src/main` directory) is still production-shaped code, not test
-code, and is still off-limits; `qa/acceptance-tests/**` is only an allow for the parts of that tree
-that are themselves under `src/test` or a resource/fixture directory. If a failure's root cause
-lives in production code, self-heal is categorically not an option — write the appropriate
-`FAIL_*` outcome and stop.
-
-Enforce this mechanically, every time, using this exact procedure (identical at both stages):
-
-1. **Before attempting any fix this session**, snapshot a baseline so your own edit can be isolated
-   from `implement`/`fix`'s legitimate production changes and the AT itself (do this even if Step 3
-   already ran `git add -A` — it is idempotent and guarantees the baseline exists regardless of
-   whether Step 2's reuse path skipped Step 3):
-   ```bash
-   cd "$DAGRUN_WORKTREE" && git add -A
-   ```
-2. Apply your candidate fix (edit the file(s) you diagnosed). Only edit existing files you have
-   already read — do not create a new file as part of a self-heal fix; if the fix genuinely
-   requires a new file, that is outside self-heal's scope, not a workaround for it.
-3. **Check what you actually changed** — this is the mechanical gate, not a prose self-check:
-   ```bash
-   cd "$DAGRUN_WORKTREE" && git diff --name-only
-   ```
-   Every path printed must match a test path (`**/src/test/**`, `qa/acceptance-tests/**` outside
-   any nested `src/main`, or a resource/fixture subdirectory of either) and must NOT match
-   `**/src/main/**` under any prefix. If even one path does not match:
-   ```bash
-   cd "$DAGRUN_WORKTREE" && git checkout -- .
-   ```
-   This reverts your edit while preserving the baseline (implement/fix's legitimate production
-   changes stay staged, untouched). Treat this exactly as "root cause is production code" — write
-   the stage's `FAIL_*` outcome and stop; note in `detail` that a production-scope edit was
-   attempted, caught, and reverted.
-4. If every changed path is in scope, fold the good fix into the baseline before retrying:
-   ```bash
-   cd "$DAGRUN_WORKTREE" && git add -A
-   ```
-
-**Rule 2 — shared-fixture rule:** before editing any test fixture file (BPMN, JSON, or other
-resource file under a test resources directory), check how many test files reference it:
+The artifact you demonstrate MUST be built from this worktree. A stock released image can only be a
+**baseline** — it can never demonstrate an unbuilt source change.
 
 ```bash
-grep -rl "<fixture-name>" "$DAGRUN_WORKTREE/qa/acceptance-tests" --include="*.java"
+git -C "$DAGRUN_WORKTREE" rev-parse HEAD
+git -C "$DAGRUN_WORKTREE" status --porcelain -uall
 ```
 
-- If **more than one** test file depends on it, editing the shared fixture directly is off-limits —
-  other tests rely on its current contents and you have no way to verify your edit doesn't break
-  them. Instead, fix the _dependent AT's own assertions_ (e.g. update a stale expected-value list to
-  account for the fixture's actual, legitimate behavior) — this is almost always the correct fix in
-  practice, not a fallback.
-- Only edit the fixture directly if it is used by exactly the one AT you are validating in this
-  run.
+The fix may be uncommitted (`pr` commits later); the candidate is HEAD **plus** those dirty files.
+Build from the working tree, then record: the built artifact path, its identity (image digest or
+`sha256sum` of the jar/distribution), tool versions, and the build command. **Do not modify tracked
+files, commit, or run `git add`** — the report's `dirtyFiles` must still equal the porcelain list
+when you finish, or the node fails.
 
-**Rule 3 — proof-before-fix rule (acceptance-stage failures only):** you may treat an acceptance-test
-failure as test-side and self-heal it ONLY after dispatching the **isolated**
-`verify-production-correctness-checker` subagent (via the Agent tool) and receiving back
-`production_correct: true` AND `confirmed: true`. Pass it: the diff, the AT's full content and the
-specific failing assertion(s), the actual failure output, and a one-paragraph flow description
-(same inputs the diff-grounding self-check already uses, plus the failure output). If the subagent
-returns `false` for either field, or you cannot dispatch it, self-heal is off — write
-`FAIL_ASSERTION` and stop, exactly as
-before Rule 3 existed.
+## Step 4 — Demonstrate (baseline, then candidate)
 
-**Retry caps (cost control — acceptance cycles are expensive):**
+1. **Local disposable target only.** Bind to loopback (`localhost`/`127.0.0.1`), use fresh state, and
+   prefix every container/process/data dir you create with `dagrun-$DAGRUN_RUN_ID-` (use the run id
+   via inline shell expansion). Ignore ambient endpoints: never use any `ZEEBE_*`/`CAMUNDA_*`
+   address or credential already in the environment, and never touch a resource you did not create.
+2. **Baseline** (optional but valuable for a bug): show the failing behavior on the base revision or a
+   stock release. Label every such observation `kind: "baseline"`.
+3. **Candidate**: run the scenario against the artifact from Step 3 and label it `kind: "candidate"`.
+   Show the observable behavior (request/response, logs, state), not just "it started".
+4. Keep commands **replayable by hand**: exact commands, inputs and expected output, in order.
+5. Bounded: hard stop at ~30 minutes of wall-clock, ≤ 2 self-corrections of your own setup errors.
 
-- Build-stage self-heal: at most **2** fix-and-retry cycles (i.e. up to 3 total run attempts for
-  that stage: the original run plus 2 retries).
-- Acceptance-stage self-heal: at most **1** fix-and-retry cycle (i.e. up to 2 total acceptance runs:
-  the original plus 1 retry) — each cycle re-provisions a fresh testcontainer for `LOCAL` (or
-  re-exercises the manually-started `ES`/`OS` container from Step 5) and can take 10+ minutes; do
-  not loop expensively.
-- **A stall-and-recover sequence shares this SAME budget — it is never a separate, stacked
-  counter.** For Step 5, "stall-and-recover" means the full apparatus in "Stall detection and
-  recovery" below. For Step 4, it means that step's own simpler bounded poll-until-done (see "Known
-  environment constraints" above) — the marker/progress-count machinery below is Step 5-specific,
-  but the SAME budget and bright-line rules apply to however Step 4's launch concluded (a Step 4
-  stall has no report analog to recover from, so it always resolves to `ERROR_INFRA` — see "Known
-  environment constraints" above). Read the cap above as a cap on total `./mvnw` launches per stage
-  (build: up to 3 launches; acceptance: up to 2 launches), regardless of why any one launch ended —
-  a clean pass/fail, a self-healed fix-and-retry, or (Step 5 only) a stall recovered via a report
-  found after termination. Recovering a usable report from a stalled Step 5 launch does not, by
-  itself, burn an extra cycle beyond the launch it already was — it is simply how that launch
-  concluded, and the resulting pass/fail signal feeds the normal self-heal decision above with the
-  remaining budget untouched. What actually consumes budget is issuing another `./mvnw` invocation
-  (a genuine retry launch). If a _retry_ launch itself stalls and no usable report is found (Step 5),
-  do not attempt yet another launch on the strength of remaining budget — treat the stage as
-  exhausted and stop. A stall with NO usable report, on ANY launch, is never retried on the spot
-  regardless of remaining budget — it is `ERROR_INFRA`, and `ERROR_INFRA` is never self-heal
-  territory at any stage (see above); the human reruns the whole node, not just the stalled stage.
-- If a stage exhausts its retry cap still failing, write the normal `FAIL_*` outcome exactly as
-  before this change, but the `detail` field must narrate what was attempted — what was diagnosed,
-  what was changed, why the retry still failed (including whether a stall-and-recovery was part of
-  that history) — not just the final raw failure output. A human resuming the run should not have
-  to start diagnosis from zero.
+## Step 5 — Cleanup (always, even on failure)
 
----
+Stop and remove only what you created (`dagrun-$DAGRUN_RUN_ID-*` containers, networks, volumes, temp
+dirs). Verify with `docker ps -a --filter name=dagrun-...`. Report leftovers honestly:
+`cleanup.status` is `"clean"` or `"leftovers"` (list them); a cleanup you could not complete is
+`BLOCKED_RUNTIME`, not `DEMONSTRATED`.
 
-## Stall detection and recovery (read before Step 5 — bounded, shares the retry budget above)
+## Step 6 — Write the evidence
 
-**Why this exists:** "poll until the task completes" (see "Known environment constraints" above) has
-no upper bound if "completes" never actually arrives. This was observed live, three consecutive
-times, on run `54177-1`'s Step 5 acceptance-test launch: `jstack` on the live JVM showed the main
-thread parked forever in `CamundaMultiDBExtension.afterAll` → `TestApplication.close()` →
-`Broker.close()` → `CompletableActorFuture.join()`, waiting on the Zeebe actor scheduler to signal
-shutdown-complete — a signal that never arrived, even though the actor threads themselves were idle
-(not processing the close task) and the test body itself had already finished well before the hang.
-This is confirmed unrelated to any given diff via `git diff --stat origin/main` (no broker/lifecycle
-code touched) — not something any one feature change introduces. **Root cause, reclassified after
-further investigation (see `DECISIONS.md § verify-stall-recovery` for the full correction):** not a
-genuine upstream Camunda product bug, but local `~/.m2` transitive-dependency version skew — an
-incomplete install step left stale jars in place, which caused the embedded broker's _startup_
-future-chain to deadlock silently (`Broker.internalStart()` hangs with no error, no timeout); the
-`Broker.close()` hang `jstack` caught is the downstream symptom of a broker that never finished
-starting cleanly. The "`qa/acceptance-tests` module isolation" install fix above (the `-am`-scoped
-`./mvnw install`) addresses this specific root cause, so this exact hang pattern should now be rare.
-Stall-recovery below is retained regardless, as general defense-in-depth for future stalls — it is
-not something worth trusting a person to notice by watching a terminal.
+### `$DAGRUN_ARTIFACTS/demo.md` (for Eddie)
 
-**Scope note (narrowed first by the verify-diff-scoped-test-rerun change, then by the
-verify-defer-to-ci-and-drop-diff-scoped-rerun change — see `DECISIONS.md` for both):** this full
-apparatus (marker file, fresh-report-count polling past a 20-minute floor) applies to Step 5's
-acceptance-test run (`./mvnw verify -Dit.test=<ClassName>`) only. It used to also apply to Step 4's
-independent test-suite rerun — first when that step ran an entire module (`./mvnw test -pl
-<module>`), later when it ran a diff-scoped handful of test classes — but that test-suite rerun has
-since been removed from Step 4 entirely (CI and `implement`/`fix` already cover it; see the
-verify-defer-to-ci-and-drop-diff-scoped-rerun entry). The 149-fresh-reports-in-20-minutes example in
-"1. Stall threshold" below is drawn from the original, now long-gone, whole-module scope, and is
-kept here purely as the historical evidence for why progress-awareness beats pure wall-clock, not as
-a live Step 4 scenario. Step 4 is now only the `-am` install + a compile — a build/install has no
-report directory to track progress against and rarely backgrounds at all, so it uses its own much
-simpler bounded poll-until-done instead (see "Known environment constraints" above), with a stall on
-that path resolving straight to `ERROR_INFRA` rather than the report-recovery apparatus below (there
-is no partial-report analog for a killed build to recover from).
+What is shown and why; the exact manual steps to reproduce (setup → baseline → candidate → expected
+output); what the result does and does not prove (a demonstration on one scenario is not regression
+coverage and not CI); any limits (versions, config, data differences).
 
-**1. Stall threshold — progress-aware, not pure wall-clock.** Two consecutive
-`TaskOutput(task_id, block: true, timeout: 600000)` (or `Monitor`) polls on the SAME background
-task (i.e. the same launch — not across separate launches) returning `status: running` is the
-**minimum elapsed floor** (~20 minutes of wall-clock with no terminal status) before this check
-can even trigger — do not evaluate progress before the floor; a fast module's very first poll
-cycle should not be killed prematurely.
+### `$DAGRUN_ARTIFACTS/verify-report.json`
 
-Past the floor, `status: running` alone is NOT sufficient to call it stalled. A pure wall-clock
-rule false-positives on any bulk multi-class module run: on run `56962-1`, `./mvnw test -pl
-zeebe/engine` (641 test classes total) produced 149 fresh surefire reports (~23% of the suite) in
-the same ~20-minute window this rule was about to kill it over — steady, healthy progress, not a
-hang. (The original threshold was calibrated entirely from a genuinely different scenario — a
-single acceptance-test class truly parked forever in `Broker.close()` on run `54177-1` — and was
-never validated against a bulk-module run like this one; see `DECISIONS.md §
-verify-run-56962-1-forensics` for the full record.)
-
-Track forward progress via the stage's report directory instead of trusting `status: running`
-alone:
-
-- **Right after issuing the backgrounded launch**, drop a marker file so later polls have a stable
-  reference point. This must be a file, not a shell variable — a variable set during one Bash tool
-  call does NOT survive into the next call in this sandbox:
-  ```bash
-  touch "$DAGRUN_ARTIFACTS/.verify-launch-marker"
-  ```
-  Issue this as its own Bash call, immediately before launching the `./mvnw` command. (Scratch
-  bookkeeping only, not a produces artifact — see "Constraints" at the end of this file.) Re-touch
-  it before every subsequent launch on this stage (a self-heal retry, or a stall-recovery relaunch)
-  so a prior launch's reports don't count as "fresh" for the new one.
-- **At each poll past the floor**, count report files newer than the marker — one self-contained
-  pipeline per call, never chained with the `TaskOutput`/`Monitor` call or anything else:
-  ```bash
-  find qa/acceptance-tests/target/failsafe-reports/ -newer "$DAGRUN_ARTIFACTS/.verify-launch-marker" 2>/dev/null | wc -l
-  ```
-  `-newer` compares file modification time against the marker, which also correctly counts a report
-  Failsafe overwrote in place (same filename, newer mtime) — not just brand-new filenames.
-- Remember the count from your immediately-prior poll in your own reasoning across this turn — no
-  need to persist it anywhere; this is all within the same session.
-
-Only classify as stalled when, across the two most recent polls (both past the floor), **both** are
-true: `status` is still `running`, AND the fresh-report count has NOT increased since the
-immediately-prior poll. If the count is still climbing, that is NOT a stall — keep polling (issuing
-several sequential poll calls in a row remains normal and does NOT end the turn, per "Known
-environment constraints" above). Only once the count is flat across two consecutive polls — no
-forward progress, not just "still running" — do you move to step 2. (This still correctly catches a
-genuine hang: `54177-1`'s teardown-only stall happened AFTER the test body had already finished and
-its report was already flushed, so the count plateaus immediately and the flat-count check fires
-exactly as before.)
-
-**2. Terminate the stalled task.** Call the `TaskStop` tool with `{task_id}`. `TaskStop` is a
-first-class tool in this session's toolset — ground this before relying on it by checking the
-session's own `system: init` event's `tools` array, which includes `TaskStop` alongside
-`TaskOutput`. If `TaskStop` itself errors or is unavailable for some reason, fall back to
-identifying and killing the underlying OS process via `ps`/`kill -TERM` in Bash — but prefer
-`TaskStop` as the primary path.
-
-**3. Look for a durably-written report — do NOT trust the killed task's own final status/exit
-code.** Wait a few seconds after termination, then check the stage-appropriate report directory
-directly:
-
-- **Step 5** (acceptance stage, `./mvnw verify -Dit.test=<ClassName>`):
-  `qa/acceptance-tests/target/failsafe-reports/` — look for `<ClassName>.txt` and
-  `TEST-<fully.qualified.ClassName>.xml`. (Step 4 no longer uses this apparatus at all — a build has
-  no equivalent report directory to recover a signal from; a Step 4 stall resolves straight to
-  `ERROR_INFRA` per "Known environment constraints" above.)
-
-This is deliberate: JVM shutdown hooks and Surefire/Failsafe's own report-flush timing mean the real
-result is very often already durably on disk as soon as the test methods + regular JUnit lifecycle
-finish — independent of whether the _extension's_ `afterAll` teardown hangs afterward. The killed
-task's own reported exit code/status, by contrast, is NOT a reliable signal — on run `54177-1`, two
-kills of the identical hang produced inconsistent results (one `status: completed, exit_code: 0`,
-the other `status: failed, exit_code: 144`) — this is an artifact of how the shell wraps a killed
-process, not a trustworthy pass/fail signal either way. Never treat a "completed"/exit-0 status from
-a task you JUST force-killed as meaningful on its own.
-
-**4. Act on what you find:**
-
-- **A complete, readable report exists for the relevant test(s):** parse it directly for the real
-  result and proceed exactly as if the command itself had returned that result normally — feed it
-  into the existing Step 5 pass/fail logic and self-heal decision, unaffected by this recovery
-  path having been needed. Record in the stage's `detail` field, briefly, that a stall was hit on
-  this launch and recovered via a report found after termination. Do NOT weaken this to "a report is
-  present" — it must be complete (the test class's result is actually recorded, not a partial/
-  in-progress file) before you trust it; an incomplete or missing report falls through to the next
-  bullet.
-- **No usable report is found even after the kill:** this launch is a wash with no real signal about
-  correctness. Do NOT classify `FAIL_ASSERTION` — that would imply a code-correctness signal that
-  does not exist here. **Bright line: classify `ERROR_INFRA` and stop. Do NOT reissue
-  another `./mvnw` launch for this stage on this path** — the human reruns the whole node (`dagrun
-rerun verify --branch <branch>`), not this session relaunching the suite from scratch. Run
-  `56962-1` did exactly the wrong thing here (in what was then Step 4's whole-module scope, since
-  narrowed away — see `verify-diff-scoped-test-rerun` in `DECISIONS.md`): after a stall-kill found
-  an incomplete report, the node relaunched the entire test suite instead of writing `ERROR_INFRA`,
-  which then compounded into a separate failure (see `DECISIONS.md § verify-run-56962-1-forensics`).
-  The same bright line applies here at Step 5. Write a clear,
-  actionable `detail` that names the observed pattern explicitly: a broker/environment teardown
-  hang in `CamundaMultiDBExtension.afterAll` → `Broker.close()` → `CompletableActorFuture.join()`,
-  pre-existing and unrelated to this diff (cite the `54177-1` precedent above), and instructs the
-  human to rerun the node.
-
-**5. Budget:** a stall-and-recover sequence consumes one of the EXISTING retry-cycle budget slots
-for that stage (2 for build, 1 for acceptance) — see the "Retry caps" bullet above for exactly
-how launches, self-heal retries, and stalls share that one counter. Do not add a separate,
-independently-uncapped stall-retry counter.
-
----
-
-## Red flags — talk yourself out of these, don't act on them
-
-This does not repeat the Rule 1/2/3 mechanics above — it's a short reinforcement of judgment calls
-that lead TO the boundary being tested in the first place.
-
-| Red flag phrase (in your own reasoning)                                        | What to do instead                                                                                                                                                                                                                                                               |
-| ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| "This is basically a lint issue" (when it isn't)                               | Only checkstyle/spotless/format tooling actually flagging it counts as lint. A genuine compile error or behavioral assertion failure dressed up as "basically style" is still not self-heal-able (Step 4).                                                                       |
-| "This assertion failure looks stale, I'll just update it"                      | Not without the `verify-production-correctness-checker` subagent's `production_correct: true` AND `confirmed: true` (Rule 3). Your own read of "looks stale" is exactly the self-grading bias Rule 3 exists to guard against.                                                    |
-| "I'll just tweak this shared fixture once, it's a small change"                | Run the Rule 2 `grep -rl` count first. More than one dependent test means the fixture is off-limits — fix the dependent AT's assertions instead.                                                                                                                                 |
-| "The directory check is a formality, I know my edit was test-only"             | Run `git diff --name-only` anyway (Rule 1) — it is the mechanical gate, not your own confidence.                                                                                                                                                                                 |
-| "This has already taken a while, I'll skip the isolated subagent to save time" | The isolated subagent dispatch (the diff-grounding self-check, and Rule 3 for acceptance self-heal) is what makes verify's judgment trustworthy with no human reviewing it. Skipping it to save time removes the one check that exists precisely because there is no human here. |
-| "Docker/testcontainer flakiness, I'll just call it ERROR_INFRA"                | Confirm the container was actually started and answered (Step 0 / Step 5's `ES`/`OS` note) before writing `ERROR_INFRA` — a setup omission on your part is not infra flakiness.                                                                                                  |
-
----
-
-## Step 4 — Build the acceptance-tests module (prerequisite for Step 5)
-
-`qa/acceptance-tests` cannot compile or run at all without the module-isolation install below (see
-"Known environment constraints" above) — Step 4 exists purely to satisfy that prerequisite before
-Step 5 attempts to run the acceptance test itself. `verify` does NOT independently rerun the
-unit/integration test suite here (removed by the verify-defer-to-ci-and-drop-diff-scoped-rerun
-change, motivated by run `56954-1` — see `DECISIONS.md`): CI already reruns build/test on every
-push, and `implement`/`fix` already self-report their own build/test status, so a diff-scoped rerun
-of that suite here was pure redundancy, not an independent signal. Stop before the (expensive)
-acceptance test if the build itself is broken.
-
-1. **Build:**
-   ```bash
-   ./mvnw install -pl qa/acceptance-tests -am -Dquickly -T1C
-   ./mvnw compile -q
-   ```
-   - **If this fails and the failure is a lint/style/format violation (checkstyle, spotless, or
-     equivalent) in a file under a test path:** this qualifies for self-heal (see "Self-heal
-     authority and boundary" above). Apply the minimal fix, run the Rule 1 directory check, and
-     rerun the build command — up to 2 fix-and-retry cycles. If a cycle's directory check fails
-     (the fix touched a non-test path), stop self-healing immediately per Rule 1 and treat this as
-     a normal failure.
-   - **If this fails for any other reason** (a genuine compile error, or a lint/style violation in
-     a production file): not self-heal-able. Before writing `FAIL_BUILD`, work the "Deferred-to-CI
-     check" below — it may reclassify this as `DEFERRED_TO_CI` instead, but ONLY on confirmed
-     evidence; when in doubt it falls through to `FAIL_BUILD` unchanged. If the check does not
-     confirm a deferral, write `verify-report.json` with `"outcome": "FAIL_BUILD"`,
-     `stages.build.status: "FAIL"`, and a truncated (last ~40 lines) build-log tail in
-     `stages.build.detail`. Skip to Step 7 and stop.
-   - **If the retry cap is exhausted still failing:** work the same "Deferred-to-CI check" first;
-     if it does not confirm a deferral, write `"outcome": "FAIL_BUILD"` as above, but
-     `stages.build.detail` must narrate the diagnosis and what was attempted (see retry-cap rule
-     above), not just the final raw log tail. Skip to Step 7 and stop.
-2. Passing → `stages.build.status` is `"PASS"`. Proceed to Step 5.
-
-### Deferred-to-CI check (only when Step 4's build genuinely fails — never for a lint/style hit)
-
-A genuine compile/build error is not automatically `FAIL_BUILD`: if it is mechanically confirmed to
-be a pre-existing break in trunk, entirely unrelated to and unreachable from this diff, it is
-`DEFERRED_TO_CI` instead — a distinct, narrower, NON-blocking classification (added by the
-verify-defer-to-ci-and-drop-diff-scoped-rerun change, motivated by run `56954-1`, where the mandated
-`-am` install failed on 12 pre-existing NullAway errors in `zeebe/snapshot` — a module this diff
-never touched). `DEFERRED_TO_CI` is NOT a rename or replacement for `ERROR_INFRA` (which remains
-reserved for Docker/testcontainer/stall problems elsewhere in this file) — it is specifically for
-"the codebase this branch is based on doesn't compile, for reasons this diff didn't cause." Since
-Step 5 cannot run without a successful build, `DEFERRED_TO_CI` — like `FAIL_BUILD` — still means
-Step 5 is skipped (`stages.acceptance.status: "SKIPPED"`).
-
-**Bright line: this is a narrow, mechanical check, not a judgment call. If you cannot complete every
-step below with concrete evidence, do NOT guess — fall through to the normal `FAIL_BUILD` path.
-Silence or uncertainty must never resolve to `DEFERRED_TO_CI`.**
-
-1. From the Maven error output, identify the SPECIFIC file(s)/module the compile/build error is
-   actually in (e.g. `zeebe/snapshot/src/main/java/io/camunda/zeebe/snapshots/transfer/
-SnapshotTransferImpl.java`). If you cannot pin the error to a specific file this way — the error
-   output is ambiguous, spans something that isn't a single file, or you are not confident which
-   file is actually broken — stop here and fall through to `FAIL_BUILD`.
-2. Check whether that file is part of this diff (recompute the merge-base inline, per command, same
-   as every other diff command in this file — never cache it in a shell variable across separate
-   Bash calls):
-   ```bash
-   cd "$DAGRUN_WORKTREE" && git diff --name-only "$(git merge-base origin/main HEAD)" | grep -F "<failing-file-path>"
-   ```
-   If the file appears in this output, the diff touches it — this is NOT a confirmed-unrelated
-   break. Fall through to the normal `FAIL_BUILD` path, unchanged.
-3. If the failing file did NOT appear above, additionally confirm it is byte-identical against the
-   merge-base — absence from the diff could also mean the file was deleted (or that the path you
-   have is malformed, e.g. an absolute worktree path from Maven's error output instead of the
-   repo-relative form `git diff --name-only` uses), either of which an empty `git diff` alone would
-   also produce, wrongly:
-   ```bash
-   cd "$DAGRUN_WORKTREE" && git diff "$(git merge-base origin/main HEAD)" -- "<failing-file-path>"
-   ```
-   This must return genuinely empty output — but empty output alone is NOT sufficient, see step 3b.
-   3b. **Required corroboration — positive proof the path is a real, tracked file at the merge-base,
-   not just "no diff":** a malformed/absolute path produces an empty diff in step 3 for the WRONG
-   reason (git silently can't match a pathspec it doesn't recognize, not because the file is
-   unchanged), which would otherwise let a genuinely diff-caused break slip through as
-   `DEFERRED_TO_CI` — exactly the outcome the bright line below exists to prevent. Confirm the path
-   actually resolves to a tracked blob at the merge-base:
-   ```bash
-   cd "$DAGRUN_WORKTREE" && git cat-file -e "$(git merge-base origin/main HEAD):<failing-file-path>" && echo present || echo absent
-   ```
-   Only `present` corroborates step 3's empty diff as genuine byte-identity. `absent` means the path
-   didn't resolve (malformed path, or a file that's new on this branch) — treat this exactly like a
-   non-empty diff in step 2: fall through to the normal `FAIL_BUILD` path, unchanged.
-4. **Only if (2) shows the failing file absent from the diff, AND (3) shows an empty `git diff`
-   output, AND (3b) confirms `present`:** write `"outcome": "DEFERRED_TO_CI"` instead of
-   `"FAIL_BUILD"`. `stages.build.status` is still `"FAIL"` (the build genuinely failed — only the
-   `outcome` classification and its blocking behavior change, not whether Step 4 itself passed).
-   `stages.build.detail` must state, at the same evidentiary rigor as run `56954-1`'s report (see
-   `DECISIONS.md § verify-defer-to-ci-and-drop-diff-scoped-rerun`): which module/file broke, the
-   specific compile error, the merge-base evidence (the empty `git diff` output from step 3 AND the
-   `present` result from step 3b), and that this is being deferred to CI as a known, pre-existing
-   trunk issue unrelated to this PR — a human reading the report must be able to tell this was NOT
-   silently treated as a pass.
-5. If step 1, 2, 3, or 3b cannot be completed for any reason — the failing file can't be isolated, a
-   command errors, or the evidence is ambiguous — do NOT guess. Fall through to the normal
-   `FAIL_BUILD` path exactly as if this check did not exist.
-
----
-
-## Step 5 — Run the acceptance test, classify the outcome (with bounded, proof-gated self-heal)
-
-The module's default Maven profile EXCLUDES `@Tag("multi-db-test")` classes — which every
-`@MultiDbTest`/`@HistoryMultiDbTest` class carries. Running WITHOUT `-Pmulti-db-test` silently
-selects 0 tests (`BUILD SUCCESS`, `Tests run: 0`) — a false green, not a real pass. Always include
-`-Pmulti-db-test` for the AT class (the one authored in Step 3 or reused in Step 2). Drop the
-stall-detection marker first, as its own Bash call, THEN launch:
-
-```bash
-touch "$DAGRUN_ARTIFACTS/.verify-launch-marker"
-```
-
-```bash
-./mvnw verify -pl qa/acceptance-tests -Pmulti-db-test -Dit.test=<AcceptanceTestClassName> \
-  -Dtest.integration.camunda.database.type=<TYPE> -q
-```
-
-`<TYPE>` selects the secondary-storage backend (`CamundaMultiDBExtension#DatabaseType`):
-
-- **`RDBMS_H2`** — embedded, no setup required. Use this as the default/fastest verification
-  backend unless the diff specifically touches the ES/OS-only read path (e.g. a terms-aggregation
-  reader, index mappings), in which case also run `ES` (and/or `OS`) below.
-- **`ES` / `OS`** — NOT auto-provisioned by testcontainers (only the internal `LOCAL` type is — see
-  Step 0). You must start the container yourself on `:9200` and confirm it actually answers BEFORE
-  launching `mvnw`, or the run silently burns its full 3-minute `TIMEOUT_DATABASE_READINESS` budget
-  polling a closed port and fails with `ConditionTimeout` inside `CamundaMultiDBExtension` — this is
-  a setup omission on your part, not testcontainer/infra flakiness, and must not be classified or
-  narrated as `ERROR_INFRA` without first confirming the container really was up (see the
-  `ERROR_INFRA` note below).
-
-  ```bash
-  # ES — image/version kept in sync with zeebe/test-util/.../TestSearchContainers.java
-  # (which itself tracks version.elasticsearch.container in parent/pom.xml)
-  docker run -d --name dagrun-verify-es -p 9200:9200 \
-    -e discovery.type=single-node \
-    -e xpack.security.enabled=false \
-    -e xpack.watcher.enabled=false \
-    -e xpack.ml.enabled=false \
-    -e action.auto_create_index=true \
-    -e action.destructive_requires_name=false \
-    -e ES_JAVA_OPTS="-Xms512m -Xmx512m" \
-    docker.elastic.co/elasticsearch/elasticsearch:8.19.16
-
-  # OS — see docs/testing/acceptance.md for the maintained flags/version
-  docker run -d --name dagrun-verify-os -p 9200:9200 -p 9600:9600 \
-    -e discovery.type=single-node \
-    -e OPENSEARCH_INITIAL_ADMIN_PASSWORD=yourStrongPassword123! \
-    -e DISABLE_SECURITY_PLUGIN=true \
-    opensearchproject/opensearch:2.19.5
-
-  # wait for it to actually answer before invoking mvnw — bounded, fails loud, never a fixed sleep
-  i=0; until curl -sf http://localhost:9200 > /dev/null 2>&1; do
-    i=$((i+1)); if [ "$i" -ge 45 ]; then echo "ES did not answer on :9200 within 90s" >&2; exit 1; fi
-    sleep 2
-  done
-  ```
-
-  Remove the container once Step 5/6 are done (`docker rm -f dagrun-verify-es`) — it is scoped to
-  this node's own run, not left behind for the next one.
-
-**If this backgrounds and the poll stalls** (per the progress-aware check in "Stall detection and
-recovery" above — not `status: running` alone; this is the stage where the stall was actually
-observed live, on run `54177-1`, three consecutive times): follow "Stall detection and recovery"
-above — terminate via `TaskStop`, check `qa/acceptance-tests/target/failsafe-reports/` for a
-complete `<ClassName>.txt`/`TEST-*.xml`, and proceed from there.
-
-Classify the result into exactly ONE of:
-
-- **`PASS`** — the AT ran and all assertions passed. Proceed to Step 6.
-- **`FAIL_ASSERTION` (candidate)** — the AT ran but an assertion failed (the feature's behavior may
-  be wrong, or the test itself may be stale). Do not write this outcome yet — first work the
-  self-heal decision below.
-- **`ERROR_INFRA`** — the AT could not even start/run due to a genuine environment problem: a
-  `LOCAL`-type testcontainer failed to provision, a manually-started `ES`/`OS` container (Step 5)
-  came up but `CamundaMultiDBExtension` still never reported it healthy, a port conflict, etc. — OR
-  the task stalled and had to be killed with no usable report recovered afterward (see "Stall
-  detection and recovery" above). **Never** read this as a green pass, and never self-heal it (see
-  "Self-heal authority and boundary" above). IMPORTANT — before writing this outcome for an `ES`/`OS`
-  run: confirm you actually started the container per Step 5 and that it answered on `:9200`. A
-  `ConditionTimeout` from `CamundaMultiDBExtension` when no container was ever started is a Step-5
-  setup omission, not infra flakiness — go back, start the container, confirm it answers, and rerun
-  before writing any outcome at all. Docker being reachable at Step 0 does not guarantee a
-  `LOCAL`-type testcontainer starts cleanly either; distinguish "my container never came up"
-  (ERROR_INFRA) from "my container came up and the assertion failed" (FAIL_ASSERTION) by reading the
-  actual failure — a container-health/connection exception looks very different from a JUnit
-  assertion failure. Write `verify-report.json` with `"outcome": "ERROR_INFRA"` and stop.
-- (`FAIL_BUILD`/`DEFERRED_TO_CI` were already handled in Step 4 — you only reach this step once the
-  build passed.)
-
-**On a `FAIL_ASSERTION` candidate — work this decision before writing anything:**
-
-1. Trace the failure yourself first (as you naturally would) to form an initial hypothesis of
-   whether the root cause is production code or the test/fixture — but do NOT act on your own
-   conclusion yet.
-2. Dispatch the **`verify-production-correctness-checker`** subagent via the Agent tool (Rule 3).
-   Pass it the diff, the AT's full content and the specific failing assertion(s), the actual
-   failure output, and a one-paragraph flow description.
-3. **If the subagent does not return `production_correct: true` AND `confirmed: true`:** self-heal
-   is off. Write `verify-report.json` with `"outcome": "FAIL_ASSERTION"`, `stages.acceptance.status:
-"FAIL"`, and include the subagent's `rationale`/`evidence` in `stages.acceptance.detail`
-   alongside the raw failure. Skip to Step 7 and stop — exactly as before this change.
-4. **If the subagent confirms production is correct:** the fix is test-side. Determine where:
-   - If the fix is to the AT's own assertions/expectations, edit the AT file directly.
-   - If the fix would touch a shared fixture, apply Rule 2 (the shared-fixture check) first — if
-     more than one test file depends on the fixture, fix the dependent AT's assertions instead of
-     the fixture (this is the common case, not an edge case — see the run-54177-1 precedent this
-     change formalizes).
-
-   Apply the fix, run the Rule 1 directory check, and — if it passes — rerun the specific AT class.
-   You get **at most 1** retry cycle for the acceptance stage (2 total runs: original + 1 retry).
-
-5. **If the retry still fails, or the Rule 1 directory check fails at any point:** stop self-healing
-   immediately. Write `verify-report.json` with `"outcome": "FAIL_ASSERTION"`, and
-   `stages.acceptance.detail` must narrate the full diagnosis (including the subagent's verdict),
-   what was changed, and why the retry still failed (or why the directory check reverted the
-   attempt). Skip to Step 7 and stop.
-6. **If the retry passes:** `"outcome": "PASS"`. Record in `stages.acceptance.detail` that this run
-   passed after a self-heal, what was diagnosed, and what was changed — a PASS that required a
-   self-heal is still worth narrating for the human reading the report, even though it isn't a
-   failure. Proceed to Step 6.
-
-Use the framework's own await/poll helpers for any timing-sensitive read in your own manual
-inspection of the result — do not add fixed sleeps to work around a flaky-looking read.
-
----
-
-## Step 6 — Write the evidence artifacts
-
-### 6a — `$DAGRUN_ARTIFACTS/verify-report.json`
-
-Always write this file, on every path through this command (Step 0's early exit, Step 3b's
-self-check failure, Step 4's build failure, and Step 5's classification all converge here). Schema:
+Always written, on every path. Valid JSON. Schema (`schemaVersion` is literally `2`):
 
 ```json
 {
-  "run_id": "<$DAGRUN_RUN_ID>",
-  "timestamp": "<ISO 8601>",
-  "outcome": "PASS | FAIL_ASSERTION | FAIL_BUILD | DEFERRED_TO_CI | ERROR_INFRA",
-  "acceptanceTest": {
-    "path": "<qa/acceptance-tests/.../ClassName.java, or null if never reached>",
-    "source": "authored | reused-existing | not-reached"
+  "schemaVersion": 2,
+  "run_id": "<run id>",
+  "outcome": "DEMONSTRATED | NOT_DEMONSTRATED | BLOCKED_RUNTIME",
+  "reason": "<required unless DEMONSTRATED: one or two honest sentences>",
+  "capability": "docker-compose | c8run | c8ctl | source",
+  "toolVersions": { "docker": "...", "java": "..." },
+  "target": {
+    "kind": "local-disposable",
+    "host": "localhost",
+    "ownedResources": ["dagrun-<run>-es"]
   },
-  "stages": {
-    "dockerPreflight": { "status": "PASS | FAIL", "detail": "<one sentence>" },
-    "selfCheck": {
-      "status": "PASS | FAIL | SKIPPED",
-      "detail": "<subagent rationale or reason skipped>"
-    },
-    "build": {
-      "status": "PASS | FAIL | SKIPPED",
-      "detail": "<truncated log tail or reason skipped>"
-    },
-    "acceptance": {
-      "status": "PASS | FAIL | SKIPPED",
-      "detail": "<truncated log tail or reason skipped>"
-    }
+  "candidate": {
+    "sourceRevision": "<git rev-parse HEAD>",
+    "dirtyFiles": [
+      "<paths from git status --porcelain -uall, [] if committed>"
+    ],
+    "builtFromWorktree": true,
+    "buildCommand": "...",
+    "artifact": "<path or image tag>",
+    "artifactIdentity": "<sha256 or image digest>"
   },
-  "diagnostics": "<optional: incident/variable diagnostics the framework exposed on failure — omit key entirely if PASS>"
+  "observations": [
+    {
+      "kind": "baseline",
+      "command": "...",
+      "result": "<observed, truncated ~40 lines>"
+    },
+    { "kind": "candidate", "command": "...", "result": "<observed>" }
+  ],
+  "cleanup": { "status": "clean | leftovers", "leftovers": [] },
+  "demoFile": "demo.md"
 }
 ```
 
-Rules:
+Classification (the engine enforces these mechanically — a report that cannot back its claim FAILS):
 
-- `outcome` is the single field the pipeline's engine-level gate reads (`checkOutcomeGate` in
-  `dag.ts`) — it must be exactly one of the five values above, nothing else. `PASS` and
-  `DEFERRED_TO_CI` are both non-blocking (`outcomeGate.passValues` on both workflows); the other
-  three block `pr`.
-- Truncate any log/output text to roughly the last 40 lines (or ~4 KB) — never paste a full raw
-  dump. The goal is enough context for a human resuming the run to understand what broke, not a
-  complete transcript.
-- Every stage field must be present even when `SKIPPED` (e.g. `acceptance` is `SKIPPED` when
-  Step 0/3b/4 already stopped the run) — never omit a stage key.
-- Valid JSON, no trailing commas.
-- If a self-heal was attempted at any stage (see "Self-heal authority and boundary" above) — whether
-  it ultimately succeeded or the stage exhausted its retry cap and still failed — that stage's
-  `detail` must narrate the diagnosis, what was changed, and the result, not just the final raw
-  log/output. This applies even on a self-healed `PASS`: a human reading the report later should be
-  able to tell a self-heal happened without re-deriving it from the worktree diff.
-- The same narration requirement applies if a stall-and-recovery sequence happened at any stage (see
-  "Stall detection and recovery" above), regardless of whether it recovered a usable report or ended
-  in `ERROR_INFRA` — `detail` must say a stall was hit, that the task was terminated, and what (if
-  anything) was recovered from the report directory.
+- `DEMONSTRATED` — the candidate, built from this worktree, ran on a loopback disposable target and
+  showed the promised behavior. Needs ≥ 1 `candidate` observation, `builtFromWorktree: true`, a
+  `sourceRevision` equal to HEAD, `dirtyFiles` equal to the current porcelain list, an artifact
+  identity, and `cleanup.status` `clean|leftovers`.
+- `NOT_DEMONSTRATED` — the candidate ran and the behavior did **not** match the guide. This is a
+  real finding about the fix; report it plainly with the observations. Do not soften it.
+- `BLOCKED_RUNTIME` — you could not obtain runtime evidence (capability missing/denied, build or
+  startup failed, cleanup incomplete). Say exactly what and why in `reason`. This is never a pass.
 
-### 6b — `$DAGRUN_ARTIFACTS/verify-plan.md`
+Only observed results go in `observations`; never paste another agent's claim or an unperformed
+check as an observation. Stock-image-only evidence is `BLOCKED_RUNTIME` (or a baseline-only note),
+never `DEMONSTRATED`.
 
-Skip this file entirely if Step 0 exited early (no authoring work happened). Otherwise:
+## Step 7 — Reflections (optional, last)
 
-```markdown
-# Verify plan — <feature/fix name from the guide>
-
-## Flow covered
-
-<One paragraph: the user-facing flow this acceptance test proves, drawn from the guide.>
-
-## Acceptance test
-
-- **File:** `qa/acceptance-tests/.../ClassName.java`
-- **Source:** authored new | reused existing (bugfix workflow only — name the flow match reason)
-
-## Diff-grounding self-check verdict
-
-<The verify-diff-grounding-checker subagent's grounded/rationale verdict, verbatim.>
-
-## Build (prerequisite for Step 5)
-
-- Build: PASS/FAIL/DEFERRED_TO_CI (if DEFERRED_TO_CI: name the specific unrelated trunk
-  module/file/error and the merge-base evidence that confirmed it, per Step 4's "Deferred-to-CI
-  check")
-
-## Outcome
-
-<PASS | FAIL_ASSERTION | FAIL_BUILD | DEFERRED_TO_CI | ERROR_INFRA — one line, matches verify-report.json>
-```
-
----
-
-## Step 7 — Reflections (optional, do this last)
-
-Write `$DAGRUN_ARTIFACTS/reflections.md` if you discovered anything non-obvious about the
-acceptance-test surface, the build rerun, or the framework's own quirks (e.g. an `@MultiDbTest`
-await pattern that isn't obvious from the reference tests, a testcontainer provisioning gotcha).
-Absence is fine. The SessionEnd hook captures this automatically.
-
----
+Anything non-obvious (a capability that looked available but wasn't, an env gotcha) →
+`$DAGRUN_ARTIFACTS/reflections.md`. Absence is fine.
 
 ## Constraints
 
-- The acceptance test file is real, committed Camunda test code — it belongs in
-  `$DAGRUN_WORKTREE/qa/acceptance-tests`, NOT in `$DAGRUN_ARTIFACTS`.
-- `verify-plan.md` and `verify-report.json` are the only DECLARED artifacts written to
-  `$DAGRUN_ARTIFACTS`. `.verify-launch-marker` is the one exception — scratch launch-freshness
-  bookkeeping for this node's own use (stall-recovery in Step 5; same pattern as `fix.md`'s
-  `fix-history.log`), never a produces artifact, never read by anything outside this session.
-- Never let a testcontainer/infra failure read as `PASS` — when in doubt between `ERROR_INFRA` and
-  `FAIL_ASSERTION`, prefer `ERROR_INFRA` only when the failure is clearly provisioning-level (the
-  test body itself never ran); otherwise it's a real assertion failure.
-- Do not add any CI-style dist/packaging/cross-storage matrix coverage — out of scope.
-- Do not skip the diff-grounding self-check for a reused existing AT (bugfix path) — reuse still needs
-  grounding confirmation.
-- Self-heal (Step 4/5) is bounded and gated — never edit anything under `**/src/main/**` or any
-  other production path (Rule 1), never edit a shared fixture used by more than one AT (Rule 2), and
-  never self-heal an acceptance-test failure without a confirmed
-  `verify-production-correctness-checker` verdict (Rule 3). When self-heal is not authorized for a
-  failure, behave exactly as this node did before this change: write the matching
-  `FAIL_*`/`ERROR_INFRA` outcome and stop.
+- Write only to `$DAGRUN_ARTIFACTS/` (and disposable runtime resources you own). No worktree edits,
+  no commits, no `git add`, no `formatCommand`, no test authoring.
+- Do not extend an approved scope: no production/remote endpoints, no unrelated downloads or image
+  pulls, no global config changes.
+- Fail loud: if unsure whether a claim is backed by an observation you made, it is not
+  `DEMONSTRATED`.

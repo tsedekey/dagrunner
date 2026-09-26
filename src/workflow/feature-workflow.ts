@@ -16,6 +16,7 @@
  */
 
 import type { Workflow } from "../core/types.js";
+import { readNextNodeDecision } from "../core/gate.js";
 
 // ---------------------------------------------------------------------------
 // findings.json JSON schema (dagrunner-owned; single source of truth)
@@ -137,47 +138,35 @@ export const featureWorkflow: Workflow = {
       model: "sonnet",
       effort: "medium",
       produces: ["summary.md"],
-      gate: { maxIterations: 8, onReject: "revise-self" },
+      gate: { maxIterations: 8, onReject: "revise-self", decidesNode: "verify" },
       revisionInstruction:
         "Review the feedback below and revise the code changes in the worktree accordingly. " +
         "Then update {artifactsDir}/summary.md to reflect all changes made (which findings were addressed, what files changed, what was deferred).",
       formatCommand: "./mvnw spotless:apply --no-transfer-progress",
     },
-    // Autonomous acceptance-test author/runner/judge/gate — no human election,
-    // no Gate 3. Required and blocking: a non-PASS outcome fails this node via
-    // outcomeGate, which halts the run and blocks pr (same as a produces
-    // violation). See payload/commands/verify.md for the full flow (D2-D6 of
-    // the verify-autonomy change).
+    // Optional runtime DEMONSTRATION for the human — same node/prompt as the
+    // bugfix workflow (payload/commands/verify.md). Whether it runs is decided at
+    // the fix gate (gate.decidesNode) and read from fix/next-node-decision.json.
+    // Only DEMONSTRATED passes; see core/verify-evidence.ts.
     {
       id: "verify",
       dependsOn: ["fix"],
       command: "/verify",
       model: "sonnet",
-      // verify-plan.md is conditional, not unconditional — payload/commands/verify.md's
-      // legitimate short-circuit paths (Docker unreachable at Step 0; unrecoverable
-      // stall with no usable report, ERROR_INFRA) explicitly instruct "Do NOT write a
-      // verify-plan.md — no authoring work happened." Only verify-report.json is
-      // load-bearing here; it remains gated via outcomeGate below. See DECISIONS.md
-      // § verify-run-56962-1-forensics.
-      produces: ["verify-report.json"],
-      formatCommand: "./mvnw spotless:apply --no-transfer-progress",
-      // DEFERRED_TO_CI (verify-defer-to-ci-and-drop-diff-scoped-rerun change,
-      // 2026-07-14, see DECISIONS.md § verify-defer-to-ci-and-drop-diff-scoped-rerun,
-      // motivated by run 56954-1) is non-blocking, alongside PASS: it means
-      // verify confirmed Step 4's build broke on a pre-existing, diff-unrelated
-      // trunk issue (mechanically proven byte-identical against the merge-base)
-      // and deferred acceptance-test confirmation to CI, NOT that the build was
-      // skipped or the diff itself is broken. FAIL_BUILD/FAIL_TEST/FAIL_ASSERTION/
-      // ERROR_INFRA remain blocking — unchanged.
+      when: (ctx) =>
+        readNextNodeDecision(ctx.read("fix", "next-node-decision.json"), "verify"),
+      produces: ["verify-report.json", "demo.md"],
       outcomeGate: {
         file: "verify-report.json",
         field: "outcome",
-        passValues: ["PASS", "DEFERRED_TO_CI"],
+        passValues: ["DEMONSTRATED"],
       },
+      evidenceCheck: "verify-runtime",
     },
     {
       id: "pr",
-      dependsOn: ["fix", "verify"], // fix ensures worktree is ready; verify is required (non-optional) and gates pr
+      dependsOn: ["fix", "verify"], // verify may be skipped by the fix-gate decision; a FAILED verify still blocks pr
+      joinRule: "none-failed-min-one-success",
       command: "/pr",
       model: "haiku",
       produces: ["body.md"],
@@ -197,6 +186,7 @@ export const featureWorkflow: Workflow = {
     {
       id: "digest",
       dependsOn: ["fix", "verify"],
+      joinRule: "none-failed-min-one-success",
       command: "/digest",
       model: "sonnet",
       produces: ["knowledge-map.md"],
