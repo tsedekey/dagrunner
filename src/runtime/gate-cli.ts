@@ -83,6 +83,8 @@ export function gateOpen(args: {
   config: DagrunnerConfig;
   runId: string;
   configDirs?: string[];
+  /** Operator override of the directory to resume from. */
+  cwd?: string;
   /** Test seam. */
   spawn?: typeof spawnSync;
 }): number {
@@ -101,16 +103,17 @@ export function gateOpen(args: {
   if (brief.companion.status !== "ok" || res === undefined) {
     return err(brief.companion.blockedReason ?? "originating companion unavailable");
   }
-  if (res.cwd === null || !existsSync(res.cwd)) {
+  const cwd = args.cwd ?? res.cwd;
+  if (cwd === null || !existsSync(cwd)) {
     return err(
-      `cannot determine the session's original directory (${res.cwd ?? "not recorded"}); ` +
-        `cd there yourself and run: claude --resume ${res.sessionId}`,
+      `no existing directory recorded for the session (last seen: ${res.cwd ?? "none"}). ` +
+        `Re-run with --cwd <dir> (the directory the conversation now lives in), or cd there and run: claude --resume ${res.sessionId}`,
     );
   }
   emitGateBrief({ runDir: r.runDir, state: r.state, workflow: r.workflow, gateNodeId: gate, config: args.config, ...(args.configDirs !== undefined ? { configDirs: args.configDirs } : {}) });
   const out = (args.spawn ?? spawnSync)("claude", ["--resume", res.sessionId, res.prompt], {
     stdio: "inherit",
-    cwd: res.cwd,
+    cwd,
     env: { ...process.env, CLAUDE_CONFIG_DIR: res.configDir },
   });
   if (out.error !== undefined) return err(`failed to launch claude: ${out.error.message}`);

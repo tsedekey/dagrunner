@@ -15,6 +15,7 @@ import {
   planAmend,
   gateResumePrompt,
   readSessionCwd,
+  readSessionCwds,
   readNextNodeDecision,
   runHash,
   validateGateRequest,
@@ -196,6 +197,10 @@ test("readSessionCwd reads the session's directory from the transcript head; nul
   writeFileSync(f, '{"type":"summary"}\n');
   assert.equal(readSessionCwd(f), null);
   assert.equal(readSessionCwd(join(dir, "missing.jsonl")), null);
+  // A session that outlived a directory rename: newest cwd wins, older ones follow.
+  writeFileSync(f, '{"cwd":"/old/name"}\n{"cwd":"/old/name"}\n{"cwd":"/new/name"}\n');
+  assert.equal(readSessionCwd(f), "/new/name");
+  assert.deepEqual(readSessionCwds(f), ["/new/name", "/old/name"]);
 });
 
 test("gateResumePrompt tells a resumed conversation a gate is waiting, defers facts to `gate show`, and forbids deciding", () => {

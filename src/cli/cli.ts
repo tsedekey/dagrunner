@@ -239,7 +239,7 @@ async function cmdGate(argv: string[]): Promise<void> {
     process.stderr.write(
       `Usage:\n` +
         `  dagrun gate show <run-id>\n` +
-        `  dagrun gate open <run-id>      (resume the originating companion conversation, told a gate is waiting)\n` +
+        `  dagrun gate open <run-id> [--cwd <dir>]      (resume the originating companion conversation, told a gate is waiting)\n` +
         `  dagrun gate decide <run-id> --gate <node> --revision <rev> --action approve|amend|hold\n` +
         `      [--run-next yes|no] [--target <node>] [--comment "<text>"] [--session <id>] [--confirm <decision-id>]\n` +
         `  dagrun gate attach <run-id> --session <id> [--reconstructed] [--replace] [--reseed]\n`,
@@ -252,7 +252,8 @@ async function cmdGate(argv: string[]): Promise<void> {
   if (sub === "show") {
     code = gateShow({ homeDir, config, runId });
   } else if (sub === "open") {
-    code = gateOpen({ homeDir, config, runId });
+    const cwdFlag = flagValue(argv, "--cwd");
+    code = gateOpen({ homeDir, config, runId, ...(cwdFlag !== undefined ? { cwd: cwdFlag } : {}) });
   } else if (sub === "attach") {
     const session = flagValue(argv, "--session");
     if (session === undefined) {

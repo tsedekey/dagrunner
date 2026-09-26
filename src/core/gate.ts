@@ -13,7 +13,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync } from "node:fs";
 import { join } from "node:path";
 import type { Workflow } from "./types.js";
 import type { RunState } from "./state.js";
@@ -225,24 +225,48 @@ export function findSessionConfigDir(
 }
 
 /**
- * The directory a session was started in, read from the first transcript
- * records. `claude --resume <id>` only finds a session from its own project
- * directory, so the return path must `cd` there. null when not recorded.
+ * Directories the session has run in, MOST RECENT FIRST (read from the transcript
+ * tail, then head). A session outlives renames/moves of its directory, so the
+ * first record's cwd can be stale; `claude --resume <id>` must run from a
+ * directory that exists. Empty when none is recorded.
  */
-export function readSessionCwd(file: string): string | null {
+export function readSessionCwds(file: string): string[] {
+  const out: string[] = [];
   try {
     const fd = openSync(file, "r");
     try {
-      const buf = Buffer.alloc(65536);
-      const n = readSync(fd, buf, 0, buf.length, 0);
-      const m = /"cwd":"((?:[^"\\]|\\.)*)"/.exec(buf.subarray(0, n).toString("utf8"));
-      return m?.[1] === undefined ? null : (JSON.parse(`"${m[1]}"`) as string);
+      const size = fstatSync(fd).size;
+      const chunk = (pos: number, len: number): string => {
+        const buf = Buffer.alloc(len);
+        const n = readSync(fd, buf, 0, len, pos);
+        return buf.subarray(0, n).toString("utf8");
+      };
+      const tailLen = Math.min(size, 262144);
+      const text = chunk(size - tailLen, tailLen) + "\n" + chunk(0, Math.min(size, 65536));
+      const re = /"cwd":"((?:[^"\\]|\\.)*)"/g;
+      const found: string[] = [];
+      for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+        try {
+          found.push(JSON.parse(`"${m[1] ?? ""}"`) as string);
+        } catch {
+          /* skip a torn record */
+        }
+      }
+      // tail records come first in `text` (chronological), head after: newest = last of the tail part.
+      const seen = new Set<string>();
+      for (const c of found.reverse()) if (!seen.has(c)) { seen.add(c); out.push(c); }
     } finally {
       closeSync(fd);
     }
   } catch {
-    return null;
+    /* unreadable → none */
   }
+  return out;
+}
+
+/** Most recent recorded directory, or null. */
+export function readSessionCwd(file: string): string | null {
+  return readSessionCwds(file)[0] ?? null;
 }
 
 /**
@@ -504,7 +528,9 @@ export function buildGateBrief(args: {
         `(${configDirs.join(", ")}). Recovery: locate it, or attach a reconstructed session with Eddie's ` +
         `agreement (\`dagrun gate attach ${state.runId} --session <id> --reconstructed\`), or stay paused.`;
     } else {
-      const cwd = readSessionCwd(found.file);
+      // Newest recorded directory that still exists (a rename must not strand the session).
+      const cwds = readSessionCwds(found.file);
+      const cwd = cwds.find((c) => existsSync(c)) ?? cwds[0] ?? null;
       const prompt = gateResumePrompt(state.runId, gateNodeId);
       resume = { sessionId: assoc.sessionId, configDir: dir, cwd, prompt };
       resumeHint =
