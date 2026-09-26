@@ -18,6 +18,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildStatusJson } from "../../src/cli/status-json.js";
+import { readEvents } from "../../src/core/events.js";
 import { startRun, resumeRun } from "../../src/runtime/run-engine.js";
 import { gateAttach, gateDecide, gateOpen, gateShow, resumeOpensCompanion } from "../../src/runtime/gate-cli.js";
 import { createMockExecutor } from "../../src/runtime/mock-executor.js";
@@ -81,8 +83,16 @@ function newHome(): { home: string; plan: string } {
   writeFileSync(plan, readFileSync(join(__dirname, "fixtures", "toy-plan.md"), "utf8"));
   return { home, plan };
 }
-const factory = (over: Record<string, string> = {}) => () =>
-  createMockExecutor({ reproduce: "gate-pause", implement: "success", review: "success", fix: "gate-pause", verify: "success", pr: "gate-pause", digest: "success", ...over } as never);
+// The mock executor writes nothing into the worktree; a real fix does. Model that (an UNTRACKED
+// file, which is what changes.diff must render as a new-file diff) around the mock, per fix run.
+const factory = (over: Record<string, string> = {}) => () => {
+  const inner = createMockExecutor({ reproduce: "gate-pause", implement: "success", review: "success", fix: "gate-pause", verify: "success", pr: "gate-pause", digest: "success", ...over } as never);
+  const wrapped: typeof inner = async (id, node, ctx) => {
+    if (id === "fix") writeFileSync(join(ctx.worktreePath, "mock-fix-change.txt"), "mock fix change\n");
+    return inner(id, node, ctx);
+  };
+  return wrapped;
+};
 
 async function newRun(over: Record<string, string> = {}, session: string | null = SESSION) {
   const { home, plan } = newHome();
@@ -234,6 +244,20 @@ const R = await newRun();
   const b = briefOf(R.runDir, "fix");
   assert.equal(b.pendingDecision.decidesNode, "verify");
   assert.deepEqual(b.pendingDecision.amendTargets, ["fix"]);
+  // engine-written saved diff, on disk at the gate and visible in the brief / status --json before registration
+  const diffPath = join(R.runDir, "fix", "changes.diff");
+  const diffTxt = readFileSync(diffPath, "utf8");
+  assert.ok(diffTxt.length > 0, "changes.diff is non-empty");
+  assert.match(diffTxt, /mock-fix-change\.txt/, "changes.diff includes the untracked file");
+  assert.match(diffTxt, /\+mock fix change/);
+  const listed = b.gateArtifacts.find((f) => f.path === diffPath);
+  assert.equal(listed?.registered, false, "gate brief lists changes.diff before it is registered");
+  assert.ok((listed?.size ?? 0) > 0 && typeof listed?.mtime === "string");
+  const sj = buildStatusJson(R.home, R.runId).nodes["fix"]!.artifacts.find((f) => f.path === diffPath);
+  assert.equal(sj?.registered, false, "status --json lists the unregistered changes.diff");
+  const opened = readEvents(R.runDir).filter((e) => e.type === "gate.opened" && e.node === "fix" && e.detail?.["revision"] === b.revision);
+  assert.equal(b.openedAt, opened[0]?.ts, "brief.openedAt is the gate.opened event ts");
+  assert.equal(buildStatusJson(R.home, R.runId).awaitingGate?.since, opened.at(-1)?.ts, "status --json awaitingGate.since is the gate.opened ts");
   assert.equal(await decide(R, b, {}), 1, "approve without --run-next refused");
   assert.equal(stateOf(R.runDir).nodes["fix"]?.status, "awaiting-gate");
   const id = await propose(R, b, { runNext: false });
@@ -243,6 +267,8 @@ const R = await newRun();
   assert.equal(d.run, false);
   assert.equal(d.decisionId, id);
   assert.equal(s.nodes["verify"]?.status, "skipped", "verify skipped by decision");
+  assert.ok(s.nodes["fix"]!.artifacts.includes(diffPath), "changes.diff registered as a fix artifact on approve");
+  assert.ok(readFileSync(join(R.runDir, "pr", "changes.diff"), "utf8").includes("mock-fix-change.txt"), "pr gate open refreshes/copies changes.diff");
   assert.equal(s.nodes["pr"]?.status, "awaiting-gate", "pre-PR gate reached; a skipped verify must not block pr");
   assert.equal(s.status, "paused");
   say("7 passed: fix gate demands an explicit run/skip verify choice; skip → verify skipped → pause at pre-PR gate");

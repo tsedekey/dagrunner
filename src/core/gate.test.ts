@@ -299,3 +299,40 @@ test("loadWorkflow: rejects bad companionGates / decidesNode / amendTargets / ev
   (badEv.nodes[1] as { evidenceCheck?: string }).evidenceCheck = "nope";
   assert.throws(() => loadWorkflow(badEv), /invalid evidenceCheck/);
 });
+
+test("gate brief lists on-disk files not yet registered in state, without changing the revision", () => {
+  const runDir = mkdtempSync(join(tmpdir(), "dr-gate-files-"));
+  mkdirSync(join(runDir, "fix"), { recursive: true });
+  mkdirSync(join(runDir, "review"), { recursive: true });
+  writeFileSync(join(runDir, "fix", "summary.md"), "S");
+  writeFileSync(join(runDir, "fix", "transcript.log"), "noise");
+  writeFileSync(join(runDir, "review", "findings.json"), "{}");
+  const st = makeState({}, "fix");
+  st.nodes["review"] = { ...node("done"), artifacts: [join(runDir, "review", "findings.json")] };
+  const build = () => buildGateBrief({ runDir, state: st, workflow: bugfixWorkflow, gateNodeId: "fix", configDirs: [] });
+  const before = build();
+  writeFileSync(join(runDir, "fix", "changes.diff"), "diff --git");
+  writeFileSync(join(runDir, "review", "extra.md"), "x");
+  const after = build();
+  assert.equal(after.revision, before.revision, "unregistered files never change the revision");
+  const names = (fs: { path: string; registered?: boolean }[]) => fs.map((f) => `${f.path.split("/").at(-1)}:${f.registered}`);
+  assert.deepEqual(names(after.gateArtifacts), ["changes.diff:false", "summary.md:false"]);
+  assert.ok(after.gateArtifacts.every((f) => typeof f.size === "number" && typeof f.mtime === "string"));
+  assert.deepEqual(names(after.upstreamArtifacts.find((u) => u.nodeId === "review")?.files ?? []), ["findings.json:true", "extra.md:false"]);
+  // a registered non-produces file is listed (registered first) but still not hashed into the revision
+  st.nodes["fix"] = { ...node("awaiting-gate"), artifacts: [join(runDir, "fix", "changes.diff")] };
+  const reg = build();
+  assert.deepEqual(names(reg.gateArtifacts), ["changes.diff:true", "summary.md:false"]);
+  assert.equal(reg.revision, before.revision);
+});
+
+test("editing a produces file still changes the revision", () => {
+  const runDir = mkdtempSync(join(tmpdir(), "dr-gate-files-"));
+  mkdirSync(join(runDir, "fix"), { recursive: true });
+  writeFileSync(join(runDir, "fix", "summary.md"), "S");
+  const st = makeState({}, "fix");
+  const build = () => buildGateBrief({ runDir, state: st, workflow: bugfixWorkflow, gateNodeId: "fix", configDirs: [] }).revision;
+  const a = build();
+  writeFileSync(join(runDir, "fix", "summary.md"), "S2");
+  assert.notEqual(build(), a);
+});

@@ -12,6 +12,7 @@ import { readState } from "../core/state.js";
 import type { NodeAttempt, RunStatus } from "../core/state.js";
 import { isPidAlive, readLock } from "../core/lock.js";
 import { readEvents } from "../core/events.js";
+import { listNodeFiles, type NodeFile } from "../core/node-files.js";
 
 export type StatusJson = {
   runId: string;
@@ -30,7 +31,8 @@ export type StatusJson = {
       endedAt: string | null;
       durationMs: number | null;
       cost: number;
-      artifacts: string[];
+      /** Registered artifacts first, then unregistered on-disk files (registered:false). */
+      artifacts: NodeFile[];
       attempts: NodeAttempt[];
     }
   >;
@@ -96,7 +98,7 @@ export function buildStatusJson(homeDir: string, runId: string): StatusJson {
       endedAt: ns.endedAt ?? null,
       durationMs: Number.isNaN(dur) ? null : dur,
       cost: ns.cost,
-      artifacts: ns.artifacts,
+      artifacts: listNodeFiles(runDir, id, ns.artifacts),
       attempts: ns.attempts ?? [],
     };
   }

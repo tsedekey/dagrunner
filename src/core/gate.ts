@@ -20,6 +20,7 @@ import type { RunState } from "./state.js";
 import { checkNoPlaceholders, checkOutcomeGate } from "./dag.js";
 import { gitHead } from "./verify-evidence.js";
 import { readVerifyEnv } from "./verify-cleanup.js";
+import { listNodeFiles } from "./node-files.js";
 
 export type GateAction = "approve" | "amend" | "hold";
 export const GATE_ACTIONS: readonly GateAction[] = ["approve", "amend", "hold"];
@@ -51,7 +52,14 @@ export type GateRequest = {
   session?: string;
 };
 
-export type GateEvidenceFile = { path: string; sha256: string };
+export type GateEvidenceFile = {
+  path: string;
+  sha256: string;
+  /** In `state.nodes[id].artifacts`? Absent on hand-built evidence. Not part of the revision. */
+  registered?: boolean;
+  size?: number | null;
+  mtime?: string | null;
+};
 
 export type GateBrief = {
   schema: 1;
@@ -61,6 +69,8 @@ export type GateBrief = {
   iteration: number;
   /** `<runHash>.<contentHash>` — binds a decision to this exact run/gate/evidence. */
   revision: string;
+  /** ts of the `gate.opened` event for this revision (events.jsonl); set by emitGateBrief. */
+  openedAt?: string;
   planSha256: string | null;
   worktreeHead: string | null;
   /** Files the gate node produced (what the human is being asked about). */
@@ -443,16 +453,32 @@ export function collectGateEvidence(
   | "revision"
 > {
   const node = workflow.nodes.find((n) => n.id === gateNodeId);
-  const filesFor = (id: string): GateEvidenceFile[] =>
-    (workflow.nodes.find((n) => n.id === id)?.produces ?? [])
-      .map((f) => hashFile(join(runDir, id, f)))
-      .filter((f): f is GateEvidenceFile => f !== null);
+  // Listed = everything on disk (registered first; see node-files.ts). Only the
+  // declared `produces` files feed the revision, exactly as before, so unregistered
+  // extras (changes.diff, scratch) can never make a decision stale.
+  const filesFor = (id: string): { listed: GateEvidenceFile[]; hashed: GateEvidenceFile[] } => {
+    const produces = new Set(
+      (workflow.nodes.find((n) => n.id === id)?.produces ?? []).map((f) => join(runDir, id, f)),
+    );
+    const listed: GateEvidenceFile[] = [];
+    const hashed: GateEvidenceFile[] = [];
+    for (const nf of listNodeFiles(runDir, id, state.nodes[id]?.artifacts ?? [])) {
+      const h = hashFile(nf.path);
+      if (h === null) continue;
+      const ev = { ...h, registered: nf.registered, size: nf.size, mtime: nf.mtime };
+      listed.push(ev);
+      if (produces.has(nf.path)) hashed.push({ path: h.path, sha256: h.sha256 });
+    }
+    return { listed, hashed };
+  };
 
-  const gateArtifacts = node === undefined ? [] : filesFor(gateNodeId);
-  const upstreamArtifacts = ancestorsOf(workflow, gateNodeId)
+  const gateFiles = node === undefined ? { listed: [], hashed: [] } : filesFor(gateNodeId);
+  const gateArtifacts = gateFiles.listed;
+  const upstream = ancestorsOf(workflow, gateNodeId)
     .filter((id) => state.nodes[id]?.status === "done")
-    .map((id) => ({ nodeId: id, files: filesFor(id) }))
-    .filter((u) => u.files.length > 0);
+    .map((id) => ({ nodeId: id, ...filesFor(id) }))
+    .filter((u) => u.listed.length > 0);
+  const upstreamArtifacts = upstream.map((u) => ({ nodeId: u.nodeId, files: u.listed }));
   const plan = hashFile(join(runDir, "plan", "plan.md"));
   const planSha256 = plan?.sha256 ?? null;
   const worktreeHead = gitHead(state.worktreePath);
@@ -463,7 +489,7 @@ export function collectGateEvidence(
     iteration,
     planSha256,
     worktreeHead,
-    files: [...gateArtifacts, ...upstreamArtifacts.flatMap((u) => u.files)],
+    files: [...gateFiles.hashed, ...upstream.flatMap((u) => u.hashed)],
   });
   return {
     planSha256,

@@ -47,7 +47,7 @@ test("running run with a live driver: stale=false, currentNodes, per-node timing
   assert.equal(j.companion, null);
   assert.equal(j.nodes["reproduce"]?.durationMs, 90000);
   assert.equal(j.nodes["reproduce"]?.cost, 0.25);
-  assert.deepEqual(j.nodes["reproduce"]?.artifacts, ["/a/r.md"]);
+  assert.deepEqual(j.nodes["reproduce"]?.artifacts, [{ path: "/a/r.md", registered: true, size: null, mtime: null }]);
   assert.equal(j.nodes["implement"]?.durationMs, null);
   assert.equal(j.lastEventAt, "2026-01-01T00:10:00.000Z", "no events.jsonl: falls back to updatedAt");
   assert.equal(j.driver?.pid, process.ppid);
@@ -98,4 +98,20 @@ test("status --json never writes to the run dir or the lock", () => {
   const before = [snap(runDir), snap(home)];
   buildStatusJson(home, "9-1");
   assert.deepEqual([snap(runDir), snap(home)], before);
+});
+
+test("per-node artifacts include unregistered on-disk files (registered first), excluding bookkeeping", () => {
+  const { home, runDir, state } = setup();
+  const fix = join(runDir, "fix");
+  mkdirSync(fix, { recursive: true });
+  writeFileSync(join(fix, "summary.md"), "abc");
+  writeFileSync(join(fix, "changes.diff"), "d");
+  writeFileSync(join(fix, "transcript.log"), "t");
+  writeFileSync(join(fix, "burn.json"), "{}");
+  state.nodes["fix"] = { ...state.nodes["fix"]!, artifacts: [join(fix, "summary.md")] };
+  writeFileSync(join(runDir, "state.json"), JSON.stringify(state));
+  const a = buildStatusJson(home, "9-1").nodes["fix"]!.artifacts;
+  assert.deepEqual(a.map((f) => [f.path.split("/").at(-1), f.registered]), [["summary.md", true], ["changes.diff", false]]);
+  assert.equal(a[0]?.size, 3);
+  assert.match(a[1]?.mtime ?? "", /^\d{4}-/);
 });

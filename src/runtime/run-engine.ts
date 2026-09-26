@@ -622,6 +622,27 @@ export function seedWorktreeSiblings(
  * Note: rerunNode does not use this wrapper (debug tool; intentional omission
  * documented in DECISIONS.md).
  */
+/**
+ * Wrap an executor so the ENGINE (never an agent) saves the worktree's change as
+ * `fix/changes.diff` when `fix` finishes or pauses at its gate, and registers it
+ * as a `done` fix artifact. Failure warns only (tryWriteChangesDiff).
+ */
+function wrapWithChangesDiff(
+  base: NodeExecutor,
+  worktreePath: string,
+  runDir: string,
+  baseBranch: string,
+): NodeExecutor {
+  return async (id, node, ctx) => {
+    const result = await base(id, node, ctx);
+    if (id !== "fix" || result.status === "failed") return result;
+    const diff = tryWriteChangesDiff({ worktreePath, baseBranch, runDir, nodeId: id });
+    return diff !== null && result.status === "done" && !result.artifacts.includes(diff)
+      ? { ...result, artifacts: [...result.artifacts, diff] }
+      : result;
+  };
+}
+
 function wrapWithPrScan(
   base: NodeExecutor,
   worktreePath: string,
@@ -635,6 +656,7 @@ function wrapWithPrScan(
   };
 }
 
+import { CHANGES_DIFF_FILE, tryWriteChangesDiff } from "../core/changes-diff.js";
 import {
   reconcileRunningNodes,
   resetInterruptedNodes,
@@ -727,6 +749,13 @@ function announcePause(
 ): void {
   const st = readState(stateFile);
   const gate = awaitingGateId(st);
+  if (gate === "pr") {
+    // Pre-PR gate opens: refresh the saved change (verify/amend may have moved the
+    // worktree since fix) in fix/ and give the pr gate brief its own copy.
+    const args = { worktreePath: st.worktreePath, baseBranch: st.baseBranch ?? "main", runDir };
+    tryWriteChangesDiff({ ...args, nodeId: "fix" });
+    tryWriteChangesDiff({ ...args, nodeId: "pr" });
+  }
   if (
     gate !== undefined &&
     st.companion !== undefined &&
@@ -1018,12 +1047,17 @@ export async function startRun(opts: {
   const defaultFactory: ExecutorFactory = (c, rid, rdir, wt, sd) =>
     makeSDKRunner(c, rid, rdir, wt, sd, opts.nightMode);
   const executor = wrapWithPrScan(
-    (opts.executorFactory ?? defaultFactory)(
-      config,
-      runId,
-      runDir,
+    wrapWithChangesDiff(
+      (opts.executorFactory ?? defaultFactory)(
+        config,
+        runId,
+        runDir,
+        worktreePath,
+        join(homeDir, "store"),
+      ),
       worktreePath,
-      join(homeDir, "store"),
+      runDir,
+      baseBranch,
     ),
     worktreePath,
     runDir,
@@ -1590,9 +1624,9 @@ export async function resumeRun(opts: {
         // (sdk-runner.ts), so this approve transition — not runDag's
         // done-branch — is the only place their noPlaceholders check is ever
         // reachable. See DECISIONS.md § no-placeholders-gate-approve-wiring.
-        const approvedArtifacts = (gateNode?.produces ?? [])
+        const approvedArtifacts = [...(gateNode?.produces ?? []), CHANGES_DIFF_FILE]
           .map((f) => join(artifactsDir, f))
-          .filter((p) => existsSync(p));
+          .filter((p, i, all) => existsSync(p) && all.indexOf(p) === i);
         const approvePlaceholderCheck =
           gateNode !== undefined
             ? checkNoPlaceholders(runDir, gateNodeId, gateNode)
@@ -1797,12 +1831,17 @@ export async function resumeRun(opts: {
 
   // Re-run the DAG engine with the (possibly updated) state.
   const executor = wrapWithPrScan(
-    (opts.executorFactory ?? makeSDKRunner)(
-      config,
-      runId,
-      runDir,
+    wrapWithChangesDiff(
+      (opts.executorFactory ?? makeSDKRunner)(
+        config,
+        runId,
+        runDir,
+        state.worktreePath,
+        join(homeDir, "store"),
+      ),
       state.worktreePath,
-      join(homeDir, "store"),
+      runDir,
+      state.baseBranch ?? "main",
     ),
     state.worktreePath,
     runDir,

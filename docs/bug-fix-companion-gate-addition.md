@@ -32,7 +32,9 @@ dagrun start bugfix --plan <approved fix-plan file> --companion-session "$CLAUDE
 1. Confirm the run and gate: `dagrun gate show <run-id>` prints a JSON brief — run, gate, `revision`,
    gate artifacts and upstream artifact hashes, mechanical validation results, `pendingDecision`
    (allowed actions, amend targets, what approving continues to, and whether approving also decides
-   `verify`), and `companion.status`.
+   `verify`), and `companion.status`. The `fix` and `pr` gate briefs list `changes.diff` (the engine-saved
+   `git diff` of the worktree vs the run's base branch, including new files) among the gate artifacts;
+   read it, not just `summary.md`. Files not yet registered in state show `registered: false`.
 2. If `companion.status` is `blocked`, stop and explain why and the recovery choices (below). Do not
    decide anything.
 3. Read the actual artifacts (paths are in the brief) and the fix/review/verify evidence. Do not rely on

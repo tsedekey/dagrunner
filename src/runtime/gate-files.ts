@@ -59,12 +59,15 @@ export function emitGateBrief(args: {
   });
   // Gate-opened event (needs the revision, so it is emitted here, not derived
   // from the state diff). `gate show` re-emits the brief: log each revision once.
-  const seen = readEvents(runDir).some(
+  const prior = readEvents(runDir).find(
     (e) => e.type === "gate.opened" && e.node === gateNodeId && e.detail?.["revision"] === brief.revision,
   );
-  if (!seen) {
+  if (prior !== undefined) {
+    brief.openedAt = prior.ts;
+  } else {
+    brief.openedAt = new Date().toISOString();
     appendEvent(runDir, {
-      ts: new Date().toISOString(),
+      ts: brief.openedAt,
       type: "gate.opened",
       node: gateNodeId,
       iteration: brief.iteration,

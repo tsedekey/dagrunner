@@ -738,6 +738,32 @@ status are the gap. All of it is plumbing around the one engine; no new executio
   amend/reset, so a re-run no longer overwrites earlier iterations' timing. The existing `<node>-attempts/`
   dirs archive *artifacts* only and hold no timing, so they are unchanged.
 
+**Saved diff and on-disk artifact listing (v0.1.62).** The fix gate's viewer had summary prose but not the
+change itself, and saw an empty artifact list because `state.nodes[id].artifacts` is only written at
+approve/finish. Both are engine plumbing, no agent involved:
+
+- **`changes.diff`** (`core/changes-diff.ts`): `git diff <merge-base(origin/<base_branch>, HEAD)>` of the
+  worktree working tree (committed + staged + unstaged) plus untracked files (`ls-files --others
+  --exclude-standard`, so the worktree's seeded excludes apply) rendered as new-file diffs with
+  `git diff --no-index /dev/null <file>`. It never stages or touches the index/worktree. `node_modules` is
+  excluded (same rule as `normalizeDirty`); lockfiles are NOT (no existing rule, and a lockfile change can be
+  part of a fix). Base = the run's `state.baseBranch ?? "main"` (hotfix runs branch from release branches);
+  `origin/<base>` is tried first, then the local `<base>` the worktree was branched from; if neither
+  resolves, it errors. Capped at 2 MB with a `[dagrun: changes.diff truncated …]` marker. Written by the
+  executor wrapper when `fix` finishes or pauses (both workflows), registered as a `fix` artifact on done/
+  approve, and refreshed in `fix/` (plus a copy in `pr/`) when the pre-PR gate opens (`announcePause`), since
+  verify/amend may have moved the worktree. A diff failure warns on stderr and never fails the node.
+  `rerun` (debug tool) does not write it, like the pre-PR scratch scan.
+- **Listing** (`core/node-files.ts`): `collectGateEvidence` and `status --json` per-node `artifacts` list
+  every regular file in the node dir: registered ones first (state order), then unregistered ones
+  alphabetically with `registered:false`, each with `size` and `mtime`. `transcript.log`, `burn.json`,
+  `gate.json`, `gate-context.md`, `gate-decision.md` are excluded unless registered. `status --json`
+  `artifacts` therefore changed from `string[]` to `{path, registered, size, mtime}[]`.
+- **Revision is unchanged**: only declared `produces` files are hashed into the gate revision, exactly as
+  before, so extra listed files (the diff, scratch) never make a companion's decision stale.
+- **`gate.openedAt`**: `emitGateBrief` stamps the brief with the `gate.opened` event's ts (the existing
+  event for that revision, or the one it just wrote); `status --json` `awaitingGate.since` already used it.
+
 ## 3b. Validation — smoke:mock (per-plan gate) and smoke:live (occasional)
 
 `npm run verify-baseline` = `npm ci && typecheck && unit tests && smoke:mock`. The standing gate: run on every plan change.
