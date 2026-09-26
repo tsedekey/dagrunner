@@ -94,7 +94,7 @@ and why. Do not describe a skipped or blocked verify as passed.
   the original session; `dagrun gate attach <run-id> --session <id>`; a reconstructed session built from the
   saved checkpoint via `... --reconstructed` ONLY with Eddie's explicit agreement (it is recorded as a
   fallback, not as continuity); or stay paused.
-- **Resume this conversation from a terminal:** `dagrun gate open <run-id>` (or the brief's
+- **Resume this conversation from a terminal:** `dagrun resume <run-id>` with no flags (in a terminal) or `dagrun gate open <run-id>` (or the brief's
   `companion.resumeHint`) re-enters it from its original directory with an opening message saying a gate is
   waiting. A bare `claude --resume <id>` reopens the chat with NO gate context — if that is how you were
   resumed, run `dagrun gate show <run-id>` first and treat it as a gate session. Unverified that a resumed session keeps the same id; if

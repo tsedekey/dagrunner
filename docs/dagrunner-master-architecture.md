@@ -591,8 +591,8 @@ conversation. `dagrun start bugfix … --companion-session <id>` records that co
 fresh-session gates; no silent default; `--night` is incompatible). At every gate (`reproduce`, `fix`,
 and the new pre-PR gate on `pr`) the run pauses and dagrunner spawns **nothing**: it writes
 `<gate>/gate.json` (run, gate, iteration, `revision`, plan sha, worktree HEAD, evidence hashes,
-mechanical validation, pending decision) and `gate-context.md`, and prints how to return: `dagrun gate open <run>`
-resumes the recorded session from its original directory with an opening prompt that tells it a gate is
+mechanical validation, pending decision) and `gate-context.md`, and prints how to return: `dagrun resume <run>` (no flags, in a
+terminal) or `dagrun gate open <run>` resumes the recorded session from its original directory with an opening prompt that tells it a gate is
 waiting (a bare `claude --resume` reopens the chat with no gate context). The companion drives the run with:
 
 - `dagrun gate show <run>` — the brief.

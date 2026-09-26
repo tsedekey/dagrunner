@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startRun, resumeRun } from "../../src/runtime/run-engine.js";
-import { gateAttach, gateDecide, gateShow } from "../../src/runtime/gate-cli.js";
+import { gateAttach, gateDecide, gateOpen, gateShow, resumeOpensCompanion } from "../../src/runtime/gate-cli.js";
 import { createMockExecutor } from "../../src/runtime/mock-executor.js";
 import { bugfixWorkflow } from "../../src/workflow/bugfix-workflow.js";
 import type { DagrunnerConfig } from "../../src/config/xdg.js";
@@ -43,7 +43,7 @@ function transcript(id: string, present = true): void {
   const d = join(CFG, "projects", "-fake-companion");
   mkdirSync(d, { recursive: true });
   const f = join(d, `${id}.jsonl`);
-  if (present) writeFileSync(f, `{"type":"user","cwd":"/fake/companion dir","sessionId":"${id}"}\n`);
+  if (present) writeFileSync(f, `{"type":"user","cwd":"${CFG}","sessionId":"${id}"}\n`);
   else rmSync(f, { force: true });
 }
 transcript(SESSION);
@@ -139,8 +139,8 @@ const R = await newRun();
   const b = briefOf(R.runDir, "reproduce");
   assert.equal(b.companion.status, "ok");
   assert.match(b.companion.resumeHint ?? "", new RegExp(`claude --resume ${SESSION}`));
-  assert.equal(b.companion.resume?.cwd, "/fake/companion dir");
-  assert.match(b.companion.resumeHint ?? "", /^cd '\/fake\/companion dir' && CLAUDE_CONFIG_DIR='.*' claude --resume 1111.* 'DagRunner run .* gate show /s);
+  assert.equal(b.companion.resume?.cwd, CFG);
+  assert.match(b.companion.resumeHint ?? "", /^cd '.+' && CLAUDE_CONFIG_DIR='.*' claude --resume 1111.* 'DagRunner run .* gate show /s);
   assert.equal(b.pendingDecision.decidesNode, undefined);
   assert.deepEqual(b.pendingDecision.approveContinuesTo, ["implement", "review", "fix", "verify", "pr", "digest"]);
   assert.ok(existsSync(join(R.runDir, "reproduce", "gate-context.md")));
@@ -152,6 +152,27 @@ const R = await newRun();
   process.env["CLAUDE_CONFIG_DIR"] = savedCfg;
   assert.equal(bare.companion.status, "ok", "recorded configDir must keep the association reachable without env");
   say("2 passed: handoff records the originating session; pause writes a brief (run, gate, revision, evidence, pending decision) and NO gate agent was spawned");
+}
+
+// 2b. `resume` with no flags opens the ORIGINAL conversation (fake spawn), only when interactive
+{
+  const calls: { args: string[]; cwd?: string; cfg?: string }[] = [];
+  const spawn = ((cmd: string, a: string[], o: { cwd?: string; env?: Record<string, string> }) => {
+    assert.equal(cmd, "claude");
+    calls.push({ args: a, ...(o.cwd !== undefined ? { cwd: o.cwd } : {}), ...(o.env?.["CLAUDE_CONFIG_DIR"] !== undefined ? { cfg: o.env["CLAUDE_CONFIG_DIR"] } : {}) });
+    return { status: 0 };
+  }) as never;
+  const base = { homeDir: R.home, config, runId: R.runId, spawn };
+  assert.equal(resumeOpensCompanion({ ...base, interactive: false }), null, "non-interactive falls through to the plain pause report");
+  assert.equal(calls.length, 0);
+  assert.equal(await quiet(async () => resumeOpensCompanion({ ...base, interactive: true })), 0);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0]!.args.slice(0, 2), ["--resume", SESSION]);
+  assert.match(calls[0]!.args[2] ?? "", /gate show/);
+  assert.equal(calls[0]!.cwd, CFG, "resumed from the session's original directory");
+  assert.equal(calls[0]!.cfg, CFG);
+  void gateOpen;
+  say("2b passed: bare resume on a companion run opens the recorded conversation with the gate prompt (interactive only)");
 }
 
 // 3. bare flags refused; plain resume just re-reports the pause

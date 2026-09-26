@@ -42,7 +42,7 @@ import {
   seedWorktreeSiblings,
 } from "../runtime/run-engine.js";
 import { readState, writeState } from "../core/state.js";
-import { gateAttach, gateDecide, gateOpen, gateShow } from "../runtime/gate-cli.js";
+import { gateAttach, gateDecide, gateOpen, gateShow, resumeOpensCompanion } from "../runtime/gate-cli.js";
 import {
   runPreflight,
   printPreflightResult,
@@ -203,6 +203,20 @@ async function cmdResume(argv: string[]): Promise<void> {
   const homeDir = resolveHome();
   const config = resolveConfig(homeDir, configFlag);
   assertAuth(config.claudeConfigDir);
+
+  // Bare `resume` on a companion-gate run re-enters the originating conversation.
+  if (!approve && rejectComment === undefined && runNextRaw === undefined) {
+    const handled = resumeOpensCompanion({
+      homeDir,
+      config,
+      runId,
+      interactive: process.stdin.isTTY === true && process.stdout.isTTY === true,
+    });
+    if (handled !== null) {
+      if (handled !== 0) process.exit(handled);
+      return;
+    }
+  }
 
   await resumeRun({
     runId,

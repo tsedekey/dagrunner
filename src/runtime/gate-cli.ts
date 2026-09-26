@@ -83,6 +83,8 @@ export function gateOpen(args: {
   config: DagrunnerConfig;
   runId: string;
   configDirs?: string[];
+  /** Test seam. */
+  spawn?: typeof spawnSync;
 }): number {
   const r = load(args.homeDir, args.runId);
   if (r === null) return err(`run "${args.runId}" not found`);
@@ -106,13 +108,34 @@ export function gateOpen(args: {
     );
   }
   emitGateBrief({ runDir: r.runDir, state: r.state, workflow: r.workflow, gateNodeId: gate, config: args.config, ...(args.configDirs !== undefined ? { configDirs: args.configDirs } : {}) });
-  const out = spawnSync("claude", ["--resume", res.sessionId, res.prompt], {
+  const out = (args.spawn ?? spawnSync)("claude", ["--resume", res.sessionId, res.prompt], {
     stdio: "inherit",
     cwd: res.cwd,
     env: { ...process.env, CLAUDE_CONFIG_DIR: res.configDir },
   });
   if (out.error !== undefined) return err(`failed to launch claude: ${out.error.message}`);
   return out.status ?? 0;
+}
+
+/**
+ * Plain `dagrun resume <run>` (no flags) on a companion-gate run: open the
+ * originating conversation, as the old flow opened a gate session. Returns the
+ * exit code when it handled the resume, or null to fall through to resumeRun
+ * (legacy run, no awaiting gate, or not an interactive terminal — where
+ * resumeRun just reports the pause).
+ */
+export function resumeOpensCompanion(args: {
+  homeDir: string;
+  config: DagrunnerConfig;
+  runId: string;
+  interactive: boolean;
+  configDirs?: string[];
+  spawn?: typeof spawnSync;
+}): number | null {
+  const r = load(args.homeDir, args.runId);
+  if (r === null || r.state.companion === undefined || r.workflow.companionGates !== true) return null;
+  if (awaitingGateId(r.state) === undefined || !args.interactive) return null;
+  return gateOpen(args);
 }
 
 export type DecideArgs = {
