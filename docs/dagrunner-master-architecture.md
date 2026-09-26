@@ -660,6 +660,45 @@ proposal statement warns that the decision tears the environment down, so the co
 The feature workflow has no pre-PR gate, so there only `dagrun verify cleanup` (plus that warning)
 removes the environment. verify does not replace unit/integration/regression checks or CI.
 
+**Which command when — `resume` and `gate …` are one engine, not two systems (clarified v0.1.58; wording only, no behavior change).**
+`resumeRun` (`runtime/run-engine.ts`) is the single execution engine. `dagrun resume --approve/--reject`
+call it directly with a bare decision; `dagrun gate decide --confirm` first validates the decision
+against the gate brief (revision, action, target, session, propose-then-confirm), then calls the *same*
+`resumeRun` with a `gateRequest`. "Legacy" only ever meant the old flag-based calling convention (no
+propose-then-confirm step, no statement shown to the human first) and, on a non-companion run, the
+fresh spawned review session — not deprecated or parallel code. On a companion-gates run bare
+`--approve/--reject` is refused (exit 1) so the confirmable path is the only way to decide.
+
+"Awaiting a gate" means *some node has `status: "awaiting-gate"`* (`awaitingGateId`, a per-node scan) —
+not the run's top-level status. A crashed run whose top-level status is still `running` but whose gate
+node is `awaiting-gate` therefore still counts as awaiting.
+
+| Run state | `gate show` | `gate open` / `gate attach` | `gate decide` | `resume <run>` (no flags) | `resume --approve/--reject` |
+|---|---|---|---|---|---|
+| **Awaiting a gate, companion run** (`state.companion` set and workflow `companionGates`) | prints the brief (JSON) | `open`: relaunches the originating conversation (`claude --resume <id> <gate prompt>`); `attach`: rebinds the session | no `--confirm`: PROPOSES, changes nothing; matching `--confirm`: applies via `resumeRun` | **stdin AND stdout are TTYs:** relaunches the companion exactly like `gate open` (`resumeOpensCompanion`). **Otherwise:** falls through to `resumeRun`, which re-emits the brief, prints how to return, exits 0, decides nothing | refused, exit 1 |
+| **Awaiting a gate, no companion** (legacy `--no-companion`, feature workflow, pre-v0.1.50 runs) | prints the brief (`companion.status` blocked) | `open`: error (no companion to resume). `attach`: error if the workflow has no `companionGates`, else adopts a session | refused `[no-companion]` until a session is attached | falls through to `resumeRun`: spawns a fresh interactive `claude` review session (`/gate-review`, `/gate-conclude`) and applies the decision it writes | applies the decision directly |
+| **No gate pending** (any top-level status) | `not paused at a gate (status: X)`, exit 0 | error, exit 1 | `refused [not-awaiting]`, exit 1 — except an identical decision already applied, an idempotent no-op, exit 0 | falls through to `resumeRun` — the only command that works here (below) | runs, but there is no gate, so the flags do nothing |
+| **Top-level `failed`, nodes since completed out-of-band via `dagrun rerun <run> <node>`** | no gate ⇒ as "no gate pending" | error | `not-awaiting` | **the correct command**: no decision is made; `resumeRun` runs whatever is still `pending` and recomputes the top-level status from the nodes (`done` if none failed) | n/a |
+| **Crashed** (top-level `running`, a node stuck `running`, process gone) | no gate ⇒ no-op message | error | `not-awaiting` | `resumeRun`: crash reconciliation (below), then continues | n/a |
+
+What `resumeRun` does with no decision, in order: (1) nodes stuck `running` are marked failed
+("process interrupted") then reset to `pending` for up to `MAX_INTERRUPT_RETRIES` attempts, archiving
+their artifacts; past the cap they stay `failed`; (2) if a node is `awaiting-gate`, the gate handling in
+the table above; (3) otherwise `runDag` runs every `pending` node whose dependencies allow it and
+finalizes the top-level status (`failed` if ANY node is `failed`, else `done`; exits 1 on `failed`).
+It does not retry a plainly `failed` node or revive a `skipped` one — that is `dagrun rerun`.
+`rerun` executes exactly one node, takes no run lock and never touches the run's top-level status (its
+output ends `To continue: dagrun resume <run-id>`), so after an out-of-band `rerun` the run can read
+`failed` while every node is `done`; a plain `resume <run-id>` is the reconciling step. It is safe
+there because with no gate awaiting the bare-resume companion relaunch does not apply.
+
+Verify-environment teardown interaction (v0.1.57): `teardownVerifyForDecision` fires only when a
+companion-mode *decision* (approve / amend / hold via `gate decide --confirm`) is applied at a gate
+downstream of `verify`. A bare `resumeRun`, a `rerun` of any node other than `verify`, and a node
+force-completed via `rerun` do NOT tear down, so bypassing the pre-PR gate leaves a PROVISIONED
+environment running: use `dagrun verify cleanup <run>` (flagged by `status`/`list`). `rerun <run>
+verify` tears down a still-provisioned earlier environment first and refuses if that fails.
+
 ## 3b. Validation — smoke:mock (per-plan gate) and smoke:live (occasional)
 
 `npm run verify-baseline` = `npm ci && typecheck && unit tests && smoke:mock`. The standing gate: run on every plan change.

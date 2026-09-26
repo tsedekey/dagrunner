@@ -88,6 +88,24 @@ read `demo.md` and the observations yourself. It is not regression coverage and 
 (behaviour did not match) and `BLOCKED_RUNTIME` (no runtime evidence obtained) fail the run; explain which
 and why. Do not describe a skipped or blocked verify as passed.
 
+## Which command when (`resume` vs `gate …`)
+
+They are ONE engine. `dagrun resume` (`resumeRun`) is the shared execution engine; `gate decide --confirm`
+validates your decision and then calls that same engine. "Direct-decision flags" (`resume --approve/--reject`)
+is just the old calling convention: no proposal step, no statement shown to Eddie first — so it is refused on
+companion runs. Pick by run state:
+
+| Run state | Use |
+|---|---|
+| Paused at a gate (a node is `awaiting-gate`) | `gate show`, then `gate decide` (propose, wait, `--confirm`). `gate open` / bare `dagrun resume <run>` in a real terminal re-enters the companion conversation; from a non-terminal, bare `resume` only prints the pause and decides nothing. `gate attach` only while paused. |
+| No gate pending (`gate show` says "not paused at a gate"; `gate open`/`attach`/`decide` error `not-awaiting`) | `dagrun resume <run>` (no flags) is the only command that works: it reconciles crashed nodes and runs whatever is still `pending`. |
+| Top-level `failed` but the nodes are `done`, after a node was completed out-of-band with `dagrun rerun <run> <node>` | `dagrun resume <run>` (no flags). It makes no decision; it just continues from current state and recomputes the run status. `rerun` never updates the top-level status and never retries/unskips other nodes. |
+| Crashed (status `running`, node stuck `running`, no process) | `dagrun resume <run>` (no flags): stuck nodes are reset to `pending` (up to a retry cap) and re-run. |
+
+Teardown: only a `gate decide --confirm` at a gate downstream of `verify` tears down the provisioned verify
+environment. If a gate was bypassed with `rerun`, or the run was resumed without a decision, clean up with
+`dagrun verify cleanup <run>`; `dagrun rerun <run> verify` tears down a still-provisioned environment first.
+
 ## Recovery
 
 - **Original conversation unavailable** (`companion.status: blocked`): pause and explain. Choices: locate
