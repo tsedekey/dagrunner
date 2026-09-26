@@ -724,4 +724,4 @@ RocksDB state/log stream directly) and direct secondary-storage inspection via a
 provision-and-hand-off model (`PROVISIONED` / `BLOCKED_RUNTIME`; Eddie's verdict at the `pr` gate;
 teardown as a decide side effect). The "Which command when" section was also copied into the deployed
 skill reference `~/.claude/skills/bug-fix-companion/references/dagrunner-gates.md` (outside this repo).
-That file's own "Verify evidence" section is still the old wording. Docs only; no behavior change.
+Its "Verify evidence" section and `fix`-gate verify bullet were refreshed to match. Docs only; no behavior change.
