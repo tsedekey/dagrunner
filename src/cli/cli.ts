@@ -14,7 +14,12 @@ import {
   resolveHome,
   resolveConfig,
 } from "../config/xdg.js";
-import { assertLockAvailable, assertNoLiveDriver, releaseLock, readLock } from "../core/lock.js";
+import {
+  assertLockAvailable,
+  assertNoLiveDriver,
+  releaseLock,
+  readLock,
+} from "../core/lock.js";
 import {
   existsSync,
   mkdirSync,
@@ -55,9 +60,16 @@ import {
   resumeNeedsInteractiveReview,
   resumeOpensCompanion,
 } from "../runtime/gate-cli.js";
-import { selfInvocation, spawnDetached, withoutFlag } from "../runtime/detach.js";
+import {
+  selfInvocation,
+  spawnDetached,
+  withoutFlag,
+} from "../runtime/detach.js";
 import { buildStatusJson } from "./status-json.js";
-import { createMockExecutor, type ScenarioMap } from "../runtime/mock-executor.js";
+import {
+  createMockExecutor,
+  type ScenarioMap,
+} from "../runtime/mock-executor.js";
 import {
   runPreflight,
   printPreflightResult,
@@ -66,6 +78,10 @@ import {
   writeAgentContextFile,
 } from "./preflight.js";
 import { getVersionInfo, formatVersionBanner } from "../config/version.js";
+import { openBrowser, resolveUiHome, startUiServer } from "../ui/server.js";
+
+/** Unassigned-looking default in the 4000s, distinct from OTLP's 4317/4318 — see DECISIONS.md § agent-driven-slice3-ui. */
+const DEFAULT_UI_PORT = 4740;
 
 // ---------------------------------------------------------------------------
 // Arg-parsing helpers
@@ -89,8 +105,7 @@ function hasFlag(argv: string[], flag: string): boolean {
  * `--detach` children) without any API call. Loud on stderr; never set in real use.
  */
 function mockExecutorFactoryFromEnv():
-  | (() => ReturnType<typeof createMockExecutor>)
-  | undefined {
+  (() => ReturnType<typeof createMockExecutor>) | undefined {
   const raw = process.env["DAGRUN_MOCK_SCENARIOS"];
   if (raw === undefined || raw === "") return undefined;
   let scenarios: ScenarioMap;
@@ -100,7 +115,9 @@ function mockExecutorFactoryFromEnv():
     process.stderr.write(`dagrun: DAGRUN_MOCK_SCENARIOS is not valid JSON\n`);
     process.exit(1);
   }
-  process.stderr.write(`dagrun: *** MOCK EXECUTOR active (DAGRUN_MOCK_SCENARIOS) — no real agent runs ***\n`);
+  process.stderr.write(
+    `dagrun: *** MOCK EXECUTOR active (DAGRUN_MOCK_SCENARIOS) — no real agent runs ***\n`,
+  );
   return () => createMockExecutor(scenarios);
 }
 
@@ -225,7 +242,9 @@ async function cmdStart(argv: string[]): Promise<void> {
 
   if (hasFlag(argv, "--detach")) {
     if (preClaimed !== undefined) {
-      process.stderr.write(`dagrun start: --run-id is internal to --detach; do not pass both.\n`);
+      process.stderr.write(
+        `dagrun start: --run-id is internal to --detach; do not pass both.\n`,
+      );
       process.exit(1);
     }
     // Fail synchronously on everything the child would refuse — a detached
@@ -234,7 +253,9 @@ async function cmdStart(argv: string[]): Promise<void> {
       workflow,
       config,
       ...(nightMode ? { nightMode: true } : {}),
-      ...(companionSession !== undefined ? { companionSessionId: companionSession } : {}),
+      ...(companionSession !== undefined
+        ? { companionSessionId: companionSession }
+        : {}),
       ...(noCompanion ? { noCompanion: true } : {}),
     });
     const runsDir = join(homeDir, "runs");
@@ -257,7 +278,9 @@ async function cmdStart(argv: string[]): Promise<void> {
     ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
     ...(force ? { force: true } : {}),
     ...(nightMode ? { nightMode: true } : {}),
-    ...(companionSession !== undefined ? { companionSessionId: companionSession } : {}),
+    ...(companionSession !== undefined
+      ? { companionSessionId: companionSession }
+      : {}),
     ...(noCompanion ? { noCompanion: true } : {}),
   });
 }
@@ -286,7 +309,8 @@ async function cmdResume(argv: string[]): Promise<void> {
   assertAuth(config.claudeConfigDir);
 
   if (hasFlag(argv, "--detach")) {
-    const hasDecisionFlags = approve || rejectComment !== undefined || runNextRaw !== undefined;
+    const hasDecisionFlags =
+      approve || rejectComment !== undefined || runNextRaw !== undefined;
     if (resumeNeedsInteractiveReview({ homeDir, runId, hasDecisionFlags })) {
       process.stderr.write(
         `dagrun resume: --detach refused — run "${runId}" is at a legacy (non-companion) gate whose review needs an interactive terminal. ` +
@@ -305,7 +329,8 @@ async function cmdResume(argv: string[]): Promise<void> {
       homeDir,
       config,
       runId,
-      interactive: process.stdin.isTTY === true && process.stdout.isTTY === true,
+      interactive:
+        process.stdin.isTTY === true && process.stdout.isTTY === true,
     });
     if (handled !== null) {
       if (handled !== 0) process.exit(handled);
@@ -329,7 +354,10 @@ async function cmdGate(argv: string[]): Promise<void> {
   const sub = argv[0];
   const runId = argv[1];
   if (
-    (sub !== "show" && sub !== "decide" && sub !== "attach" && sub !== "open") ||
+    (sub !== "show" &&
+      sub !== "decide" &&
+      sub !== "attach" &&
+      sub !== "open") ||
     runId === undefined ||
     runId.startsWith("--")
   ) {
@@ -350,7 +378,12 @@ async function cmdGate(argv: string[]): Promise<void> {
     code = gateShow({ homeDir, config, runId });
   } else if (sub === "open") {
     const cwdFlag = flagValue(argv, "--cwd");
-    code = gateOpen({ homeDir, config, runId, ...(cwdFlag !== undefined ? { cwd: cwdFlag } : {}) });
+    code = gateOpen({
+      homeDir,
+      config,
+      runId,
+      ...(cwdFlag !== undefined ? { cwd: cwdFlag } : {}),
+    });
   } else if (sub === "attach") {
     const session = flagValue(argv, "--session");
     if (session === undefined) {
@@ -371,12 +404,16 @@ async function cmdGate(argv: string[]): Promise<void> {
     const revision = flagValue(argv, "--revision");
     const action = flagValue(argv, "--action");
     if (gate === undefined || revision === undefined || action === undefined) {
-      process.stderr.write(`dagrun gate decide: --gate, --revision and --action are all required\n`);
+      process.stderr.write(
+        `dagrun gate decide: --gate, --revision and --action are all required\n`,
+      );
       process.exit(1);
     }
     const rn = flagValue(argv, "--run-next");
     if (rn !== undefined && rn !== "yes" && rn !== "no") {
-      process.stderr.write(`dagrun gate decide: --run-next must be yes or no\n`);
+      process.stderr.write(
+        `dagrun gate decide: --run-next must be yes or no\n`,
+      );
       process.exit(1);
     }
     const target = flagValue(argv, "--target");
@@ -390,7 +427,9 @@ async function cmdGate(argv: string[]): Promise<void> {
     if (confirm !== undefined) assertAuth(config.claudeConfigDir);
     const detach = hasFlag(argv, "--detach");
     if (detach && confirm === undefined) {
-      process.stderr.write(`dagrun gate decide: --detach only applies with --confirm <id> (a proposal changes nothing and returns at once)\n`);
+      process.stderr.write(
+        `dagrun gate decide: --detach only applies with --confirm <id> (a proposal changes nothing and returns at once)\n`,
+      );
       process.exit(1);
     }
     const mockFactoryG = mockExecutorFactoryFromEnv();
@@ -422,7 +461,11 @@ async function cmdGate(argv: string[]): Promise<void> {
 }
 
 /** Safety net: a PROVISIONED verify env with no recorded teardown must not leak silently. */
-function warnPendingVerifyEnv(homeDir: string, runId: string, prefix: string): void {
+function warnPendingVerifyEnv(
+  homeDir: string,
+  runId: string,
+  prefix: string,
+): void {
   const pending = pendingVerifyEnvs(join(homeDir, "runs", runId));
   if (pending.length === 0) return;
   const n = pending.reduce((a, e) => a + e.resources.length, 0);
@@ -466,9 +509,13 @@ function cmdStatus(argv: string[]): void {
 
   if (json) {
     try {
-      process.stdout.write(JSON.stringify(buildStatusJson(homeDir, runId), null, 2) + "\n");
+      process.stdout.write(
+        JSON.stringify(buildStatusJson(homeDir, runId), null, 2) + "\n",
+      );
     } catch (e) {
-      process.stderr.write(`dagrun: ${e instanceof Error ? e.message : String(e)}\n`);
+      process.stderr.write(
+        `dagrun: ${e instanceof Error ? e.message : String(e)}\n`,
+      );
       process.exit(1);
     }
     return;
@@ -951,6 +998,48 @@ async function cmdScaffold(argv: string[]): Promise<void> {
   });
 }
 
+async function cmdUi(argv: string[]): Promise<void> {
+  const homeFlag = flagValue(argv, "--home");
+  const portFlag = flagValue(argv, "--port");
+  let port = DEFAULT_UI_PORT;
+  if (portFlag !== undefined) {
+    const parsed = Number(portFlag);
+    if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65535) {
+      process.stderr.write(
+        `dagrun ui: --port must be an integer 0-65535 (got "${portFlag}")\n`,
+      );
+      process.exit(1);
+    }
+    port = parsed;
+  }
+
+  let homeDir: string;
+  try {
+    homeDir = resolveUiHome(homeFlag);
+  } catch (e) {
+    process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`);
+    process.exit(1);
+  }
+
+  let handle: Awaited<ReturnType<typeof startUiServer>>;
+  try {
+    handle = await startUiServer({ homeDir, port });
+  } catch (e) {
+    // Loud, with the exact retry command — never silently pick another port.
+    process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`);
+    process.exit(1);
+  }
+
+  process.stdout.write(
+    `dagrun ui: serving ${handle.url} (home: ${homeDir})\n` +
+      `dagrun ui: read-only — Ctrl+C to stop\n`,
+  );
+  if (hasFlag(argv, "--open")) openBrowser(handle.url);
+
+  // Runs until killed (Ctrl+C / SIGINT) — the SIGINT handler in main() exits the process directly.
+  await new Promise<void>(() => {});
+}
+
 // ---------------------------------------------------------------------------
 // Help
 // ---------------------------------------------------------------------------
@@ -971,6 +1060,7 @@ function printHelp(): void {
       "  dagrun gate attach <run-id> --session <id> [--reconstructed] [--replace] [--reseed]",
       "  dagrun verify cleanup <run-id>                               (tear down the provisioned verify environment)",
       "  dagrun status [<run-id>] [--json]                            (--json: read-only machine-readable status; poll this after --detach)",
+      `  dagrun ui [--port <n>] [--open] [--home <dir>]               (read-only timeline viewer, loopback-only; default port ${DEFAULT_UI_PORT})`,
       "  dagrun list",
       "  dagrun abort <run-id>",
       "  dagrun cleanup <run-id>",
@@ -1044,6 +1134,10 @@ async function main(argv: string[]): Promise<number> {
 
     case "status":
       cmdStatus(rest);
+      return 0;
+
+    case "ui":
+      await cmdUi(rest);
       return 0;
 
     case "list":

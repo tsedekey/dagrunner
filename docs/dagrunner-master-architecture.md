@@ -145,7 +145,6 @@ workflows share the same `payload/commands/verify.md`.
 > reasoning behind the old shape (self-heal, stall detection, deferred-to-CI); none of its outcome
 > names (`PASS`/`FAIL_*`/`DEFERRED_TO_CI`/`ERROR_INFRA`) exist any more.
 
-
 **Why this changed:** verify was originally read-only/INFO-ONLY (haiku, no cluster) because
 cluster bring-up was believed to conflict with the runtime sandbox (Seatbelt kernel enforcement).
 That rationale is stale: `sandbox.enabled` has been `false` since commit `3015634` — the
@@ -520,9 +519,8 @@ see `DECISIONS.md § structural-upgrades-smoke-live-deferred`.
 > (incl. whether the optional verify demonstration ran). The six-section bottom-up map described below
 > is historical. Artifact name (`knowledge-map.md`) and node shape are unchanged.
 
-
 **Why this exists:** an external task-intake tool (Glean, §2) gives Eddie a problem-first knowledge
-map at the *start* of a run, before any planning happens. Nothing gave him the equivalent *after*
+map at the _start_ of a run, before any planning happens. Nothing gave him the equivalent _after_
 implementation — grounded in what actually got built, not what was planned — before he reviews the
 PR diff or reads pr-triage's drafted replies on it. `digest` closes that gap.
 
@@ -613,10 +611,10 @@ authorizes merge, reviewer requests, marking ready, or backport labels; the draf
 only after the pre-PR gate is approved (`runPrPostProcess`).
 
 **Optional verify.** The `fix` gate has `decidesNode: "verify"`: approving requires an explicit
-`--run-next yes|no` (agent advice lives in `fix/summary.md` § *Verify recommendation*). The decision is
+`--run-next yes|no` (agent advice lives in `fix/summary.md` § _Verify recommendation_). The decision is
 persisted as `fix/next-node-decision.json`; `verify`'s `when` reads it (missing/garbled → loud error).
-`pr`/`digest` use `joinRule: none-failed-min-one-success` so a *skipped* verify does not block them
-while a *failed* one still does.
+`pr`/`digest` use `joinRule: none-failed-min-one-success` so a _skipped_ verify does not block them
+while a _failed_ one still does.
 
 **verify is provision-and-hand-off, not self-test-and-teardown (v0.1.57).** verify builds the
 candidate from the worktree, deploys it on a local loopback-only disposable target (docker
@@ -624,7 +622,7 @@ default; C8 Run / c8ctl where the repo has them), seeds demo data, proves the en
 with one readiness probe, writes `demo.md` (how to reach it, exact manual steps + expected results)
 and **stops with the environment still running**. It renders no verdict (the node is a one-shot
 session and must never wait for a human). Eddie tests by hand and reports his verdict to the
-*companion*, which makes the gate decision; only then is the environment removed. `verify-report.json`
+_companion_, which makes the gate decision; only then is the environment removed. `verify-report.json`
 is schema 3: `PROVISIONED | BLOCKED_RUNTIME` (only `PROVISIONED` passes; `DEMONSTRATED`/
 `NOT_DEMONSTRATED` no longer exist). `evidenceCheck: "verify-runtime"` (`core/verify-evidence.ts`)
 refuses a `PROVISIONED` claim without: a worktree-built candidate at HEAD, a matching dirty-file list
@@ -652,7 +650,7 @@ retry path; non-zero exit + loud output on leftovers or worktree drift), and —
 action (approve / amend / hold) at a gate downstream of `verify`** (the pre-PR gate) tears the
 environment down. A teardown failure is loud but never corrupts the recorded decision; an amend that
 leaves leftovers records the decision then stops instead of re-provisioning under colliding names.
-Amend tears down *before* the reset archives `verify/` (the report is the only inventory);
+Amend tears down _before_ the reset archives `verify/` (the report is the only inventory);
 `rerun <run> verify` tears down a still-provisioned earlier environment first. The gate brief carries
 `verifyEnvironment` (running, host:port, "manual testing pending", path to `demo.md`) and the
 proposal statement warns that the decision tears the environment down, so the companion tells Eddie.
@@ -663,23 +661,23 @@ removes the environment. verify does not replace unit/integration/regression che
 **Which command when — `resume` and `gate …` are one engine, not two systems (clarified v0.1.58; wording only, no behavior change).**
 `resumeRun` (`runtime/run-engine.ts`) is the single execution engine. `dagrun resume --approve/--reject`
 call it directly with a bare decision; `dagrun gate decide --confirm` first validates the decision
-against the gate brief (revision, action, target, session, propose-then-confirm), then calls the *same*
+against the gate brief (revision, action, target, session, propose-then-confirm), then calls the _same_
 `resumeRun` with a `gateRequest`. "Legacy" only ever meant the old flag-based calling convention (no
 propose-then-confirm step, no statement shown to the human first) and, on a non-companion run, the
 fresh spawned review session — not deprecated or parallel code. On a companion-gates run bare
 `--approve/--reject` is refused (exit 1) so the confirmable path is the only way to decide.
 
-"Awaiting a gate" means *some node has `status: "awaiting-gate"`* (`awaitingGateId`, a per-node scan) —
+"Awaiting a gate" means _some node has `status: "awaiting-gate"`_ (`awaitingGateId`, a per-node scan) —
 not the run's top-level status. A crashed run whose top-level status is still `running` but whose gate
 node is `awaiting-gate` therefore still counts as awaiting.
 
-| Run state | `gate show` | `gate open` / `gate attach` | `gate decide` | `resume <run>` (no flags) | `resume --approve/--reject` |
-|---|---|---|---|---|---|
-| **Awaiting a gate, companion run** (`state.companion` set and workflow `companionGates`) | prints the brief (JSON) | `open`: relaunches the originating conversation (`claude --resume <id> <gate prompt>`); `attach`: rebinds the session | no `--confirm`: PROPOSES, changes nothing; matching `--confirm`: applies via `resumeRun` | **stdin AND stdout are TTYs:** relaunches the companion exactly like `gate open` (`resumeOpensCompanion`). **Otherwise:** falls through to `resumeRun`, which re-emits the brief, prints how to return, exits 0, decides nothing | refused, exit 1 |
-| **Awaiting a gate, no companion** (legacy `--no-companion`, feature workflow, pre-v0.1.50 runs) | prints the brief (`companion.status` blocked) | `open`: error (no companion to resume). `attach`: error if the workflow has no `companionGates`, else adopts a session | refused `[no-companion]` until a session is attached | falls through to `resumeRun`: spawns a fresh interactive `claude` review session (`/gate-review`, `/gate-conclude`) and applies the decision it writes | applies the decision directly |
-| **No gate pending** (any top-level status) | `not paused at a gate (status: X)`, exit 0 | error, exit 1 | `refused [not-awaiting]`, exit 1 — except an identical decision already applied, an idempotent no-op, exit 0 | falls through to `resumeRun` — the only command that works here (below) | runs, but there is no gate, so the flags do nothing |
-| **Top-level `failed`, nodes since completed out-of-band via `dagrun rerun <run> <node>`** | no gate ⇒ as "no gate pending" | error | `not-awaiting` | **the correct command**: no decision is made; `resumeRun` runs whatever is still `pending` and recomputes the top-level status from the nodes (`done` if none failed) | n/a |
-| **Crashed** (top-level `running`, a node stuck `running`, process gone) | no gate ⇒ no-op message | error | `not-awaiting` | `resumeRun`: crash reconciliation (below), then continues | n/a |
+| Run state                                                                                       | `gate show`                                   | `gate open` / `gate attach`                                                                                            | `gate decide`                                                                                                | `resume <run>` (no flags)                                                                                                                                                                                                        | `resume --approve/--reject`                         |
+| ----------------------------------------------------------------------------------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| **Awaiting a gate, companion run** (`state.companion` set and workflow `companionGates`)        | prints the brief (JSON)                       | `open`: relaunches the originating conversation (`claude --resume <id> <gate prompt>`); `attach`: rebinds the session  | no `--confirm`: PROPOSES, changes nothing; matching `--confirm`: applies via `resumeRun`                     | **stdin AND stdout are TTYs:** relaunches the companion exactly like `gate open` (`resumeOpensCompanion`). **Otherwise:** falls through to `resumeRun`, which re-emits the brief, prints how to return, exits 0, decides nothing | refused, exit 1                                     |
+| **Awaiting a gate, no companion** (legacy `--no-companion`, feature workflow, pre-v0.1.50 runs) | prints the brief (`companion.status` blocked) | `open`: error (no companion to resume). `attach`: error if the workflow has no `companionGates`, else adopts a session | refused `[no-companion]` until a session is attached                                                         | falls through to `resumeRun`: spawns a fresh interactive `claude` review session (`/gate-review`, `/gate-conclude`) and applies the decision it writes                                                                           | applies the decision directly                       |
+| **No gate pending** (any top-level status)                                                      | `not paused at a gate (status: X)`, exit 0    | error, exit 1                                                                                                          | `refused [not-awaiting]`, exit 1 — except an identical decision already applied, an idempotent no-op, exit 0 | falls through to `resumeRun` — the only command that works here (below)                                                                                                                                                          | runs, but there is no gate, so the flags do nothing |
+| **Top-level `failed`, nodes since completed out-of-band via `dagrun rerun <run> <node>`**       | no gate ⇒ as "no gate pending"                | error                                                                                                                  | `not-awaiting`                                                                                               | **the correct command**: no decision is made; `resumeRun` runs whatever is still `pending` and recomputes the top-level status from the nodes (`done` if none failed)                                                            | n/a                                                 |
+| **Crashed** (top-level `running`, a node stuck `running`, process gone)                         | no gate ⇒ no-op message                       | error                                                                                                                  | `not-awaiting`                                                                                               | `resumeRun`: crash reconciliation (below), then continues                                                                                                                                                                        | n/a                                                 |
 
 What `resumeRun` does with no decision, in order: (1) nodes stuck `running` are marked failed
 ("process interrupted") then reset to `pending` for up to `MAX_INTERRUPT_RETRIES` attempts, archiving
@@ -693,7 +691,7 @@ output ends `To continue: dagrun resume <run-id>`), so after an out-of-band `rer
 there because with no gate awaiting the bare-resume companion relaunch does not apply.
 
 Verify-environment teardown interaction (v0.1.57): `teardownVerifyForDecision` fires only when a
-companion-mode *decision* (approve / amend / hold via `gate decide --confirm`) is applied at a gate
+companion-mode _decision_ (approve / amend / hold via `gate decide --confirm`) is applied at a gate
 downstream of `verify`. A bare `resumeRun`, a `rerun` of any node other than `verify`, and a node
 force-completed via `rerun` do NOT tear down, so bypassing the pre-PR gate leaves a PROVISIONED
 environment running: use `dagrun verify cleanup <run>` (flagged by `status`/`list`). `rerun <run>
@@ -704,10 +702,10 @@ the run instead of a terminal human, so foreground phases (minutes) and the lack
 status are the gap. All of it is plumbing around the one engine; no new execution path.
 
 - **`--detach`** (`start`, `resume`, `gate decide --confirm`; `runtime/detach.ts`): the parent re-invokes the
-  *same* CLI command minus `--detach` as a `detached` child (`stdio` → `<runDir>/driver.log`, `unref`),
+  _same_ CLI command minus `--detach` as a `detached` child (`stdio` → `<runDir>/driver.log`, `unref`),
   prints run id / pid / log path, exits 0. The parent never takes the run lock and applies nothing; the child
   is a normal driver and re-validates everything. Because an exit 0 that hides a doomed child would be a lie,
-  the parent first runs every check the child would refuse *synchronously*: `validateStartOptions` (workflow,
+  the parent first runs every check the child would refuse _synchronously_: `validateStartOptions` (workflow,
   companion association — extracted from `startRun`), the confirmed-decision validation in `gateDecide`
   (`DecideArgs.detach` replaces the `resumeRun` call), the lock check (`assertLockAvailable` /
   `assertNoLiveDriver`), and a refusal of `--detach` where the child would need a terminal (legacy gate review,
@@ -717,8 +715,8 @@ status are the gap. All of it is plumbing around the one engine; no new executio
 - **Lock liveness is the run lock's pid, nothing new** (`core/lock.ts`). Before: same-run re-acquire always
   succeeded, and `resumeRun` released-then-acquired unconditionally, so a second `resume` could steal a live
   run and reconcile its running nodes to `failed`. Now `isPidAlive` (signal 0, EPERM = alive) gates it: a
-  same-run lock held by another *live* pid is refused ("already being driven by pid N") before any state is
-  touched; a dead pid is a stale lock and is recovered by overwriting, exactly as before; a *different* run's
+  same-run lock held by another _live_ pid is refused ("already being driven by pid N") before any state is
+  touched; a dead pid is a stale lock and is recovered by overwriting, exactly as before; a _different_ run's
   lock (even stale) still needs `--force`; a corrupt lock still fails loud.
 - **`dagrun status [<run>] --json`** (`cli/status-json.ts`): read-only (no lock write, no `emitGateBrief` —
   the gate revision comes from the latest `gate.opened` event). `status`: terminal states pass through
@@ -728,7 +726,7 @@ status are the gap. All of it is plumbing around the one engine; no new executio
 - **`<runDir>/events.jsonl`** (`core/events.ts`): append-only `{ts,type,node?,iteration?,detail?}` history —
   `run.started`, `run.status`, `node.started`, `node.finished` (status/duration/cost), `node.retry`,
   `node.invalidated`, `gate.decision` (action/decisionId/target/revision/invalidated), `gate.opened`
-  (revision). It is *derived*, not a second source of truth: `writeState` diffs the previous `state.json` on
+  (revision). It is _derived_, not a second source of truth: `writeState` diffs the previous `state.json` on
   disk against the state it is about to write and appends the resulting events, so every existing transition
   point (runDag, resumeRun, night mode, amend, abort) is covered by one choke point. Only `gate.opened` is an
   explicit emit (`emitGateBrief`, once per revision), because the revision exists only once the brief is
@@ -736,7 +734,7 @@ status are the gap. All of it is plumbing around the one engine; no new executio
 - **Per-iteration timing**: `NodeState.attempts[]` (`{iteration,status,startedAt,endedAt,durationMs,cost}`)
   is appended by `runDag` whenever a node leaves `running` (done/failed/paused at a gate) and carried across
   amend/reset, so a re-run no longer overwrites earlier iterations' timing. The existing `<node>-attempts/`
-  dirs archive *artifacts* only and hold no timing, so they are unchanged.
+  dirs archive _artifacts_ only and hold no timing, so they are unchanged.
 
 **Saved diff and on-disk artifact listing (v0.1.62).** The fix gate's viewer had summary prose but not the
 change itself, and saw an empty artifact list because `state.nodes[id].artifacts` is only written at
@@ -744,7 +742,7 @@ approve/finish. Both are engine plumbing, no agent involved:
 
 - **`changes.diff`** (`core/changes-diff.ts`): `git diff <merge-base(origin/<base_branch>, HEAD)>` of the
   worktree working tree (committed + staged + unstaged) plus untracked files (`ls-files --others
-  --exclude-standard`, so the worktree's seeded excludes apply) rendered as new-file diffs with
+--exclude-standard`, so the worktree's seeded excludes apply) rendered as new-file diffs with
   `git diff --no-index /dev/null <file>`. It never stages or touches the index/worktree. `node_modules` is
   excluded (same rule as `normalizeDirty`); lockfiles are NOT (no existing rule, and a lockfile change can be
   part of a fix). Base = the run's `state.baseBranch ?? "main"` (hotfix runs branch from release branches);
@@ -764,11 +762,52 @@ approve/finish. Both are engine plumbing, no agent involved:
 - **`gate.openedAt`**: `emitGateBrief` stamps the brief with the `gate.opened` event's ts (the existing
   event for that revision, or the one it just wrote); `status --json` `awaitingGate.since` already used it.
 
+**`dagrun ui` — read-only timeline viewer (v0.1.63).** A companion agent (or Eddie) needs a visual,
+live-updating view of a run alongside the companion chat; `status --json`/`events.jsonl` are
+machine-readable but not a place to _look_. `dagrun ui [--port <n>] [--open] [--home <dir>]` starts a
+loopback-only (`127.0.0.1`) Node `http` server (zero new deps — no Express, no frontend framework, no
+build step) and prints the URL; it never auto-opens a browser unless `--open` is passed (best-effort
+`open`/`xdg-open`/`cmd start` by platform, never fails the command if it can't). Default port `4740`
+(distinct from OTLP's 4317/4318; nothing else in this repo claims a port); `--port <n>` overrides, and a
+port already in use fails loud with the exact retry command — it never silently picks another port.
+
+- **One page, a run list, `?run=<id>` deep-link** — `src/ui/page.ts` renders a single self-contained HTML
+  document (inline `<style>`/`<script>`, no separate static asset files — avoids a dist-copy build step
+  the "no build step" rule would otherwise need) with a collapsible left rail (`discover.ts`) and the
+  selected run's timeline in the main pane.
+- **Strictly read-only**: the server never writes to a run directory, never touches `active.lock`, and
+  never calls any decide/approve/amend/resume path. `run-snapshot.ts` wraps `cli/status-json.ts`'s
+  `buildStatusJson` (the exact function `dagrun status --json` uses) so the CLI and the UI can never
+  drift, and reads the awaiting gate's brief VERBATIM from the already-persisted `<gate>/gate.json` —
+  it never calls `buildGateBrief`/`emitGateBrief` (which spawn git and write files). A companion-gates
+  run before its first `gate show`/`gate open`/decide-propose has no `gate.json` yet; the UI then shows
+  a lighter banner (reason/since only, no revision) with the same "run `dagrun gate show <run>`" hint —
+  this mirrors the CLI's own staleness, not a UI bug.
+- **Progressive, no-JS-safe**: every node row is a native `<details>` (expand/collapse needs no JS) and
+  artifact content (markdown subset, pretty JSON, `+`/`-`-coloured diff — `src/ui/render.ts`, zero deps)
+  is rendered server-side into the initial HTML, so a no-JS page load already shows the real timeline;
+  a `<noscript>` note only covers the live-tail region. The inline `<script>` progressively adds: an
+  SSE-driven live event tail, a ticking elapsed-time readout, theme toggle persistence
+  (`prefers-color-scheme` + manual override), and a "copy `dagrun gate show <run>`" button — there is no
+  decide/approve control anywhere in the UI, by design.
+- **SSE** (`src/ui/sse.ts`): `GET /api/runs/:id/stream` tails `events.jsonl` by byte offset (only
+  complete lines — an in-flight append's torn tail is picked up on the next tick; a shrunk file resets
+  the offset), polling every second (not `fs.watch`, which is flaky cross-platform) and pushing new
+  events plus a refreshed snapshot as SSE frames, with a `: ping` heartbeat between changes. The initial
+  page load's data comes from the JSON snapshot endpoint, not SSE — SSE carries deltas only.
+- **Discovery never hides a broken run** (`src/ui/discover.ts`): deliberately does NOT reuse
+  `run-engine.ts`'s `listRuns`, which silently skips a run whose `state.json` fails to parse. The UI
+  brief requires a corrupt run to render as an error card in the list, not vanish.
+- **Artifact preview allowlist** (`src/ui/node-views.ts`): only recognized text extensions
+  (`.md/.json/.diff/.patch/.txt/.log/.yaml/.yml`) under a 500KB cap are read and rendered; anything else
+  (binary, oversized, vanished mid-request) degrades to a note, never a throw. Every `runId` taken from
+  a URL is validated against `^[A-Za-z0-9._-]+$` (no `..`, no separators) before it touches the filesystem.
+
 ## 3b. Validation — smoke:mock (per-plan gate) and smoke:live (occasional)
 
 `npm run verify-baseline` = `npm ci && typecheck && unit tests && smoke:mock`. The standing gate: run on every plan change.
 
-**smoke:mock** (`test/smoke/smoke-mock.ts`) drives both gated workflows in-process using the mock executor — zero API calls, deterministic. Asserts: gate pauses, produces-contract (and, since the verify-autonomy change, `outcomeGate`) at every relevant node, state transitions (awaiting-gate → paused → done), night-mode auto-approvals. Eight runs: **A** (feature workflow, full happy path — define/fix gates approved, `verify` runs autonomously to a `PASS` outcome, `pr` runs, run done — no election anywhere); **B** (bugfix workflow, same shape, proving the amendment's conditional-but-required `verify` on that workflow too); **C** (night-mode, clean plan — Gate 1 + Gate 2 auto-approved AND `verify` runs autonomously to `done`, the run completes fully unattended with no park, unlike the old verify-election design which always parked here); **D** (night-mode, seeded concern → parked at Gate 1, unchanged); **E** (stale gate from a prior workflow version auto-skipped on resume); **F** (a non-`PASS` `verify-report.json` outcome fails `verify` via `outcomeGate` and blocks `pr` — proven end-to-end through the real `startRun`/`resumeRun`/`runDag` path, with `resumeRun`'s intentional `process.exit(1)` on a failed run temporarily intercepted so the in-process smoke script can inspect the resulting `state.json` instead of dying with it); **G** (added by the structural-upgrades change — `noPlaceholders`: `define`'s `guide.md` contains an unresolved `TODO`, manually approved at Gate 1 via `resumeRun`'s `--approve` path, and the mechanical scan fails the node on the gate-approve transition itself — not `runDag`'s done-branch, since a gated node never reaches `done` there — blocking `implement` and failing the run); **H** (the same `noPlaceholders` proof through the OTHER gate-approve site — `startRun`'s night-mode auto-approve loop, using a placeholder-laden `guide.md` with no "Concerns / plan challenges" heading so it auto-approves rather than parking; needed a new `startRunCapturingExit` smoke helper mirroring `resumeRunCapturingExit` since `startRun`'s own night-mode loop also calls `process.exit(1)` on a failed run). G and H together are the load-bearing proof that `checkNoPlaceholders` is wired at BOTH places a gated node's status actually flips to `done`, not just where the analogous `checkOutcomeGate` happens to already live. Does NOT assert model output quality or exact session IDs.
+**smoke:mock** (`test/smoke/smoke-mock.ts`) drives both gated workflows in-process using the mock executor — zero API calls, deterministic. Asserts: gate pauses, produces-contract (and, since the verify-autonomy change, `outcomeGate`) at every relevant node, state transitions (awaiting-gate → paused → done), night-mode auto-approvals. Eight runs: **A** (feature workflow, full happy path — define/fix gates approved, `verify` runs autonomously to a `PASS` outcome, `pr` runs, run done — no election anywhere); **B** (bugfix workflow, same shape, proving the amendment's conditional-but-required `verify` on that workflow too); **C** (night-mode, clean plan — Gate 1 + Gate 2 auto-approved AND `verify` runs autonomously to `done`, the run completes fully unattended with no park, unlike the old verify-election design which always parked here); **D** (night-mode, seeded concern → parked at Gate 1, unchanged); **E** (stale gate from a prior workflow version auto-skipped on resume); **F** (a non-`PASS` `verify-report.json` outcome fails `verify` via `outcomeGate` and blocks `pr` — proven end-to-end through the real `startRun`/`resumeRun`/`runDag` path, with `resumeRun`'s intentional `process.exit(1)` on a failed run temporarily intercepted so the in-process smoke script can inspect the resulting `state.json` instead of dying with it); **G** (added by the structural-upgrades change — `noPlaceholders`: `define`'s `guide.md` contains an unresolved `TODO`, manually approved at Gate 1 via `resumeRun`'s `--approve` path, and the mechanical scan fails the node on the gate-approve transition itself — not `runDag`'s done-branch, since a gated node never reaches `done` there — blocking `implement` and failing the run); **H** (the same `noPlaceholders` proof through the OTHER gate-approve site — `startRun`'s night-mode auto-approve loop, using a placeholder-laden `guide.md` with no "Concerns / plan challenges" heading so it auto-approves rather than parking; needed a new `startRunCapturingExit` smoke helper mirroring `resumeRunCapturingExit` since `startRun`'s own night-mode loop also calls `process.exit(1)` on a failed run). G and H together are the load-bearing proof that `checkNoPlaceholders` is wired at BOTH places a gated node's status actually flips to `done`, not just where the analogous `checkOutcomeGate` happens to already live. Does NOT assert model output quality or exact session IDs. `npm run smoke:mock` chains three scripts: `smoke-mock.ts` (above) `&& smoke-gates.ts` (companion-gate routing/authorization, §3g) `&& smoke-ui.ts` (`dagrun ui`'s HTTP surface: drives two mock bugfix runs into a temp home, hits every JSON/SSE endpoint and the HTML page against the real server, and asserts neither run directory changed at all).
 
 **smoke:live** (`test/smoke/smoke.ts`) runs the real 8-step pipeline with the SDK — requires `ANTHROPIC_API_KEY`, ~35 min. Proves API auth, real session-resume, structured output from live model, worktree diff. Run when node prompts change (`payload/commands/*.md`) or when `sdk-runner.ts` changes. A bad prompt that passes mock but breaks model behaviour won't surface until the next smoke:live — that is the accepted tradeoff. **Reflection wiring (step 6):** smoke seeds a known `reflections.md` into `pr/` before the resume call so the SessionEnd hook has a deterministic file to capture — this proves hook wiring + env propagation in a real session without gating on spontaneous model output. The hook logic is separately proven by the unit test (`src/hooks/session-end.test.ts`).
 
