@@ -318,7 +318,7 @@ test("agentDecidable: verify is NOT agent-decidable", () => {
   assert.equal(agentDecidable("verify"), false);
 });
 
-test("agentDecidable: pr (bugfix pre-PR gate) is night-decidable — preserves prior unattended behavior", () => {
+test("agentDecidable: pr (pre-PR gate, both feature and bugfix workflows) is night-decidable — preserves prior unattended behavior", () => {
   assert.equal(agentDecidable("pr"), true);
 });
 

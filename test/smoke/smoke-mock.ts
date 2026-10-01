@@ -168,6 +168,7 @@ const PLAN_A = makePlanPath(HOME_A, BASE_TS);
 
 await startRun({
   workflow: featureWorkflow,
+  noCompanion: true, // legacy fresh-session gates; companion gates are covered by smoke-gates-feature.ts
   planPath: PLAN_A,
   homeDir: HOME_A,
   config,
@@ -468,6 +469,7 @@ const PLAN_C = makePlanPath(HOME_C, BASE_TS + 2);
 
 await startRun({
   workflow: featureWorkflow,
+  noCompanion: true, // night-mode requires an explicit opt-out of companion gates
   planPath: PLAN_C,
   homeDir: HOME_C,
   config,
@@ -564,6 +566,7 @@ const concernsFactory = (
 
 await startRun({
   workflow: featureWorkflow,
+  noCompanion: true, // night-mode requires an explicit opt-out of companion gates
   planPath: PLAN_D,
   homeDir: HOME_D,
   config,
@@ -809,6 +812,7 @@ async function startRunCapturingExit(
 
 await startRun({
   workflow: featureWorkflow,
+  noCompanion: true, // legacy fresh-session gates; companion gates are covered by smoke-gates-feature.ts
   planPath: PLAN_F,
   homeDir: HOME_F,
   config,
@@ -1116,6 +1120,7 @@ const placeholderFactory = (
 
 await startRun({
   workflow: featureWorkflow,
+  noCompanion: true, // legacy fresh-session gates; companion gates are covered by smoke-gates-feature.ts
   planPath: PLAN_G,
   homeDir: HOME_G,
   config,
@@ -1197,6 +1202,7 @@ const PLAN_H = makePlanPath(HOME_H, BASE_TS + 7);
 
 await startRunCapturingExit({
   workflow: featureWorkflow,
+  noCompanion: true, // night-mode requires an explicit opt-out of companion gates
   planPath: PLAN_H,
   homeDir: HOME_H,
   config,

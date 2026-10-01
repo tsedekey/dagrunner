@@ -779,3 +779,166 @@ rather than a saved file.
 - **TDD note** · every module (`discover.ts`, `run-snapshot.ts`, `render.ts`, `sse.ts`, `page.ts`, `node-views.ts`, `server.ts`) was written test-first except `page.ts`'s CSS/JS content itself (model-judgment visual design, not unit-testable — proven instead by the manual curl pass against real run `59478-2` and a populated temp home)
 - **manual verification, not just smoke** · `dagrun ui` was run for real (compiled `dist/`) against (1) an empty temp home, (2) a temp home populated via the smoke fixture path with a paused and a done bugfix run, and (3) the REAL `DAGRUNNER_HOME` read-only against run `59478-2` (17 real runs listed; `59478-2`'s full 7-node bugfix pipeline, artifacts, and `$17.75` total cost rendered correctly) — confirmed byte-for-byte no change to `59478-2`'s files (`stat`-based snapshot diff + sha256 of the file listing, matching before/after) and no `active.lock` created; also manually confirmed the exact `EADDRINUSE` retry message via two real `dagrun ui` invocations on the same port
 - **not verified** · `--open`'s actual browser-launch was not exercised in this sandboxed environment (no display) — only its best-effort/never-crash code path was reasoned through and is covered by the "never throws" contract in `openBrowser`; smoke:live was not run (no `payload/commands/*.md` or `sdk-runner.ts` touched)
+
+## § feature-companion-gates-parity
+
+Both installed companion skills (`bug-fix-companion`, `feature-work-companion`) already documented
+this as "pending follow-up" — closing the gap on the engine side (v0.1.64). `featureWorkflow`
+(`src/workflow/feature-workflow.ts`) gains `companionGates: true` and a pre-PR gate on `pr`
+(`{maxIterations: 5, onReject: "revise-self", amendTargets: ["fix"]}`), matching
+`bugfixWorkflow` exactly. Design: `docs/dagrunner-master-architecture.md` §3g and §3
+(both updated with pointer notes to the current shape).
+
+- **behavior change, explicitly called out — proven red then green, twice** · {decision: should
+  approving the fix gate on feature still implicitly publish the PR (prior behavior — `pr` was
+  ungated), choice: no — `pr` is now a gate on feature too, so approving fix only reaches `pr`'s own
+  `awaiting-gate`; a SEPARATE pr-gate approval is required before `runPrPostProcess`
+  pushes/opens the draft PR, rationale: that is exactly what the brief asked for (pre-PR gate parity)
+  and what both companion skills already expect/document as pending. Getting the smoke evidence
+  itself to have real teeth took two corrections, both found by deliberately breaking the thing under
+  test and checking the suite actually goes red (not just re-reading the assertions and asserting
+  they look right):
+  1. First draft asserted "no `prUrl` anywhere in the run dir". Vacuous: `grep -n prUrl
+     src/runtime/mock-executor.ts` finds nothing — the mock's `"success"`/`"gate-pause"` scenarios
+     never write `pr-meta.json` at all, gated or not. Replaced with evidence keyed on
+     `runPrPostProcess`'s own `state.nodes["pr"].status !== "done"` guard (run-engine.ts): the
+     wrapper now writes `pr-meta.json` itself (title only, no `prUrl`) so a `pr`-reaches-`done`
+     transition makes `runPrPostProcess` actually attempt `git push origin HEAD`, which fails loud on
+     the toy repo's remote-less `.git` and writes `pr/pr-error.txt`. Step 4 asserts that file is
+     ABSENT right after the fix-gate decide; step 5 asserts it APPEARS only after the pr-gate
+     approval — the file's presence is direct evidence `git push` was attempted, not just that some
+     status field flipped.
+  2. That still wasn't enough: `smoke-gates-feature.ts`'s own mock factory hardcoded `pr:
+     "gate-pause"` in its scenario map regardless of whether `featureWorkflow`'s `pr` node actually
+     declared a `gate` — so step 4's `nodes.pr.status === "awaiting-gate"` check would have stayed
+     green even with the gate deleted from the workflow, proving nothing about the workflow edit
+     itself. Caught by the house rule (show evidence, don't assert) applied to the test harness, not
+     just the code: temporarily deleted `pr.gate` from `feature-workflow.ts` and reran — step 4
+     still passed, which was the tell. Fixed by keying the mock's pause-vs-run choice on the node's
+     own `node.gate !== undefined`, the exact same check `sdk-runner.ts:441` makes in production
+     (`if (node.gate !== undefined) return {status: "awaiting-gate", …}`), instead of a fixed
+     per-node scenario string. Re-ran the same deletion: `node --import tsx
+     test/smoke/smoke-gates-feature.ts` now exits 1, failing exactly on `nodes.pr.status ===
+     "awaiting-gate"` (`actual: 'done'`); restoring the gate returns it to exit 0. Both the before
+     (red, exit 1) and after (green, exit 0) runs were executed, not inferred.
+  } — this is a real, user-facing timing change for feature runs: a plan that used to go
+  gate(fix)->published now goes gate(fix)->gate(pr)->published.
+- **`--night` on feature now requires `--no-companion`** · {decision: whether `dagrun start feature
+  --night` should keep working with no companion flags at all, choice: no — `validateStartOptions`
+  already refuses `--night` + an implicit/absent companion choice whenever `companionGates === true`
+  (this logic already existed for bugfix, unchanged, generic on the workflow object — not
+  special-cased by name), so feature now needs the same explicit `--no-companion` bugfix night runs
+  already required, rationale: the brief said don't special-case "feature" to dodge this, and
+  loosening the generic check would do exactly that; `smoke-mock.ts` runs A/C/D/F/G/H (all
+  `featureWorkflow`, several night-mode) were updated to pass `noCompanion: true`, mirroring run B's
+  existing precedent for bugfix} · §3's old "Night-mode" prose (line 86 as of this change) is now
+  flagged historical via a pointer note rather than rewritten in place, consistent with how §3c
+  already handles this section's staleness.
+- **no hardcoded-to-"bugfix" gate logic found that needed fixing** · {decision: per the brief's
+  instruction to find and fix any spot that hardcodes "bugfix" in gate-logic that would block this,
+  audited `runPrPostProcess` (keys only on `state.nodes["pr"].status === "done"`), `announcePause`
+  (keys on `awaitingGateId(st) === "pr"`, a node id, not a workflow name),
+  `teardownVerifyForDecision` (keys on `ancestorsOf(workflow, gateNodeId).includes("verify")`),
+  `AGENT_DECIDABLE_GATES` (a Set of node ids, already included `"pr"` pre-change),
+  `loadWorkflow`'s companionGates/amendTargets/decidesNode validation (fully generic),
+  `src/ui/run-snapshot.ts`'s `resolveWorkflow` (a `name →` lookup, not a behavior branch),
+  `src/runtime/sdk-runner.ts:441` (`if (node.gate !== undefined) return {status: "awaiting-gate", …}`
+  — the REAL production gate-pause decision, keyed purely on the node's own declared `gate`, not a
+  node-id/workflow allowlist — this is the one the brief's "confirm, don't assume" note was really
+  asking about, since the mock executor's own "awaiting-gate" vs "done" choice is scenario-string-
+  driven and proves nothing about production), and `src/runtime/gate-files.ts`/`gate-cli.ts` (grepped
+  for node-id/workflow-name literals in the brief/statement-building code — none found; `gate-cli.ts`
+  line 40's `state.workflow === "bugfix" ? … : state.workflow === "feature" ? … : undefined` is the
+  same `name →` lookup pattern, not a behavior branch) — every one reads
+  `node.gate`/`workflow.companionGates`/node ids generically; none special-cased "bugfix".
+  Conclusion: there was nothing to fix. (The one place that DOES branch on a workflow string,
+  `WORKFLOW_TYPE_PREFIX` / `makeBranchName`/`makePrTitlePrefix`, is intentional — branch/PR-title
+  naming convention per workflow TYPE, e.g. `feat:`/`fix:`, not gate behavior — out of scope.)
+- **where the gate-semantics parity tests landed** · {decision: the brief named
+  `src/runtime/run-engine.test.ts` as the place to mirror bugfix's amend/propose-then-confirm/
+  joinRule coverage for feature, choice: added to `src/core/gate.test.ts` instead (plus a renamed
+  `run-engine.test.ts` `agentDecidable` test title), rationale: `run-engine.test.ts` contains only
+  pure-function unit tests (`makeRunId`, `parseGateDecision`, `severityForcesPause`, …) with no
+  workflow-conditional logic to mirror; the actual bugfix-fixture tests for `amendTargets`,
+  `planAmend`, `downstreamOf`, `approveContinuesTo` and `loadWorkflow` already live in
+  `gate.test.ts` (lines ~243–274 pre-change) — that is where the featureWorkflow equivalents were
+  added, immediately following their bugfix counterparts. The brief pointed at the wrong file; the
+  task (prove the same generic gate.ts functions behave identically against featureWorkflow) is
+  satisfied regardless of which test file hosts it.}
+- **smoke coverage: a new file, not an extension of smoke-gates.ts** · {decision: extend
+  `test/smoke/smoke-gates.ts` in place vs add a parallel `smoke-gates-feature.ts`, choice: parallel
+  file, wired into `smoke:mock` right after `smoke-gates.ts`, rationale: `smoke-gates.ts` hardcodes
+  `bugfixWorkflow`/the node id `"reproduce"` throughout (677 lines covering companion handoff,
+  detach, docker teardown, session recovery — all already workflow-agnostic/generic, proven once is
+  enough); a new 300-line file proves only what is actually NEW for feature (full define->fix->pr
+  gate path, the fix-gate verify decision, amend-at-pr-targets-fix, and the publication-timing
+  proof) without duplicating already-proven generic plumbing (docker teardown, `--detach`, stale/
+  wrong-run/wrong-gate refusal) a second time under a different workflow fixture for no new
+  information.}
+- **mock verify scenario reused unchanged** · `createMockExecutor`'s `"success"` scenario for a node
+  with `outcomeGate`+`evidenceCheck: "verify-runtime"` already writes a schema-3 source-only
+  PROVISIONED report that satisfies the evidence contract (pre-existing fixture code, unrelated to
+  this change) — `smoke-gates-feature.ts` reuses it as-is for the "fix gate decide yes" case, no mock
+  changes needed.
+- **`smoke-mock.ts` Run A/B still bypass `pr`'s own gate pause** · unchanged by this build: both use
+  the `pr: "success"` mock scenario (not `"gate-pause"`), so the mock executor returns `"done"`
+  directly regardless of `node.gate` being declared (the mock trusts the scenario string, not
+  `node.gate` — `dag.ts` trusts whatever status the executor returns). This was already true for
+  bugfix's `pr` gate before this change; exercising the real pause/decide/amend mechanics at `pr` is
+  `smoke-gates.ts`/`smoke-gates-feature.ts`'s job, by design — not duplicated in `smoke-mock.ts`.
+- **pre-existing flake found in `smoke-gates.ts` (bugfix), NOT introduced by this change, NOT
+  fixed** · {decision: whether to fix it as part of this brief, choice: no — report it, don't fix
+  it, rationale: `npm run smoke:mock` failed 1/5 times across repeated full runs with
+  `Error: ENOENT: … runs/<id>/reproduce/gate.json … triggered an uncaughtException … caught by the
+  test runner`; isolated `node --import tsx test/smoke/smoke-gates.ts` alone (no other smoke script
+  running) reproduced it at ~1/6 — an async write (git subprocess activity inside `gate.json`
+  writing, most visible around step 14's `--detach`/real-CLI-subprocess block) races past that
+  `node:test` script's synchronous completion. `smoke-gates.ts` was not touched by this change (the
+  brief's new file is `smoke-gates-feature.ts`, kept separate specifically so the untouched,
+  already-proven-generic bugfix mechanics are not re-risked); the file is byte-identical before and
+  after this commit, so the flake predates it. Scoped as out-of-this-brief: the fix (poll
+  `<gate>/gate.json` for existence + matching revision instead of reading it immediately after
+  `waitFor` sees `awaiting-gate` in `status --json`) touches `smoke-gates.ts`'s detach/CLI-subprocess
+  block, which is unrelated to feature/bugfix gate parity and carries its own blast radius; flagging
+  it here rather than silently fixing an unrelated file outside the brief, or silently shipping on a
+  flaky baseline without saying so.}
+- **`test/smoke/smoke.ts` (smoke:live) was already stale before this build; left unfixed, not
+  touched, not runnable here to verify** · {decision: whether to patch it so it tolerates the new
+  companion-gate requirement on `featureWorkflow`, choice: no, rationale: by inspection of HEAD
+  (not run — needs a real API key and ~35 minutes), step 2 calls `["start", "feature", "--plan", …]`
+  and step 2/4 read `runDir/"expand"/"guide.md"` and `"expand"/"feedback-1.md"` (lines 161, 204) —
+  but `featureWorkflow`'s first node has been called `"define"` since commit `67f9a98`
+  ("refactor(workflow): rename expand node to define"), confirmed via `git log -S'"define"' --
+  src/workflow/feature-workflow.ts`. (The file was NOT abandoned at the phase2a era generally — its
+  own step-6 comments reference the later verify-autonomy change and cite "§
+  verify-autonomy-smoke-live-gap"; `git log -1` shows its last real edit was `11cf304`, the
+  verify-autonomy commit — but the `"expand"`→`"define"` rename landed after that and was never
+  back-ported into this script, so by inspection it would fail at step 2 against current code,
+  independent of this build.) This build adds two more incompatibilities on top of that pre-existing
+  staleness, noted here for whoever next refreshes this script (out of scope to fix now — a patch
+  can't be verified without a real API key, and a full fix means reconciling the whole
+  `"expand"`-era script against current node names, well beyond companion-gate parity): (1) step 2's
+  `runCli(["start", "feature", …])` has no `--companion-session`/`--no-companion` flag, so
+  `validateStartOptions` would now refuse it outright (once the `"expand"` staleness is separately
+  fixed); (2) step 6 approves the fix gate and, if the toy-repo fixture's `verify` run happens to
+  reach `PROVISIONED` (unlikely — see the step's own "KNOWN SMOKE:LIVE GAP" comment, since the
+  fixture has no Maven/Docker tooling — but not impossible if `verify`'s own judgment is lenient),
+  `pr` would land `awaiting-gate` instead of being free to run to a terminal status on the same call,
+  needing an added legacy `resume --approve` step; when `verify` fails or is blocked (the fixture's
+  normal/expected outcome), `pr` is skipped either way and step 6's terminal-status assertion is
+  unaffected. Per the master doc §3b, smoke:live is "occasional" and required only when
+  `payload/commands/*.md` or `sdk-runner.ts` change — neither did here (`sdk-runner.ts` was read
+  only, to confirm its gate-pause check is generic).}
+- **feature-workflow.test.ts: added the missing joinRule skip-tolerance test** · {decision: the
+  brief's item 5 named "joinRule skip-tolerance for pr/digest" as part of the test-mirroring ask;
+  `bugfixWorkflow` already had this exact test, `featureWorkflow` did not, choice: added
+  `featureWorkflow: pr and digest tolerate a skipped verify (joinRule)…`, rationale: this is a
+  coverage gap being closed, not new behavior — `joinRule: "none-failed-min-one-success"` was already
+  present on both nodes, untouched by this build, so the new test is green on first run (not a
+  red-then-green TDD case; logged here rather than implied as one).}
+- run 59478-2 and `~/.local/share/dagrunner` untouched (temp homes/repos only, `DAGRUNNER_HOME`
+  never set to the real path); smoke:live not run — no `payload/commands/*.md` touched by this
+  change (`sdk-runner.ts` was read, not edited, to confirm its gate-pause check is generic — see the
+  hardcoding-audit bullet above); three unrelated files were already modified in the working tree at
+  the start of this build — `docs/bug-fix-companion-gate-addition.md`, `payload/commands/implement.md`,
+  `payload/commands/pr.md` — left untouched and uncommitted by this build; not staged, not reverted.

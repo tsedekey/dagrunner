@@ -399,7 +399,10 @@ test("featureWorkflow: verify is the same optional runtime demonstration, decide
   assert.ok(node !== undefined);
   assert.equal(node.command, "/verify");
   assert.ok(node.when !== undefined);
-  assert.equal(featureWorkflow.nodes.find((n) => n.id === "fix")?.gate?.decidesNode, "verify");
+  assert.equal(
+    featureWorkflow.nodes.find((n) => n.id === "fix")?.gate?.decidesNode,
+    "verify",
+  );
   assert.deepEqual(node.outcomeGate, {
     file: "verify-report.json",
     field: "outcome",
@@ -409,15 +412,30 @@ test("featureWorkflow: verify is the same optional runtime demonstration, decide
   assert.equal(node.evidenceCheck, "verify-runtime");
 });
 
-test("featureWorkflow: companion gates are NOT enabled (legacy fresh-session gates preserved)", () => {
-  assert.equal(featureWorkflow.companionGates, undefined);
+test("featureWorkflow: every gate returns to the companion; pr is a pre-PR gate that can amend fix (parity with bugfix — DECISIONS.md § feature-companion-gates-parity)", () => {
+  assert.equal(featureWorkflow.companionGates, true);
+  const pr = featureWorkflow.nodes.find((n) => n.id === "pr");
+  assert.ok(pr?.gate !== undefined, "pr must be gated (pre-PR decision)");
+  assert.deepEqual(pr.gate.amendTargets, ["fix"]);
+  assert.deepEqual(
+    featureWorkflow.nodes.filter((n) => n.gate !== undefined).map((n) => n.id),
+    ["define", "fix", "pr"],
+  );
 });
 
-test("featureWorkflow: pr depends on both fix and verify", () => {
+test("featureWorkflow: pr uses haiku model and depends on both fix and verify", () => {
   const node = featureWorkflow.nodes.find((n) => n.id === "pr");
   assert.ok(node !== undefined);
   assert.ok(node.dependsOn?.includes("fix"));
   assert.ok(node.dependsOn?.includes("verify"));
+  assert.equal(node.model, "haiku");
+});
+
+test("featureWorkflow: pr and digest tolerate a skipped verify (joinRule) but a failed verify still blocks — parity with bugfix (DECISIONS.md § feature-companion-gates-parity)", () => {
+  for (const id of ["pr", "digest"]) {
+    const n = featureWorkflow.nodes.find((x) => x.id === id);
+    assert.equal(n?.joinRule, "none-failed-min-one-success", id);
+  }
 });
 
 // ---------------------------------------------------------------------------

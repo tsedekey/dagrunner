@@ -1,6 +1,6 @@
 {
   "name": "dagrunner",
-  "version": "0.1.63",
+  "version": "0.1.64",
   "description": "A thin DAG runner that orchestrates Claude Code (Agent SDK) across git worktrees, with checkpoint-and-exit conversation-led gates. Owns only what has no native Claude Code primitive that survives across processes/worktrees; reuses Claude Code for everything else.",
   "type": "module",
   "engines": {
@@ -19,7 +19,7 @@
     "test": "node --test --import tsx ./src/**/*.test.ts",
     "test:unit": "node --test --import tsx ./src/**/*.test.ts",
     "smoke:live": "node --import tsx ./test/smoke/smoke.ts",
-    "smoke:mock": "node --import tsx ./test/smoke/smoke-mock.ts && node --import tsx ./test/smoke/smoke-gates.ts && node --import tsx ./test/smoke/smoke-ui.ts",
+    "smoke:mock": "node --import tsx ./test/smoke/smoke-mock.ts && node --import tsx ./test/smoke/smoke-gates.ts && node --import tsx ./test/smoke/smoke-gates-feature.ts && node --import tsx ./test/smoke/smoke-ui.ts",
     "dagrun": "node --import tsx ./src/cli/cli.ts",
     "verify-baseline": "npm ci && npm run typecheck && npm test && npm run smoke:mock"
   },

@@ -1,18 +1,21 @@
 /**
- * feature-workflow.ts — v1 thin-slice workflow definition.
+ * feature-workflow.ts — feature pipeline workflow definition.
  *
- * Phase 2a pipeline:
- *   define (Gate 1) -> implement -> review -> fix (Gate 2)
+ * Pipeline shape:
+ *   define (Gate 1) -> implement -> review -> fix (Gate 2) -> verify -> pr (Gate 3, pre-PR)
  *
- * Phase 2b (autonomous verify — see the verify-autonomy change, DECISIONS.md
- * § verify-autonomy-remove-election) adds: verify -> pr (terminal). verify is
- * a required, blocking, fully autonomous node — it authors and runs its own
- * @MultiDbTest acceptance test, independently reruns build+tests, and gates
- * pr via outcomeGate on verify-report.json's `outcome` field. No human
- * election, no manual-test gate — see payload/commands/verify.md.
+ * Parity with bugfix-workflow.ts (DECISIONS.md § feature-companion-gates-parity):
+ * every gate (define, fix, pr) returns to the originating planning companion via
+ * `dagrun gate show|decide` (`companionGates: true`). verify is OPTIONAL and is a
+ * PROVISION-AND-HAND-OFF node (payload/commands/verify.md, shared with bugfix): build
+ * the candidate from the worktree, run it on a local disposable target, write manual
+ * verification steps, and STOP with the environment left running for Eddie to test by
+ * hand. Whether it runs is decided by Eddie + the companion AT THE FIX GATE
+ * (gate.decidesNode) and persisted as fix/next-node-decision.json, which verify's
+ * `when` reads. See DECISIONS.md § companion-gates / § verify-runtime-demo.
  *
- * This is the ONLY workflow in v1. Additional workflows are config additions
- * on the proven engine.
+ * This is one of two workflows in v1 (the other is bugfix-workflow.ts). Additional
+ * workflows are config additions on the proven engine.
  */
 
 import type { Workflow } from "../core/types.js";
@@ -106,6 +109,10 @@ export const FINDINGS_SCHEMA = {
 
 export const featureWorkflow: Workflow = {
   name: "feature",
+  // Every gate (define, fix, pr) returns to the originating planning companion
+  // via `dagrun gate show|decide` — see DECISIONS.md § companion-gates and
+  // § feature-companion-gates-parity.
+  companionGates: true,
   nodes: [
     {
       id: "define",
@@ -138,7 +145,11 @@ export const featureWorkflow: Workflow = {
       model: "sonnet",
       effort: "medium",
       produces: ["summary.md"],
-      gate: { maxIterations: 8, onReject: "revise-self", decidesNode: "verify" },
+      gate: {
+        maxIterations: 8,
+        onReject: "revise-self",
+        decidesNode: "verify",
+      },
       revisionInstruction:
         "Review the feedback below and revise the code changes in the worktree accordingly. " +
         "Then update {artifactsDir}/summary.md to reflect all changes made (which findings were addressed, what files changed, what was deferred).",
@@ -147,16 +158,21 @@ export const featureWorkflow: Workflow = {
     // Optional provision-and-hand-off of a runtime for the human — same node/prompt as the
     // bugfix workflow (payload/commands/verify.md). Whether it runs is decided at
     // the fix gate (gate.decidesNode) and read from fix/next-node-decision.json.
-    // Only PROVISIONED passes; see core/verify-evidence.ts. NOTE: this workflow has no
-    // pre-PR gate, so nothing tears the environment down on a verdict — cleanup is
-    // `dagrun verify cleanup <run-id>` (see DECISIONS.md § verify-provision-handoff).
+    // Only PROVISIONED passes; see core/verify-evidence.ts. The pre-PR gate on `pr`
+    // (added in DECISIONS.md § feature-companion-gates-parity) tears the environment
+    // down when the human's verdict lands there, same as bugfix; `dagrun verify
+    // cleanup <run-id>` remains the manual/retry path (see DECISIONS.md §
+    // verify-provision-handoff).
     {
       id: "verify",
       dependsOn: ["fix"],
       command: "/verify",
       model: "sonnet",
       when: (ctx) =>
-        readNextNodeDecision(ctx.read("fix", "next-node-decision.json"), "verify"),
+        readNextNodeDecision(
+          ctx.read("fix", "next-node-decision.json"),
+          "verify",
+        ),
       produces: ["verify-report.json", "demo.md"],
       outcomeGate: {
         file: "verify-report.json",
@@ -172,6 +188,17 @@ export const featureWorkflow: Workflow = {
       command: "/pr",
       model: "haiku",
       produces: ["body.md"],
+      // Pre-PR gate: pr only COMPOSES the body/meta in-session; push + draft-PR
+      // creation happen in runPrPostProcess after this gate is approved, so the
+      // human decision genuinely precedes publication (and sees verify's evidence).
+      // Parity with bugfix-workflow.ts's pr gate — see DECISIONS.md §
+      // feature-companion-gates-parity: approving the fix gate no longer
+      // auto-publishes; this gate's approval does.
+      gate: {
+        maxIterations: 5,
+        onReject: "revise-self",
+        amendTargets: ["fix"],
+      },
     },
     // Terminal-adjacent, informational, read-only — same deps as pr so it runs
     // in parallel with pr and adds no wall-clock time (see DECISIONS.md §
