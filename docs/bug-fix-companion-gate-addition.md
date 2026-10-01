@@ -1,16 +1,18 @@
 # Proposed addition to `bug-fix-companion` — DagRunner companion gates
 
 **Status: this content is already applied to `~/.claude/skills/bug-fix-companion/references/dagrunner-gates.md`
-as of dagrunner v0.1.52.** This copy (v0.1.63) adds one more increment, not yet applied: the companion
-becomes the run's _driver_, not just its gate reviewer — it starts the run itself with `--detach`, polls
-`dagrun status --json` instead of returning to a terminal, and never hands the `dagrun` CLI to Eddie in the
-normal path. Everything below (Handoff, Deciding step 4, "Running in the background") reflects that; the
-rest of the previously-applied content (gates, verify, recovery) is unchanged and already live.
+as of dagrunner v0.1.65.** That includes the `--detach`-driven handoff/driver behavior (companion starts
+the run with `--detach`, polls `dagrun status --json` instead of returning to a terminal, never hands the
+`dagrun` CLI to Eddie in the normal path) and, new in v0.1.65, the digest-removal fold-in: the `fix`-gate
+bullet now names deferred/unresolved findings explicitly, the `pr`-gate bullet now names open reviewer
+questions and the verify-ran status, and a new "Lesson promotion" section wires the companion to `dagrun
+reflect` (see `DECISIONS.md § digest-removed-folded-into-companion`). Nothing below is a pending,
+not-yet-applied increment — this mirror and the deployed file are in sync.
 
-The commands below exist in dagrunner v0.1.63 and are exercised by `test/smoke/smoke-gates.ts` and
+The commands below exist in dagrunner v0.1.65 and are exercised by `test/smoke/smoke-gates.ts` and
 `test/smoke/smoke-ui.ts` (mock executor). Real `claude --resume` re-entry and the runtime tools (docker /
 C8 Run / c8ctl) are NOT yet demonstrated — keep them labelled unverified until they are. A real end-to-end
-run driven this way (this companion starting and carrying a run through to `pr`/`digest` without Eddie
+run driven this way (this companion starting and carrying a run through to `pr` without Eddie
 touching a terminal) has also not yet been demonstrated — do this once before trimming any human-facing
 command (`gate open`, bare `resume`, `--approve`/`--reject`); none of that trimming is proposed here.
 
@@ -84,8 +86,12 @@ dagrun start bugfix --plan <approved fix-plan file> --companion-session "$CLAUDE
 - **`reproduce`** — reproduction guide. Review: is the bug real, is the root cause the agreed one, does the
   change surface / regression test match the plan? Amend = re-run reproduce with feedback.
 - **`fix`** — the diff after review. Review: exact diff, tests actually run, before/after regression
-  evidence, review findings and their handling, deviations from the plan. This gate ALSO decides whether
-  the optional runtime demonstration (`verify`) runs:
+  evidence, review findings and their handling, deviations from the plan. Walk `review/findings.json`
+  and `fix/summary.md` one finding at a time as usual, and as part of that same walkthrough — not a
+  separate pass — name every finding `fix/summary.md` explicitly DEFERRED or left unresolved, with its
+  dimension/severity and the stated reason (this was the removed `digest` node's Section 1; nothing
+  downstream of this conversation ever reads it, so say it here or it's lost). This gate ALSO decides
+  whether the optional runtime demonstration (`verify`) runs:
   - Read `fix/summary.md` § _Verify recommendation_ (the agent's advice) and give Eddie your own view.
   - Ask explicitly: run verify, or skip? Then `--run-next yes|no`. Eddie may add a `--comment` naming
     what he wants demonstrated; verify reads it as its focus.
@@ -93,8 +99,14 @@ dagrun start bugfix --plan <approved fix-plan file> --companion-session "$CLAUDE
     disposable target, produces `verify/demo.md` (manual steps) for Eddie, and leaves it running for
     his hands-on testing (torn down after his verdict at the `pr` gate).
 - **`pr`** — pre-PR gate. Review the PR body, the diff, and (if it ran) `verify/verify-report.json` +
-  `demo.md`. Approve = the branch is pushed and a DRAFT PR opens. Amend `--target fix` sends the code
-  back; nothing has been published yet. Approval never implies merge, reviewers, ready-for-review, or
+  `demo.md`. Before Eddie decides, name the open questions a PR reviewer would likely ask — design
+  tradeoffs with a reasonable alternative, scope boundaries the guide drew (this was the removed
+  `digest` node's Section 2) — and give one line on verification: whether `verify` ran at all
+  (`verify/` absent = skipped by the fix-gate decision, a normal outcome) and, if it did, that
+  `PROVISIONED` means an environment was handed to Eddie for his manual testing, NOT a verdict that the
+  change works — his hands-on test is the verdict, same as "Verify evidence" below already says.
+  Approve = the branch is pushed and a DRAFT PR opens. Amend `--target fix` sends the code back;
+  nothing has been published yet. Approval never implies merge, reviewers, ready-for-review, or
   backport labels.
 
 ## Verify evidence — how to read it
@@ -111,6 +123,29 @@ The verdict is Eddie's. Point him at `demo.md` and the host:port in the gate bri
 block, let him test at his own pace, and take his verdict as the `pr` gate decision (approve / amend / hold).
 Any of those tears the environment down as a side effect (proposal text says so); tell him before he
 confirms. Never describe a skipped, blocked or still-pending verify as passed.
+
+## Lesson promotion (rare — not every finding)
+
+Most of what comes up at a gate stays local to this run. Occasionally something is durably useful beyond
+it: a deferred finding that will recur, a gotcha in this codebase/tooling, a design tradeoff worth
+remembering next time. When you notice one, NAME it to Eddie and propose capturing it — do not just
+capture it. This is separate from, and never bundled with, the gate decision itself: proposing a lesson is
+not proposing an action, and approving a gate action is not consent to capture a lesson (ask both
+separately, in either order).
+
+Only on his explicit go-ahead, run:
+
+```
+dagrun reflect --source companion --body "<the lesson, in his own terms>" --run-id <run-id>
+```
+
+This is a bare CLI call — it needs no `$DAGRUN_*` env var and no hook (this conversation's session never
+gets dagrunner's node-session wiring), the same as `gate show`/`gate decide`/`status` you already run
+directly. It is fail-soft: a missing `--source`/`--body` prints usage to stderr and does nothing; an empty
+`--body` is a silent no-op. Confirm it actually landed — `tail -n1
+${DAGRUNNER_HOME:-~/.local/share/dagrunner}/store/reflection-log.jsonl` — before telling Eddie it was
+captured; a broken call must never be reported as success. The body should stand alone (a later harvest
+reads only `source`/`body`, with no other context), and `source` is always `companion`, not a node id.
 
 ## Which command when (`resume` vs `gate …`)
 

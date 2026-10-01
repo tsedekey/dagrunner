@@ -31,11 +31,11 @@ test("bugfixWorkflow: name is 'bugfix'", () => {
 // Node shape
 // ---------------------------------------------------------------------------
 
-test("bugfixWorkflow: has exactly 7 nodes", () => {
-  assert.equal(bugfixWorkflow.nodes.length, 7);
+test("bugfixWorkflow: has exactly 6 nodes", () => {
+  assert.equal(bugfixWorkflow.nodes.length, 6);
 });
 
-test("bugfixWorkflow: node ids are reproduce, implement, review, fix, verify, pr, digest", () => {
+test("bugfixWorkflow: node ids are reproduce, implement, review, fix, verify, pr", () => {
   const ids = bugfixWorkflow.nodes.map((n) => n.id);
   assert.deepEqual(ids, [
     "reproduce",
@@ -44,7 +44,6 @@ test("bugfixWorkflow: node ids are reproduce, implement, review, fix, verify, pr
     "fix",
     "verify",
     "pr",
-    "digest",
   ]);
 });
 
@@ -85,8 +84,15 @@ test("bugfixWorkflow: verify is an OPTIONAL runtime demonstration decided at the
   assert.ok(node !== undefined, "verify node must exist");
   assert.ok(node.dependsOn?.includes("fix"), "verify must depend on fix");
   assert.equal(node.gate, undefined, "verify must have no human gate");
-  assert.equal(node.command, "/verify", "shared /verify prompt — no bugfix-only verify command");
-  assert.ok(node.when !== undefined, "verify must be skippable via a `when` reading the fix-gate decision");
+  assert.equal(
+    node.command,
+    "/verify",
+    "shared /verify prompt — no bugfix-only verify command",
+  );
+  assert.ok(
+    node.when !== undefined,
+    "verify must be skippable via a `when` reading the fix-gate decision",
+  );
   assert.equal(
     bugfixWorkflow.nodes.find((n) => n.id === "fix")?.gate?.decidesNode,
     "verify",
@@ -107,11 +113,9 @@ test("bugfixWorkflow: verify produces the report and the manual demo write-up", 
   assert.deepEqual(node.produces, ["verify-report.json", "demo.md"]);
 });
 
-test("bugfixWorkflow: pr and digest tolerate a skipped verify (joinRule) but a failed verify still blocks", () => {
-  for (const id of ["pr", "digest"]) {
-    const n = bugfixWorkflow.nodes.find((x) => x.id === id);
-    assert.equal(n?.joinRule, "none-failed-min-one-success", id);
-  }
+test("bugfixWorkflow: pr tolerates a skipped verify (joinRule) but a failed verify still blocks", () => {
+  const n = bugfixWorkflow.nodes.find((x) => x.id === "pr");
+  assert.equal(n?.joinRule, "none-failed-min-one-success");
 });
 
 test("bugfixWorkflow: every gate returns to the companion; pr is a pre-PR gate that can amend fix", () => {
@@ -176,36 +180,7 @@ test("bugfixWorkflow: implement and fix pin effort to 'medium'", () => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// digest node — terminal-adjacent, parallel with pr (see DECISIONS.md
-// § digest-node)
-// ---------------------------------------------------------------------------
-
-test("bugfixWorkflow: digest depends on both fix and verify (same deps as pr, runs in parallel)", () => {
-  const node = bugfixWorkflow.nodes.find((n) => n.id === "digest");
-  assert.ok(node !== undefined, "digest node must exist");
-  assert.ok(node.dependsOn?.includes("fix"), "digest must depend on fix");
-  assert.ok(node.dependsOn?.includes("verify"), "digest must depend on verify");
-});
-
-test("bugfixWorkflow: digest uses sonnet, produces knowledge-map.md, and has no gate", () => {
-  const node = bugfixWorkflow.nodes.find((n) => n.id === "digest");
-  assert.ok(node !== undefined);
-  assert.equal(node.model, "sonnet");
-  assert.deepEqual(node.produces, ["knowledge-map.md"]);
-  assert.equal(
-    node.gate,
-    undefined,
-    "digest must have no human gate — informational/read-only, same pattern as review",
-  );
-});
-
-test("bugfixWorkflow: digest is optional — a produces-contract failure must degrade to skipped, never fail a run whose pr already shipped", () => {
-  const node = bugfixWorkflow.nodes.find((n) => n.id === "digest");
-  assert.ok(node !== undefined);
-  assert.equal(
-    node.optional,
-    true,
-    "digest must be optional — unlike verify (deliberately required/blocking), digest is informational-only and nothing downstream depends on it",
-  );
-});
+// digest node removed (DECISIONS.md § digest-removed-folded-into-companion) —
+// its two-section content (deferred findings/risks, open reviewer questions)
+// is now folded into the companion's gate-reading step at the fix/pr gates;
+// the companion gate conversation it used to duplicate now covers it live.

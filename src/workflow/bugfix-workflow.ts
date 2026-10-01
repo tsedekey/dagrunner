@@ -56,7 +56,11 @@ export const bugfixWorkflow: Workflow = {
       model: "sonnet",
       effort: "medium",
       produces: ["summary.md"],
-      gate: { maxIterations: 5, onReject: "revise-self", decidesNode: "verify" },
+      gate: {
+        maxIterations: 5,
+        onReject: "revise-self",
+        decidesNode: "verify",
+      },
       revisionInstruction:
         "Review the feedback below and revise the code changes in the worktree accordingly. " +
         "Then update {artifactsDir}/summary.md to reflect all changes made (which findings were addressed, what files changed, what was deferred).",
@@ -70,7 +74,10 @@ export const bugfixWorkflow: Workflow = {
       // Runs only when the fix gate decided so. Missing decision artifact is a
       // loud error (never a silent skip/run): every approve path writes it.
       when: (ctx) =>
-        readNextNodeDecision(ctx.read("fix", "next-node-decision.json"), "verify"),
+        readNextNodeDecision(
+          ctx.read("fix", "next-node-decision.json"),
+          "verify",
+        ),
       produces: ["verify-report.json", "demo.md"],
       // Only a PROVISIONED report passes (environment up, handed to Eddie for manual
       // testing); BLOCKED_RUNTIME fails the node loudly. evidenceCheck rejects a
@@ -96,27 +103,11 @@ export const bugfixWorkflow: Workflow = {
       // Pre-PR gate: pr only COMPOSES the body/meta in-session; push + draft-PR
       // creation happen in runPrPostProcess after this gate is approved, so the
       // human decision genuinely precedes publication (and sees verify's evidence).
-      gate: { maxIterations: 5, onReject: "revise-self", amendTargets: ["fix"] },
-    },
-    // Terminal-adjacent, informational, read-only — same deps as pr so it runs
-    // in parallel with pr and adds no wall-clock time (see DECISIONS.md §
-    // digest-node). Synthesizes a bottom-up knowledge map of what was
-    // implemented (and why) from the already-written run artifacts, grounded
-    // in the diff/summaries/findings rather than the plan. No gate (same
-    // read-only pattern as review); sonnet, not opus — this is synthesis of
-    // already-written artifacts, not adversarial judgment.
-    // optional: true — informational-only; a produces-contract violation here
-    // (e.g. an untested new prompt file hitting the $DAGRUN_* probe wall) must
-    // degrade to 'skipped', never fail a run whose PR already shipped via pr.
-    // See DECISIONS.md § digest-node.
-    {
-      id: "digest",
-      dependsOn: ["fix", "verify"],
-      joinRule: "none-failed-min-one-success",
-      command: "/digest",
-      model: "sonnet",
-      produces: ["knowledge-map.md"],
-      optional: true,
+      gate: {
+        maxIterations: 5,
+        onReject: "revise-self",
+        amendTargets: ["fix"],
+      },
     },
   ],
 };

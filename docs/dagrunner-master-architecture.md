@@ -66,11 +66,6 @@ Phase 3 is three LOCAL siblings (/seed-data + ci-babysit + pr-triage) — one su
         |  violation — no human gate, no election. See §3d.
   pr (haiku)               -> opens the PR (git push / gh run outside the agent's own session — see §6)
                               [TERMINAL — run ends here]
-  digest (sonnet, dependsOn fix+verify, same as pr — runs in PARALLEL with pr, no added
-          wall-clock time) -> writes knowledge-map.md, a bottom-up synthesis of what was
-                              implemented (and why), grounded in the diff/summaries/findings —
-                              not the plan. Informational/read-only, no gate (same pattern as
-                              review). See §3f.
                               Each node may write reflections.md; the SessionEnd hook captures it to store
 ```
 
@@ -118,8 +113,6 @@ Reviewer selection (from diff-triage): correctness + test-adequacy always; api-s
                             outcomeGate-gated exactly as on the feature workflow
   pr        (haiku)       — reuses /pr command
                             [TERMINAL — run ends here]
-  digest    (sonnet)      — reuses /digest command, dependsOn fix+verify (same as pr) — runs
-                            in PARALLEL with pr. See §3f.
 ```
 
 **verify on the bugfix workflow (added by the verify-autonomy change — see DECISIONS.md §
@@ -521,73 +514,26 @@ see `DECISIONS.md § structural-upgrades-smoke-live-deferred`.
 
 ---
 
-## 3f. digest — bottom-up knowledge map (terminal-adjacent, parallel with `pr`)
+## 3f. digest — REMOVED (v0.1.65); folded into the companion gate conversation
 
-> **Reshaped (v0.1.50, decided with Eddie):** digest stays an optional, read-only, parallel-with-`pr`
-> node but writes only two sections — deferred findings/unresolved risks and open reviewer questions
-> (incl. whether the optional verify demonstration ran). The six-section bottom-up map described below
-> is historical. Artifact name (`knowledge-map.md`) and node shape are unchanged.
-
-**Why this exists:** an external task-intake tool (Glean, §2) gives Eddie a problem-first knowledge
-map at the _start_ of a run, before any planning happens. Nothing gave him the equivalent _after_
-implementation — grounded in what actually got built, not what was planned — before he reviews the
-PR diff or reads pr-triage's drafted replies on it. `digest` closes that gap.
-
-**Placement (both workflows):** `id: "digest"`, `command: "/digest"`, `dependsOn: ["fix", "verify"]`
-— the same dependency set as `pr`, so `digest` is scheduled in parallel with `pr` and adds no
-wall-clock time to the run. It is deliberately NOT sequential after `pr`, NOT bolted onto an
-existing node's command, and NOT a standalone on-demand command outside the DAG — see
-`DECISIONS.md § digest-node` for the placement options considered. This addition is config-only:
-`src/workflow/feature-workflow.ts`, `src/workflow/bugfix-workflow.ts`, and
-`payload/commands/digest.md` — no engine change, since `runPrPostProcess`
-(`src/runtime/run-engine.ts`) keys off `state.nodes["pr"]` by id, not by `pr` being positionally
-last, and there is no worktree-cleanup path keyed on run completion or on `pr` for `digest` to
-disturb (worktrees persist until PR close regardless).
-
-**Model tier:** `sonnet`, not `opus`. This is synthesis of already-written artifacts (guide, diff,
-`implement`/`fix` summaries, `review` findings, `verify`'s outcome) — not the adversarial,
-ungrounded-claim-hunting judgment `review`'s `opus`-tier reviewers perform. Matches
-`implement`/`fix`/`verify`'s cost-disciplined default.
-
-**No gate:** informational only, read-only, does not mutate the worktree — the same pattern as
-`review`. `produces: ["knowledge-map.md"]`, written to `digest`'s own artifact directory
-(`<runDir>/digest/knowledge-map.md`), following the existing produces/artifactsDir convention every
-other node uses.
-
-**Workflow-tolerant, like `/implement` and `/pr`:** `payload/commands/digest.md` checks
-`define/guide.md` first, then falls back to `reproduce/guide.md`, so one command file serves both
-workflows with no fork (matching §3c's "Command reuse" note).
-
-**Read-only diff access under a concurrency constraint unique to this node:** every other node in
-the pipeline that reads the diff (`review`, `verify`'s deferred-to-CI check) runs at a point where
-nothing else in the pipeline is concurrently mutating the worktree. `digest` is the first node that
-does NOT have that guarantee — it runs in parallel with `pr`, whose Step 4 is a backstop
-`git add -A && git commit` in the same worktree. `digest.md` therefore reads the diff via
-`git diff "$(git merge-base origin/main HEAD)"` (working tree against the merge-base, no `--cached`,
-no `git add` of its own) rather than `review.md`'s `git diff --cached origin/main` pattern — correct
-whether or not `pr`'s commit has landed yet, and never touches the index itself.
-
-**Content contract (six sections, in order, in `knowledge-map.md`):** Background (the
-subsystem/area touched, terrain a reader needs before the diff makes sense) → The problem/feature
-(INTENT restated from `guide.md`, not the implementation plan) → What was implemented (the diff,
-file:line-grounded, organized by concern/component, with design choices/tradeoffs pulled from
-`implement/summary.md`/`fix/summary.md`) → Review & fix (what `review/findings.json` flagged, what
-`fix/summary.md` addressed vs. explicitly deferred) → How it was verified (the acceptance test
-`verify` authored/reused, and a precise PASS-vs-`DEFERRED_TO_CI` read of `verify-report.json`'s
-`outcome` — `DEFERRED_TO_CI` is non-blocking but means acceptance confirmation itself was deferred
-to CI, not that it passed at that layer) → Open questions (what a PR reviewer is likely to ask).
-
-**Explicit scope cut — pr-triage is NOT wired to consume this artifact.** pr-triage's `RUN_ID`
-resolution falls back to a sanitized branch name when `DAGRUN_RUN_ID` is unset, so the run-id path
-between a dagrunner run and a pr-triage invocation on the same PR may not line up — reconciling that
-is a deliberate follow-up once `digest`'s content/format has proven useful standalone, not part of
-this change. No file under `payload/siblings/pr-triage` was touched.
-
-**Testing:** prompt-only content aside from the workflow config, matching §3e's precedent —
-`feature-workflow.test.ts`/`bugfix-workflow.test.ts` assert the node's shape (dependsOn, model,
-produces, no gate); `smoke:mock`'s generic `success` scenario (unrecognised node ids default to it,
-writing every declared `produces` file) exercises the wiring end-to-end with no scenario-map change
-needed. `smoke:live` was deferred — see `DECISIONS.md § digest-node`.
+`digest` (a parallel, no-gate, optional, read-only node, `dependsOn: ["fix", "verify"]`,
+`produces: ["knowledge-map.md"]`) is gone from both workflows — see `DECISIONS.md §
+digest-removed-folded-into-companion`. It existed to give Eddie a post-implementation synthesis
+before he reviewed the PR; by the time it was reshaped to its final two-section form (deferred
+findings/unresolved risks, open reviewer questions), both workflows already had
+`companionGates: true` (§3g) — the companion independently reads the exact same upstream artifacts
+(`review/findings.json`, `fix/summary.md`, `verify-report.json`) at the fix/pr gates and talks them
+through with Eddie live. `digest` wrote the same two sections to a file nothing downstream ever
+read. Its content didn't disappear — it is now an explicit, named step inside the companion's
+existing per-finding gate walkthrough (deployed skill references, outside this repo:
+`~/.claude/skills/bug-fix-companion/references/dagrunner-gates.md` and
+`~/.claude/skills/feature-work-companion/references/dagrunner-feature-gates.md`; this repo's
+bugfix-only mirror is `docs/bug-fix-companion-gate-addition.md`). `payload/commands/digest.md` was
+deleted; `digest`'s old placement rationale (sibling of `pr`, same `dependsOn`, zero added
+wall-clock time) and model-tier rationale (`sonnet`, not `opus` — synthesis, not adversarial
+judgment) are preserved only as history in `DECISIONS.md § digest-node` / `§
+digest-node-optional-follow-up` / `§ digest-shrunk`, not reproduced here (same convention as §8's
+removed `classify` node).
 
 ---
 
@@ -621,11 +567,40 @@ paused). Legacy `resume --approve/--reject` is refused on companion runs. Indepe
 authorizes merge, reviewer requests, marking ready, or backport labels; the draft PR is pushed/created
 only after the pre-PR gate is approved (`runPrPostProcess`).
 
+**Gate-reading now also covers digest's old job (v0.1.65 — `DECISIONS.md §
+digest-removed-folded-into-companion`).** The now-removed `digest` node (§3f) read
+`review/findings.json` and `fix/summary.md` to write two sections — deferred findings/unresolved
+risks, and open questions a PR reviewer would likely ask — to a file nothing downstream consumed.
+The companion already reads those identical artifacts live, at the fix and pr gates, in its existing
+per-finding walkthrough (one finding at a time, wait for understanding). The deployed skill
+references (`~/.claude/skills/bug-fix-companion/references/dagrunner-gates.md` and
+`~/.claude/skills/feature-work-companion/references/dagrunner-feature-gates.md`, both outside this
+repo) now make this explicit rather than leaving it implicit: at the `fix` gate, the companion names
+which findings `fix` explicitly deferred (dimension/severity/reason) alongside the findings it
+addressed; at the `pr` gate, alongside `verify-report.json`/`demo.md`, it surfaces the open questions
+a reviewer would likely ask (design tradeoffs, scope boundaries the guide drew) and one line on
+whether `verify` ran and what that means (`PROVISIONED` is a hand-off, not a verdict — see "Optional
+verify" below). This repo's bugfix-only mirror of that doc is `docs/bug-fix-companion-gate-addition.md`.
+
+**Lesson promotion — `dagrun reflect` gets its first real caller (v0.1.65, same change).** `dagrun
+reflect --source <node> --body "<text>" [--run-id <id>]` (§8b) existed as dead code — no file under
+`payload/` ever called it. The companion is not a node session, so it never receives the
+dagrunner-seeded SessionEnd hook or `$DAGRUN_ARTIFACTS`/`$DAGRUN_NODE_ID` that hook depends on; a bare
+CLI call needs none of that wiring, the same as `gate show`/`gate decide`/`status` it already runs.
+When something surfacing in a gate conversation — a deferred finding, a recurring gotcha, a design
+tradeoff — looks durably useful beyond this one run, the companion names it to Eddie and proposes
+capturing it; only on his explicit go-ahead does it run `dagrun reflect --source companion --body
+"<the lesson>" --run-id <run-id>`. This is deliberately NOT automatic and NOT every finding — most
+gate findings stay local to the run, same as always; this is for the rare one worth keeping. No new
+store, hook, or CLI flag was added — `reflect-append.ts`'s fail-soft append (§8b) and `appendReflection`
+are unchanged; only the doc wiring that routes a real caller to the existing command changed.
+
 **Optional verify.** The `fix` gate has `decidesNode: "verify"`: approving requires an explicit
 `--run-next yes|no` (agent advice lives in `fix/summary.md` § _Verify recommendation_). The decision is
 persisted as `fix/next-node-decision.json`; `verify`'s `when` reads it (missing/garbled → loud error).
-`pr`/`digest` use `joinRule: none-failed-min-one-success` so a _skipped_ verify does not block them
-while a _failed_ one still does.
+`pr` uses `joinRule: none-failed-min-one-success` (on its own `dependsOn: ["fix", "verify"]`, unrelated
+to the now-removed `digest`'s former sibling join rule — see §3f) so a _skipped_ verify does not
+block it while a _failed_ one still does.
 
 **verify is provision-and-hand-off, not self-test-and-teardown (v0.1.57).** verify builds the
 candidate from the worktree, deploys it on a local loopback-only disposable target (docker
@@ -910,20 +885,28 @@ Each node optionally writes tips/gotchas to `$DAGRUN_ARTIFACTS/reflections.md`. 
 
 - **Node contract:** nodes write `reflections.md` if they have useful tips; absence is fine. `fix` writes `reflections.md` whenever fixes were applied (fallback: "No non-obvious discoveries."). No node is required to write it for test coverage — the hook mechanism is proven deterministically (see Testing §14 and DECISIONS §deflake-reflection-capture-test).
 - **Entry shape:** `{ ts, source, run_id?, body }` — that's it. There is no `kind` field. An earlier design reserved `kind` as a routing hint (`camunda-knowledge` | `dagrunner-harness`) settable via a manual `dagrun reflect --kind ...` flag, but a reflection-log audit found zero of 105 entries across 53 days carried it — 100% of real capture comes via the SessionEnd hook, which never had a kind to infer (its payload is `{session_id, transcript_path, cwd, hook_event_name, reason}`, no semantic signal), and the manual `--kind`-requiring CLI path was never actually invoked by any prompt (`grep`-verified: no file under `payload/` references `dagrun reflect` at all). The field was removed entirely — see DECISIONS.md § reflect-drop-kind.
-- **Manual/sibling append:** `dagrun reflect --source <node> --body "<text>" [--run-id <id>]` exists as a CLI entry point, but nothing in `payload/` currently calls it — capture is 100% hook-driven in practice today.
+- **Manual/sibling append:** `dagrun reflect --source <node> --body "<text>" [--run-id <id>]` exists as
+  a CLI entry point. No file under `payload/` calls it — node prompts remain 100% hook-driven — but it
+  is no longer dead code: since the digest-removal change (`DECISIONS.md §
+digest-removed-folded-into-companion`), the companion gate conversation is its first real caller.
+  The companion session (`claude --resume`, spawned in Eddie's own project cwd with his own settings)
+  never gets the dagrunner-seeded SessionEnd hook or `$DAGRUN_*` env vars this hook depends on, so a
+  bare CLI call is the only mechanism available to it — the same way it already runs `gate show`/`gate
+decide`/`status`. This is deliberately NOT automatic: the companion only runs it on a rare, durably
+  useful lesson and Eddie's explicit go-ahead (see §3g's lesson-promotion step), never on every gate
+  finding.
 - **Durability invariant:** `DAGRUN_STORE_DIR` is injected explicitly by the launcher (never derived via `../../` from the run dir). The store is outside the run dir and survives `dagrun cleanup`.
 - **Harvest:** periodic human + architect process, with no runtime `kind` to route by — the harvester reads each entry's `source`/`body` and makes the camunda-knowledge-vs-dagrunner-harness call itself at harvest time. This is how routing has actually worked in practice (every harvest to date), not a placeholder for a mechanism that was never built.
 - **Why hook-driven:** prompt-driven + fail-soft + bare-`dagrun` = three layers of "maybe" over an unowned PATH (the prior mechanism failed silently — see DECISIONS.md §hook-driven-reflection-capture). The SessionEnd hook is code we own, on a signal that already fires.
 
-The old `reflect` + `apply-reflection` nodes are removed. `pr` is terminal; `digest` (§3f) is
-terminal-adjacent — it runs in parallel with `pr` off the same two dependencies and nothing depends
-on it.
+The old `reflect` + `apply-reflection` nodes are removed. `pr` is terminal; the former `digest`
+node, once terminal-adjacent in parallel with `pr`, is itself removed — see §3f.
 
 ---
 
 ## 9. Cost & model tiering
 
-Per-node tiering in the validated workflow-def (load-time model-string validation). expand unpinned; review diff-triage haiku; reviewers mixed (correctness/distributed-systems/performance unpinned; test-adequacy/api-stability/migration-safety sonnet); adversarial verifier strong tier; fix sonnet; verify sonnet; pr haiku; digest sonnet (§3f — synthesis of already-written artifacts, not adversarial judgment, so it doesn't need opus). Two-tier budget: per-run `--max-budget-usd` + per-invocation caps. Cost capture: `--output-format json` total_cost_usd; `dagrun status` shows total vs cap.
+Per-node tiering in the validated workflow-def (load-time model-string validation). expand unpinned; review diff-triage haiku; reviewers mixed (correctness/distributed-systems/performance unpinned; test-adequacy/api-stability/migration-safety sonnet); adversarial verifier strong tier; fix sonnet; verify sonnet; pr haiku. Two-tier budget: per-run `--max-budget-usd` + per-invocation caps. Cost capture: `--output-format json` total_cost_usd; `dagrun status` shows total vs cap.
 
 **Effort tuning (orthogonal to model tier):** `Node.effort?: EffortLevel` (`"low" | "medium" | "high" | "xhigh" | "max"`, `src/core/types.ts`) passes through to the SDK's `Options.effort`, validated at load time exactly like `model` (`workflow.ts`, same "typed at load" pattern — a bad value is a load error, never a silent runtime default). Omitted = the SDK's own model-specific default (on Sonnet 5 this is `"high"` with adaptive thinking on, per the SDK's `sdk.d.ts`). `implement` and `fix` in both `feature-workflow.ts` and `bugfix-workflow.ts` pin `effort: "medium"` — real burn-instrumentation evidence (run `54177-1`) showed these two `claude-sonnet-5` nodes as the run's dominant cost (`implement` $38.37, `fix` $5.82), and neither had ever deliberately set `thinking`/`effort`; per Sonnet 5's own migration documentation, `"medium"` is comparable in intelligence to the prior generation's `"high"`, making it a documented, low-risk step down rather than a guess. `verify`/`review`/`define`/`reproduce`/`pr` are deliberately excluded from this first cut — see DECISIONS.md § effort-tuning-implement-fix for the full rationale and why full `thinking: disabled` was rejected. The per-node option mapping (model/allowedTools/maxBudget/outputSchema/effort) lives in the pure, unit-tested `applyNodeOptions` (`sdk-runner.ts`), extracted alongside `buildBaseQueryOptions` so it's testable without mocking the SDK's `query()`.
 

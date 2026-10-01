@@ -263,7 +263,6 @@ const R = await newRun();
     "fix",
     "verify",
     "pr",
-    "digest",
   ]);
   say(
     "2 passed: define gate pauses with a companion brief, exactly like bugfix's reproduce gate",
@@ -383,7 +382,7 @@ const R = await newRun();
 
 // ===========================================================================
 // 7. amend-at-pr-targets-fix: revise fix from the pre-PR gate, invalidate
-//    verify/pr/digest, no publication — mirrors bugfix's smoke-gates.ts case 8.
+//    verify/pr, no publication — mirrors bugfix's smoke-gates.ts case 8.
 // ===========================================================================
 {
   const A = await newRun();
@@ -413,7 +412,7 @@ const R = await newRun();
     "awaiting-gate",
     "fix revised and paused again",
   );
-  for (const n of ["verify", "pr", "digest"]) {
+  for (const n of ["verify", "pr"]) {
     assert.notEqual(
       s.nodes[n]?.status,
       "done",
@@ -426,11 +425,7 @@ const R = await newRun();
     "stale pr evidence archived, not reused",
   );
   const fixHist = s.nodes["fix"]!.gateHistory.at(-1)!;
-  assert.deepEqual([...(fixHist.invalidated ?? [])].sort(), [
-    "digest",
-    "pr",
-    "verify",
-  ]);
+  assert.deepEqual([...(fixHist.invalidated ?? [])].sort(), ["pr", "verify"]);
   // pr was never approved (amended instead), so runPrPostProcess never ran —
   // no pr-error.txt (same real-teeth evidence as step 4/5: a real invocation
   // on the remote-less toy repo fails loud and writes one).
@@ -451,7 +446,7 @@ const R = await newRun();
     "stale pr-gate approval refused after amend",
   );
   say(
-    '7 passed: amend at the pre-PR gate re-runs fix, invalidates + archives verify/pr/digest, no publication (featureWorkflow pr.gate.amendTargets: ["fix"])',
+    '7 passed: amend at the pre-PR gate re-runs fix, invalidates + archives verify/pr, no publication (featureWorkflow pr.gate.amendTargets: ["fix"])',
   );
 }
 

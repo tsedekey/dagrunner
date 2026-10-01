@@ -372,20 +372,16 @@ test("amend targets: gate itself + declared gated ancestors only", () => {
   );
 });
 
-test("amending fix from the pre-PR gate invalidates verify, pr and digest", () => {
+test("amending fix from the pre-PR gate invalidates verify and pr", () => {
   const p = planAmend(bugfixWorkflow, "pr", "fix");
   assert.equal(p.revise, "fix");
-  assert.deepEqual([...p.reset].sort(), ["digest", "pr", "verify"]);
+  assert.deepEqual([...p.reset].sort(), ["pr", "verify"]);
   assert.deepEqual(planAmend(bugfixWorkflow, "pr", "pr"), {
     revise: "pr",
     reset: [],
   });
   assert.ok(downstreamOf(bugfixWorkflow, "reproduce").includes("pr"));
-  assert.deepEqual(approveContinuesTo(bugfixWorkflow, "fix"), [
-    "verify",
-    "pr",
-    "digest",
-  ]);
+  assert.deepEqual(approveContinuesTo(bugfixWorkflow, "fix"), ["verify", "pr"]);
 });
 
 // --- featureWorkflow parity (DECISIONS.md § feature-companion-gates-parity) ---
@@ -399,10 +395,10 @@ test("featureWorkflow: amend targets: gate itself + declared gated ancestors onl
   assert.deepEqual(amendTargets(featureWorkflow, "define"), ["define"]);
 });
 
-test("featureWorkflow: amending fix from the pre-PR gate invalidates verify, pr and digest", () => {
+test("featureWorkflow: amending fix from the pre-PR gate invalidates verify and pr", () => {
   const p = planAmend(featureWorkflow, "pr", "fix");
   assert.equal(p.revise, "fix");
-  assert.deepEqual([...p.reset].sort(), ["digest", "pr", "verify"]);
+  assert.deepEqual([...p.reset].sort(), ["pr", "verify"]);
   assert.deepEqual(planAmend(featureWorkflow, "pr", "pr"), {
     revise: "pr",
     reset: [],
@@ -411,7 +407,6 @@ test("featureWorkflow: amending fix from the pre-PR gate invalidates verify, pr 
   assert.deepEqual(approveContinuesTo(featureWorkflow, "fix"), [
     "verify",
     "pr",
-    "digest",
   ]);
 });
 

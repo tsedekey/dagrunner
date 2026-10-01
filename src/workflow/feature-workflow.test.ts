@@ -431,43 +431,12 @@ test("featureWorkflow: pr uses haiku model and depends on both fix and verify", 
   assert.equal(node.model, "haiku");
 });
 
-test("featureWorkflow: pr and digest tolerate a skipped verify (joinRule) but a failed verify still blocks — parity with bugfix (DECISIONS.md § feature-companion-gates-parity)", () => {
-  for (const id of ["pr", "digest"]) {
-    const n = featureWorkflow.nodes.find((x) => x.id === id);
-    assert.equal(n?.joinRule, "none-failed-min-one-success", id);
-  }
+test("featureWorkflow: pr tolerates a skipped verify (joinRule) but a failed verify still blocks — parity with bugfix (DECISIONS.md § feature-companion-gates-parity)", () => {
+  const n = featureWorkflow.nodes.find((x) => x.id === "pr");
+  assert.equal(n?.joinRule, "none-failed-min-one-success");
 });
 
-// ---------------------------------------------------------------------------
-// digest node — terminal-adjacent, parallel with pr (see DECISIONS.md
-// § digest-node)
-// ---------------------------------------------------------------------------
-
-test("featureWorkflow: digest depends on both fix and verify (same deps as pr, runs in parallel)", () => {
-  const node = featureWorkflow.nodes.find((n) => n.id === "digest");
-  assert.ok(node !== undefined, "digest node must exist");
-  assert.ok(node.dependsOn?.includes("fix"), "digest must depend on fix");
-  assert.ok(node.dependsOn?.includes("verify"), "digest must depend on verify");
-});
-
-test("featureWorkflow: digest uses sonnet, produces knowledge-map.md, and has no gate", () => {
-  const node = featureWorkflow.nodes.find((n) => n.id === "digest");
-  assert.ok(node !== undefined);
-  assert.equal(node.model, "sonnet");
-  assert.deepEqual(node.produces, ["knowledge-map.md"]);
-  assert.equal(
-    node.gate,
-    undefined,
-    "digest must have no human gate — informational/read-only, same pattern as review",
-  );
-});
-
-test("featureWorkflow: digest is optional — a produces-contract failure must degrade to skipped, never fail a run whose pr already shipped", () => {
-  const node = featureWorkflow.nodes.find((n) => n.id === "digest");
-  assert.ok(node !== undefined);
-  assert.equal(
-    node.optional,
-    true,
-    "digest must be optional — unlike verify (deliberately required/blocking), digest is informational-only and nothing downstream depends on it",
-  );
-});
+// digest node removed (DECISIONS.md § digest-removed-folded-into-companion) —
+// its two-section content (deferred findings/risks, open reviewer questions)
+// is now folded into the companion's gate-reading step at the fix/pr gates;
+// the companion gate conversation it used to duplicate now covers it live.

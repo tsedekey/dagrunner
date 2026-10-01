@@ -942,3 +942,71 @@ this as "pending follow-up" — closing the gap on the engine side (v0.1.64). `f
   hardcoding-audit bullet above); three unrelated files were already modified in the working tree at
   the start of this build — `docs/bug-fix-companion-gate-addition.md`, `payload/commands/implement.md`,
   `payload/commands/pr.md` — left untouched and uncommitted by this build; not staged, not reverted.
+
+- digest-removed-folded-into-companion (2026-10-01) · **deleted the `digest` node entirely from both
+  `feature-workflow.ts` and `bugfix-workflow.ts`, deleted `payload/commands/digest.md`, removed every
+  digest-shape test (`feature-workflow.test.ts`, `bugfix-workflow.test.ts`) and every digest reference
+  in `gate.test.ts`/`test/smoke/smoke-gates.ts`/`test/smoke/smoke-gates-feature.ts`; folded digest's old
+  two-section content (deferred findings/unresolved risks; open reviewer questions, incl. whether
+  `verify` ran) into the deployed companion skill references
+  (`~/.claude/skills/bug-fix-companion/references/dagrunner-gates.md`,
+  `~/.claude/skills/feature-work-companion/references/dagrunner-feature-gates.md`, both outside this
+  repo — edited directly; this repo's bugfix-only mirror is `docs/bug-fix-companion-gate-addition.md`);
+  added an explicit lesson-promotion step to the same three docs, wiring the companion to the
+  previously dead `dagrun reflect --source <node> --body "<text>" [--run-id <id>]` CLI
+  (`src/cli/reflect-append.ts` → `appendFileSync` to `<homeDir>/store/reflection-log.jsonl`)** · agreed
+  with Eddie in conversation before dispatch; by the time `digest` was last reshaped (`§ digest-shrunk`)
+  both workflows already had `companionGates: true` with pre-PR gate parity (commit `7c8057a`) — the
+  companion independently reads the exact same upstream artifacts (`review/findings.json`,
+  `fix/summary.md`, `verify-report.json`) at the fix/pr gates and talks them through with Eddie live,
+  so `digest` had become a parallel, no-gate node writing the same two sections to a file nothing
+  downstream ever read · {decision: where the two folded sections land in the companion's existing
+  gate-reading flow, options: [a disconnected new section bolted onto the end of the gate doc, fold
+  deferred-findings into the existing fix-gate bullet's "review findings and their handling" (where
+  `review/findings.json`/`fix/summary.md` are already the named sources) and fold open-questions +
+  the one-line verify-ran note into the existing pr-gate bullet (which already reads
+  `verify-report.json`/`demo.md`)], choice: fold into the existing per-finding/per-gate bullets,
+  rationale: digest's content is the one-at-a-time gate walkthrough's own natural continuation, not a
+  separate concern — and timing requires it: at the fix gate `verify` hasn't run yet, so the "did
+  verify run" line can only land at the pr-gate bullet}. {decision: `pr`'s `joinRule:
+  none-failed-min-one-success`, keep or revert now that `digest`'s matching sibling join rule is gone,
+  options: [revert pr to the engine's default join rule now that digest no longer shares its deps,
+  keep it unchanged], choice: keep unchanged, rationale: verified from `dag.ts`'s `computeReadyNodes`
+  and the inline comment already on `pr` in both workflows ("verify may be legitimately skipped — a
+  skipped verify must not block pr") that the joinRule exists because `pr` itself depends on
+  `["fix","verify"]` and `verify` is a required (non-optional) node that can still be legitimately
+  `skipped` by its own `when` predicate — the engine's DEFAULT join rule blocks on any non-optional
+  dep that isn't `done`, which would wrongly block `pr` behind a skipped verify; `digest` only carried
+  the identical joinRule because it happened to share the identical `dependsOn`, not because it was
+  the reason `pr` needed one. `git show a0767a3` confirms both `pr`'s joinRule and `digest`'s joinRule
+  were introduced in the same commit as optional/skippable `verify`, not introduced by `digest`'s own
+  addition (which was a separate, later commit). No change made to `pr`}. {decision: orphaned `digest`
+  entries in already-in-flight run state (e.g. a run started before this change resumed after it),
+  investigate before shipping vs. ignore, options: [investigate the resume path, ship without
+  checking], choice: investigated — `runDag`'s scheduling loop (`computeReadyNodes`,
+  the `when`-skip loop) iterates `workflow.nodes` only, never `state.nodes`, so a `state.nodes.digest`
+  left over from before this change is never read for scheduling; the loop's own "mark any remaining
+  pending nodes as skipped" cleanup pass iterates `Object.entries(run.nodes)` (i.e. `state.nodes`) and
+  will fail-soft-mark an orphaned `pending` digest entry `skipped` once the run otherwise has no ready
+  work left, exactly as it already does for any blocked-by-skipped-dep chain; `status --json` and the
+  UI snapshot read `state.nodes` directly (no `workflow.nodes.find` dereference that could throw on a
+  state-only id). Conclusion: resuming a pre-change run with an orphaned `digest: pending` is benign —
+  it self-heals to `skipped` and does not block the run reaching `done`/`failed`. Not covered by a new
+  unit test (no regression found to guard against); logged here as the investigation record instead.
+  Run `59478-2` itself was not touched or resumed to verify this — out of scope per the brief}.
+  {decision: `--kind` /"never invoked" stale-comment audit per the brief's ask, options: [treat
+  `reflect-append.ts`'s own file-header "single deliberate exception" framing as stale (fail-soft
+  description, still accurate — not touched), treat master doc §8b's "nothing in `payload/` currently
+  calls it — capture is 100% hook-driven in practice today" as stale (now false: the companion is a
+  real caller, even though it's not a `payload/` file) — note §8b's OTHER sentence, about the
+  `--kind`-requiring path never being invoked "by any prompt" / "no file under `payload/` references
+  `dagrun reflect`", stays literally true and was left alone, since the new caller is a deployed skill
+  outside `payload/`, not a prompt file inside it], choice: fixed only the one sentence that actually
+  went stale, left the historically-accurate one alone, rationale: CLAUDE.md's "comments describing
+  reflect-append.ts's own file header framing are fine to keep if still accurate" — precision over a
+  blanket rewrite}. Verify-baseline: typecheck clean, 67 targeted unit tests green
+  (`bugfix-workflow.test.ts` + `feature-workflow.test.ts` + `gate.test.ts`), `smoke:mock` (smoke-mock +
+  smoke-gates + smoke-gates-feature + smoke-ui) all green. package.json bumped 0.1.64 → 0.1.65.
+  Pre-existing unrelated dirty files `payload/commands/implement.md`/`payload/commands/pr.md`
+  (deliverables.txt staging discipline, no digest/companion content) left untouched and uncommitted,
+  per the brief's scope — not part of this change.

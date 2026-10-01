@@ -86,7 +86,7 @@ function newHome(): { home: string; plan: string } {
 // The mock executor writes nothing into the worktree; a real fix does. Model that (an UNTRACKED
 // file, which is what changes.diff must render as a new-file diff) around the mock, per fix run.
 const factory = (over: Record<string, string> = {}) => () => {
-  const inner = createMockExecutor({ reproduce: "gate-pause", implement: "success", review: "success", fix: "gate-pause", verify: "success", pr: "gate-pause", digest: "success", ...over } as never);
+  const inner = createMockExecutor({ reproduce: "gate-pause", implement: "success", review: "success", fix: "gate-pause", verify: "success", pr: "gate-pause", ...over } as never);
   const wrapped: typeof inner = async (id, node, ctx) => {
     if (id === "fix") writeFileSync(join(ctx.worktreePath, "mock-fix-change.txt"), "mock fix change\n");
     return inner(id, node, ctx);
@@ -153,7 +153,7 @@ const R = await newRun();
   assert.equal(b.companion.resume?.cwd, CFG);
   assert.match(b.companion.resumeHint ?? "", /^cd '.+' && CLAUDE_CONFIG_DIR='.*' claude --resume 1111.* 'DagRunner run .* gate show /s);
   assert.equal(b.pendingDecision.decidesNode, undefined);
-  assert.deepEqual(b.pendingDecision.approveContinuesTo, ["implement", "review", "fix", "verify", "pr", "digest"]);
+  assert.deepEqual(b.pendingDecision.approveContinuesTo, ["implement", "review", "fix", "verify", "pr"]);
   assert.ok(existsSync(join(R.runDir, "reproduce", "gate-context.md")));
   assert.equal(s.companion?.configDir, CFG, "config dir recorded at handoff");
   // From a bare terminal (no CLAUDE_CONFIG_DIR) the recorded dir still finds the session.
@@ -274,7 +274,7 @@ const R = await newRun();
   say("7 passed: fix gate demands an explicit run/skip verify choice; skip → verify skipped → pause at pre-PR gate");
 }
 
-// 8. pre-PR amend: revise fix, invalidate verify/pr/digest, no publication
+// 8. pre-PR amend: revise fix, invalidate verify/pr, no publication
 {
   const b = briefOf(R.runDir, "pr");
   assert.deepEqual(b.pendingDecision.amendTargets, ["pr", "fix"]);
@@ -287,16 +287,16 @@ const R = await newRun();
   const s = stateOf(R.runDir);
   assert.equal(s.nodes["fix"]?.status, "awaiting-gate", "fix revised and paused again");
   assert.equal(readFileSync(join(R.runDir, "fix", `feedback-${fixIterBefore + 1}.md`), "utf8"), "handle the null case too");
-  for (const n of ["verify", "pr", "digest"]) assert.notEqual(s.nodes[n]?.status, "done", `${n} must not keep stale results`);
+  for (const n of ["verify", "pr"]) assert.notEqual(s.nodes[n]?.status, "done", `${n} must not keep stale results`);
   assert.equal(s.nodes["pr"]?.status, "pending");
   assert.ok(existsSync(join(R.runDir, "pr-attempts", "attempt-1")), "stale pr evidence archived, not reused");
   assert.equal(existsSync(join(R.runDir, "fix", "next-node-decision.json")), false, "old verify decision cleared");
   assert.ok(!existsSync(join(R.runDir, "pr", "pr-meta.json")) || !JSON.parse(readFileSync(join(R.runDir, "pr", "pr-meta.json"), "utf8")).prUrl, "no PR was published");
   const fixHist = s.nodes["fix"]!.gateHistory.at(-1)!;
-  assert.deepEqual([...(fixHist.invalidated ?? [])].sort(), ["digest", "pr", "verify"]);
+  assert.deepEqual([...(fixHist.invalidated ?? [])].sort(), ["pr", "verify"]);
   // the old pr-gate revision is now stale
   assert.equal(await decide(R, b, { action: "approve" }), 1, "stale pr-gate approval refused after amend");
-  say("8 passed: amend at pre-PR gate re-runs fix, invalidates + archives verify/pr/digest, clears the old verify decision, no publication");
+  say("8 passed: amend at pre-PR gate re-runs fix, invalidates + archives verify/pr, clears the old verify decision, no publication");
 }
 
 // 9. approve fix again WITH verify → verify runs and passes its evidence contract → pr gate
@@ -398,7 +398,7 @@ const R = await newRun();
   await decide(V, b, { confirm: await propose(V, b, {}) });
   const fb = briefOf(V.runDir, "fix");
   const id = await propose(V, fb, { runNext: true });
-  const base = createMockExecutor({ reproduce: "gate-pause", implement: "success", review: "success", fix: "gate-pause", verify: "success", pr: "gate-pause", digest: "success" } as never);
+  const base = createMockExecutor({ reproduce: "gate-pause", implement: "success", review: "success", fix: "gate-pause", verify: "success", pr: "gate-pause" } as never);
   const lying = (() => async (nodeId: string, node: never, ctx: { artifactsDir: string }) => {
     const r = await (base as never as (a: string, b: never, c: unknown) => Promise<unknown>)(nodeId, node, ctx);
     if (nodeId === "verify") {
@@ -422,7 +422,7 @@ const R = await newRun();
 /** Executor whose verify PROVISIONS (docker-shaped report) instead of the mock's source-only report. */
 function provisioning(runId: string) {
   return () => {
-    const base = createMockExecutor({ reproduce: "gate-pause", implement: "success", review: "success", fix: "gate-pause", verify: "success", pr: "gate-pause", digest: "success" } as never);
+    const base = createMockExecutor({ reproduce: "gate-pause", implement: "success", review: "success", fix: "gate-pause", verify: "success", pr: "gate-pause" } as never);
     return (async (nodeId: string, node: never, ctx: { artifactsDir: string }) => {
       const r = await (base as never as (a: string, b: never, c: unknown) => Promise<unknown>)(nodeId, node, ctx);
       if (nodeId === "verify") {
@@ -567,7 +567,7 @@ async function toPrGate(over: { runNext: boolean } = { runNext: true }) {
     DAGRUNNER_HOME: home,
     CLAUDE_CONFIG_DIR: CFG,
     ANTHROPIC_API_KEY: "smoke-dummy",
-    DAGRUN_MOCK_SCENARIOS: JSON.stringify({ reproduce: "gate-pause", implement: "success", review: "success", fix: "gate-pause", verify: "success", pr: "gate-pause", digest: "success" }),
+    DAGRUN_MOCK_SCENARIOS: JSON.stringify({ reproduce: "gate-pause", implement: "success", review: "success", fix: "gate-pause", verify: "success", pr: "gate-pause" }),
   };
   delete env["CLAUDE_CODE_SESSION_ID"];
   const CLI = join(__dirname, "..", "..", "src", "cli", "cli.ts");

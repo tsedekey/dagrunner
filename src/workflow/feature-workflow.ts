@@ -200,26 +200,5 @@ export const featureWorkflow: Workflow = {
         amendTargets: ["fix"],
       },
     },
-    // Terminal-adjacent, informational, read-only — same deps as pr so it runs
-    // in parallel with pr and adds no wall-clock time (see DECISIONS.md §
-    // digest-node). Synthesizes a bottom-up knowledge map of what was
-    // implemented (and why) from the already-written run artifacts, grounded
-    // in the diff/summaries/findings rather than the plan — so Eddie has full
-    // context before reviewing the PR or reading pr-triage's drafted replies.
-    // No gate (same read-only pattern as review); sonnet, not opus — this is
-    // synthesis of already-written artifacts, not adversarial judgment.
-    // optional: true — informational-only; a produces-contract violation here
-    // (e.g. an untested new prompt file hitting the $DAGRUN_* probe wall) must
-    // degrade to 'skipped', never fail a run whose PR already shipped via pr.
-    // See DECISIONS.md § digest-node.
-    {
-      id: "digest",
-      dependsOn: ["fix", "verify"],
-      joinRule: "none-failed-min-one-success",
-      command: "/digest",
-      model: "sonnet",
-      produces: ["knowledge-map.md"],
-      optional: true,
-    },
   ],
 };
