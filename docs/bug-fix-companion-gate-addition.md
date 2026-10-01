@@ -1,29 +1,42 @@
 # Proposed addition to `bug-fix-companion` — DagRunner companion gates
 
-**Status: proposal, not applied.** Written in the dagrunner repo (v0.1.51) for Eddie to review. The
-installed skill (`~/.claude/skills/bug-fix-companion/`) has NOT been modified. Suggested placement: replace
-the "verify runner compatibility / do not invent flags" hedging in `references/handoffs.md` (lane D) and
-`references/execution-gates.md`, or add this as a new `references/dagrunner-gates.md` linked from both.
+**Status: this content is already applied to `~/.claude/skills/bug-fix-companion/references/dagrunner-gates.md`
+as of dagrunner v0.1.52.** This copy (v0.1.63) adds one more increment, not yet applied: the companion
+becomes the run's _driver_, not just its gate reviewer — it starts the run itself with `--detach`, polls
+`dagrun status --json` instead of returning to a terminal, and never hands the `dagrun` CLI to Eddie in the
+normal path. Everything below (Handoff, Deciding step 4, "Running in the background") reflects that; the
+rest of the previously-applied content (gates, verify, recovery) is unchanged and already live.
 
-The commands below exist in dagrunner v0.1.51 and are exercised by `test/smoke/smoke-gates.ts` (mock
-executor). Real `claude --resume` re-entry and the runtime tools (docker / C8 Run / c8ctl) are NOT yet
-demonstrated — keep them labelled unverified until they are.
+The commands below exist in dagrunner v0.1.63 and are exercised by `test/smoke/smoke-gates.ts` and
+`test/smoke/smoke-ui.ts` (mock executor). Real `claude --resume` re-entry and the runtime tools (docker /
+C8 Run / c8ctl) are NOT yet demonstrated — keep them labelled unverified until they are. A real end-to-end
+run driven this way (this companion starting and carrying a run through to `pr`/`digest` without Eddie
+touching a terminal) has also not yet been demonstrated — do this once before trimming any human-facing
+command (`gate open`, bare `resume`, `--approve`/`--reject`); none of that trimming is proposed here.
 
 ---
 
 ## Handoff (lane D)
 
-Start the run so its gates return to THIS conversation:
+Start the run so its gates return to THIS conversation, detached so the terminal is never blocked and you
+stay free to keep talking to Eddie:
 
 ```
-dagrun start bugfix --plan <approved fix-plan file> --companion-session "$CLAUDE_CODE_SESSION_ID"
+dagrun start bugfix --plan <approved fix-plan file> --companion-session "$CLAUDE_CODE_SESSION_ID" --detach
 ```
 
 - `$CLAUDE_CODE_SESSION_ID` is this conversation's own id. Do not paste another session's id.
 - `--no-companion` opts into the old fresh-session gates; use it only if Eddie asks.
-- Launching remains a separately authorized action (approval of the plan document is not launch approval).
-- Run it in the background; the run stops by itself at the first gate. Report the run id, the gate it
-  paused at, and that nothing has advanced past it.
+- Launching remains a separately authorized action (approval of the plan document is not launch authorization).
+- The command prints `dagrun: detached — run <id> pid <pid> log <path>` and returns immediately — nothing
+  has paused yet at that point, it has only just started. Poll `dagrun status <run-id> --json` (see
+  [Running in the background](#running-in-the-background---detach)) until it reports `awaiting-gate`,
+  `failed` or `done`; do not tell Eddie the run has paused until `status` says so.
+- Mention once, after the first status poll succeeds, that he can watch it live at `dagrun ui --open`
+  (starts a local read-only viewer at `http://127.0.0.1:4740/?run=<run-id>`, decisions still happen only
+  here) — do not start the server yourself unless he asks; it is his choice, not a default.
+- You are now the run's driver: this conversation starts it, polls it, and carries every gate decision
+  through to `--confirm`. Eddie no longer runs `dagrun` commands himself unless he asks to.
 
 ## At a gate
 
@@ -60,8 +73,9 @@ dagrun start bugfix --plan <approved fix-plan file> --companion-session "$CLAUDE
    a harmless no-op. If it reports `stale-revision`, the evidence changed: re-run `show`, re-explain,
    re-propose — old understanding and old approval do not carry over.
 4. Never call `decide --confirm` in the same step as the proposal, and never on ambiguous wording.
-   `--confirm` runs the next phase(s) in the foreground until the next pause: run it in the background
-   and report the new pause.
+   Confirm with `--detach` (`dagrun gate decide … --confirm <id> --detach`, see
+   [Running in the background](#running-in-the-background---detach)) so the next phase(s) run without
+   blocking this conversation; poll `dagrun status <run> --json` and report the new pause once it lands.
 5. Persist in the case checkpoint: gate, revision, the exact decision and scope, decision id, and the
    resume point the run printed. Reference the run's own artifacts rather than copying them.
 
