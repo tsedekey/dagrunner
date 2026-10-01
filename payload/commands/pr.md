@@ -147,12 +147,44 @@ cd "$DAGRUN_WORKTREE"
 git status --short
 ```
 
-If there are uncommitted changes, commit them using the same type prefix as the PR title:
+If there are uncommitted changes, commit **only the declared deliverables** — never
+`git add -A` / `git add .`. The worktree may hold unrelated dirty files (pre-existing
+`package.json`/lockfile drift, `node_modules` symlinks created by a build) that must not ship
+under the fix's authorship.
+
+Build the expected-path list from the upstream artifacts (`implement/deliverables.txt`, plus
+`fix/deliverables.txt` if the fix node wrote one):
 
 ```bash
-git add -A
+cd "$DAGRUN_WORKTREE"
+cat "$DAGRUN_RUN_DIR/implement/deliverables.txt" "$DAGRUN_RUN_DIR/fix/deliverables.txt" 2>/dev/null \
+  | grep -v '^$' | sort -u > "$DAGRUN_ARTIFACTS/deliverables.txt"
+```
+
+**If `deliverables.txt` is empty** (implement's step was skipped or predates this change): do not
+fall back to `-A`. Run `git status --short`, then state in your own reasoning, path by path, what
+you are about to add and why it belongs to the plan's change surface (`plan/plan.md`); exclude
+anything else. Write only those paths, one per line, to `$DAGRUN_ARTIFACTS/deliverables.txt`.
+
+Then stage exactly those paths, verify, and commit:
+
+```bash
+while IFS= read -r p; do [ -n "$p" ] && git add -- "$p"; done < "$DAGRUN_ARTIFACTS/deliverables.txt"
+
+# Safety net: refuse to commit if anything staged is not on the list
+unexpected=$(git diff --cached --name-only --no-renames | grep -vxF -f "$DAGRUN_ARTIFACTS/deliverables.txt")
+if [ -n "$unexpected" ]; then
+  echo "ERROR: staged paths not in deliverables.txt — refusing to commit:" >&2
+  echo "$unexpected" >&2
+  exit 1
+fi
 git commit -m "${DAGRUN_PR_TITLE_PREFIX:-feat} <short description> (dagrun: $DAGRUN_RUN_ID)"
 ```
+
+If the safety net fires, stop and report the unexpected paths loudly in your final output; never
+commit a partial set silently and never add the paths to the list just to get past the check
+unless they are demonstrably part of the fix. Dirty files left out of the commit are expected —
+list them in your final output.
 
 Add a description (a second `-m`) only when it earns its place — it explains something the
 subject can't: non-obvious code, a workaround, or context a reviewer would otherwise be missing.

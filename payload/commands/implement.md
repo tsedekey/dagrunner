@@ -148,13 +148,37 @@ implementation, not a known omission.
 
 ## Final step — Stage implementation
 
-After the deliverables check passes, stage your code changes:
+After the deliverables check passes, stage **exactly** the confirmed deliverables — never
+`git add -A` / `git add .`. The worktree can contain unrelated dirty files (pre-existing
+`package.json`/lockfile drift, `node_modules` symlinks from a build) that are not yours to commit.
+
+1. Write every confirmed deliverable path (the same rows as the "Deliverables check" table, plus
+   any file you deliberately changed that the guide's change surface names), one repo-relative
+   path per line, to `$DAGRUN_ARTIFACTS/deliverables.txt`. The `pr` node reads this file.
+2. Stage only those paths, then verify nothing else is in the index:
 
 ```bash
 cd "$DAGRUN_WORKTREE"
-git add -A
+cat > "$DAGRUN_ARTIFACTS/deliverables.txt" << 'PATHS'
+path/to/NewClass.java
+qa/acceptance-tests/...IT.java
+PATHS
+
+while IFS= read -r p; do [ -n "$p" ] && git add -- "$p"; done < "$DAGRUN_ARTIFACTS/deliverables.txt"
+
+# Safety net: refuse if anything staged is not a declared deliverable
+unexpected=$(git diff --cached --name-only --no-renames | grep -vxF -f "$DAGRUN_ARTIFACTS/deliverables.txt")
+if [ -n "$unexpected" ]; then
+  echo "ERROR: staged paths not in deliverables.txt — refusing to proceed:" >&2
+  echo "$unexpected" >&2
+  exit 1
+fi
 git status --short
 ```
+
+If the safety net fires, do not continue: `git restore --staged -- <path>` each unexpected path
+(or add it to `deliverables.txt` only if it is genuinely part of the fix), then re-run it. Files
+left dirty in the worktree that are not deliverables stay unstaged — mention them in summary.md.
 
 If the working tree is already clean, note it in summary.md and skip.
 
