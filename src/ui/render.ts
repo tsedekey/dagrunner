@@ -1,7 +1,10 @@
 /**
- * render.ts — server-side rendering of an artifact's content into safe HTML:
- * a hand-rolled markdown SUBSET (headings, lists, code fences, bold/italic,
- * links), pretty-printed JSON, and a unified diff with +/- line colouring.
+ * render.ts — server-side rendering of an artifact's content into safe HTML
+ * (the single escaping path for ALL artifact content — the client only ever
+ * inserts this server-escaped HTML or text it escapes itself):
+ * a hand-rolled markdown SUBSET (headings, lists, tables, blockquotes, code
+ * fences, bold/italic, links), syntax-coloured JSON, and a unified diff with
+ * +/- line glyphs and colouring.
  *
  * Zero deps by design (CLAUDE.md's "no new dependencies" law) — this is a
  * viewer, not a full renderer. Every renderer escapes raw text FIRST, then
@@ -88,8 +91,31 @@ export function renderMarkdown(md: string): string {
       continue;
     }
 
-    const ul = /^[-*]\s+(.*)$/.exec(line);
-    const ol = /^\d+\.\s+(.*)$/.exec(line);
+    // Pipe table: a header row followed by a |---|---| separator row.
+    if (/^\|.*\|\s*$/.test(line) && /^\|[\s:|-]+\|\s*$/.test(lines[i + 1] ?? "")) {
+      closeList();
+      const cells = (r: string): string[] =>
+        r
+          .trim()
+          .replace(/^\||\|$/g, "")
+          .split("|")
+          .map((c) => c.trim());
+      let t = `<div class="md-table"><table><thead><tr>${cells(line)
+        .map((c) => `<th>${inline(escapeHtml(c))}</th>`)
+        .join("")}</tr></thead><tbody>`;
+      i += 2;
+      while (i < lines.length && /^\|/.test(lines[i] ?? "")) {
+        t += `<tr>${cells(lines[i] ?? "")
+          .map((c) => `<td>${inline(escapeHtml(c))}</td>`)
+          .join("")}</tr>`;
+        i++;
+      }
+      out.push(t + "</tbody></table></div>");
+      continue;
+    }
+
+    const ul = /^\s*[-*]\s+(.*)$/.exec(line);
+    const ol = /^\s*\d+\.\s+(.*)$/.exec(line);
     if (ul !== null || ol !== null) {
       const wantTag = ul !== null ? "ul" : "ol";
       if (listTag !== wantTag) {
@@ -110,21 +136,61 @@ export function renderMarkdown(md: string): string {
     }
 
     closeList();
-    out.push(`<p>${inline(escapeHtml(line))}</p>`);
+    if (/^>\s?/.test(line)) {
+      out.push(`<blockquote>${inline(escapeHtml(line.replace(/^>\s?/, "")))}</blockquote>`);
+      i++;
+      continue;
+    }
+    // A paragraph: consecutive plain lines are one block.
+    const para = [line.trim()];
     i++;
+    while (
+      i < lines.length &&
+      (lines[i] ?? "").trim() !== "" &&
+      !/^(#{1,6}\s|```|\s*[-*]\s|\s*\d+\.\s|\||>)/.test(lines[i] ?? "")
+    ) {
+      para.push((lines[i] ?? "").trim());
+      i++;
+    }
+    out.push(`<p>${inline(escapeHtml(para.join(" ")))}</p>`);
   }
   closeList();
   return out.join("\n");
 }
 
-/** Pretty-printed, escaped JSON. Invalid JSON renders as an escaped plain block rather than throwing. */
+const JSON_TOKEN =
+  /"(?:\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(?:true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?/g;
+
+/**
+ * Pretty-printed, syntax-coloured JSON. Escape-first PER TOKEN: the pretty text
+ * is split into tokens and gaps and each is escaped on its own, so no content
+ * can reach the DOM unescaped. Invalid JSON renders as an escaped plain block.
+ */
 export function renderJson(text: string): string {
+  let pretty: string;
   try {
-    const pretty = JSON.stringify(JSON.parse(text), null, 2);
-    return `<pre class="json">${escapeHtml(pretty)}</pre>`;
+    pretty = JSON.stringify(JSON.parse(text), null, 2);
   } catch {
     return `<pre class="json json-invalid">${escapeHtml(text)}</pre>`;
   }
+  let out = "";
+  let last = 0;
+  for (const m of pretty.matchAll(JSON_TOKEN)) {
+    const at = m.index ?? 0;
+    out += escapeHtml(pretty.slice(last, at));
+    const tok = m[0];
+    if (m[1] !== undefined) {
+      const key = tok.slice(0, tok.length - m[1].length);
+      out += `<span class="j-key">${escapeHtml(key)}</span>${escapeHtml(m[1])}`;
+    } else if (tok.startsWith('"')) {
+      out += `<span class="j-str">${escapeHtml(tok)}</span>`;
+    } else {
+      out += `<span class="j-num">${escapeHtml(tok)}</span>`;
+    }
+    last = at + tok.length;
+  }
+  out += escapeHtml(pretty.slice(last));
+  return `<pre class="json"><code>${out}</code></pre>`;
 }
 
 /**
@@ -134,17 +200,30 @@ export function renderJson(text: string): string {
 export function renderDiff(diffText: string): string {
   const lines = diffText.replace(/\r\n/g, "\n").split("\n");
   const rendered = lines.map((line) => {
-    const esc = escapeHtml(line);
-    if (line.startsWith("+++") || line.startsWith("---"))
-      return `<span class="diff-file">${esc}</span>`;
-    if (line.startsWith("@@")) return `<span class="diff-hunk">${esc}</span>`;
-    if (line.startsWith("+")) return `<span class="diff-add">${esc}</span>`;
-    if (line.startsWith("-")) return `<span class="diff-del">${esc}</span>`;
-    if (line.startsWith("diff --git") || line.startsWith("index "))
-      return `<span class="diff-meta">${esc}</span>`;
-    return `<span class="diff-ctx">${esc}</span>`;
+    const kind =
+      line.startsWith("+++") ||
+      line.startsWith("---") ||
+      line.startsWith("diff ") ||
+      line.startsWith("index ")
+        ? "meta"
+        : line.startsWith("@@")
+          ? "hunk"
+          : line.startsWith("+")
+            ? "add"
+            : line.startsWith("-")
+              ? "del"
+              : "ctx";
+    const glyph = { add: "+", del: "−", hunk: "@", meta: " ", ctx: " " }[kind];
+    const body = escapeHtml(kind === "add" || kind === "del" ? line.slice(1) : line);
+    const sr =
+      kind === "add"
+        ? '<span class="sr-only"> (added)</span>'
+        : kind === "del"
+          ? '<span class="sr-only"> (removed)</span>'
+          : "";
+    return `<span class="dl dl-${kind}"><span class="dg" aria-hidden="true">${glyph}</span>${body}${sr}</span>`;
   });
-  return `<pre class="diff">${rendered.join("\n")}</pre>`;
+  return `<pre class="diff"><code>${rendered.join("\n")}</code></pre>`;
 }
 
 export type ArtifactKind = "markdown" | "json" | "diff" | "text";
@@ -159,7 +238,7 @@ export function artifactKindFor(path: string): ArtifactKind {
 /** Render an artifact's raw text content by its kind (see `artifactKindFor`). */
 export function renderArtifact(path: string, content: string): string {
   const kind = artifactKindFor(path);
-  if (kind === "markdown") return renderMarkdown(content);
+  if (kind === "markdown") return `<div class="md">${renderMarkdown(content)}</div>`;
   if (kind === "json") return renderJson(content);
   if (kind === "diff") return renderDiff(content);
   return `<pre class="text">${escapeHtml(content)}</pre>`;

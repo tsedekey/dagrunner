@@ -20,6 +20,8 @@ export type RunListEntry =
       workflow: string;
       status: string;
       updatedAt: string;
+      /** Sum of every node's recorded cost (cost lands at node end, so a running node adds 0 until it finishes). */
+      cost: number;
       error?: undefined;
     }
   | {
@@ -28,6 +30,7 @@ export type RunListEntry =
       workflow?: undefined;
       status?: undefined;
       updatedAt?: undefined;
+      cost?: undefined;
     };
 
 /**
@@ -67,6 +70,7 @@ export function discoverRuns(homeDir: string): RunListEntry[] {
         workflow: state.workflow,
         status: state.status,
         updatedAt: state.updatedAt,
+        cost: Object.values(state.nodes ?? {}).reduce((sum, ns) => sum + (ns.cost ?? 0), 0),
         _mtime: mtime,
       });
     } catch (e) {

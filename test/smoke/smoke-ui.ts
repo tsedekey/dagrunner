@@ -197,8 +197,12 @@ try {
   const snap1 = JSON.parse(detail1.body) as {
     awaitingGate: { nodeId: string } | null;
     nodeOrder: string[];
+    runStatus: string;
+    gate: { nodeId: string; actions: string[] } | null;
   };
   assert.equal(snap1.awaitingGate?.nodeId, "reproduce");
+  assert.equal(snap1.runStatus, "paused");
+  assert.equal(snap1.gate?.nodeId, "reproduce", "paused + awaiting-gate -> the gate card is present");
   assert.deepEqual(
     snap1.nodeOrder,
     bugfixWorkflow.nodes.map((n) => n.id),
@@ -209,8 +213,9 @@ try {
 
   const detail2 = await get(`${handle.url}api/runs/${RUN_ID_2}`);
   assert.equal(detail2.status, 200);
-  const snap2 = JSON.parse(detail2.body) as { status: string };
+  const snap2 = JSON.parse(detail2.body) as { status: string; gate: unknown };
   assert.equal(snap2.status, "done");
+  assert.equal(snap2.gate, null, "a finished run has no gate card even though gate.json files remain on disk");
   console.log("smoke-ui: GET /api/runs/<done> — status done");
 
   const notFound = await get(
@@ -229,11 +234,14 @@ try {
 
   const withRun = await get(`${handle.url}?run=${RUN_ID_1}`);
   assert.equal(withRun.status, 200);
-  assert.match(withRun.body, /Awaiting decision/);
-  assert.match(withRun.body, new RegExp(String(RUN_ID_1)));
-  console.log(
-    "smoke-ui: GET /?run=<paused> — gate banner rendered server-side",
-  );
+  assert.equal(withRun.body, root.body, "?run=<id> serves the same static, client-rendered shell");
+  assert.doesNotMatch(root.body, /replay|SIMULATED/);
+
+  const feed1 = await get(`${handle.url}api/runs/${RUN_ID_1}/feed`);
+  assert.equal(feed1.status, 200);
+  const feed = JSON.parse(feed1.body) as { items: Array<{ kind: string; text: string }> };
+  assert.ok(feed.items.some((i) => i.kind === "gate"), "feed history carries the gate.opened event");
+  console.log("smoke-ui: GET /api/runs/<paused>/feed — engine events present, gate opened");
 
   // SSE framing: the first frame must be the ": connected" comment.
   const ssePayload = await new Promise<string>((resolve, reject) => {
@@ -247,7 +255,8 @@ try {
       let buf = "";
       res.on("data", (c: Buffer) => {
         buf += c.toString();
-        if (buf.includes("\n\n")) {
+        // connected comment, then the initial snapshot and feed-history frames
+        if (buf.includes("event: snapshot") && buf.includes("event: feed") && buf.endsWith("\n\n")) {
           clearTimeout(timeout);
           req.destroy();
           resolve(buf);
@@ -257,7 +266,9 @@ try {
     req.on("error", reject);
   });
   assert.match(ssePayload, /^: connected\n\n/);
-  console.log("smoke-ui: GET /api/runs/<id>/stream — valid SSE framing");
+  assert.match(ssePayload, /event: snapshot\ndata: \{/);
+  assert.match(ssePayload, /event: feed\ndata: \{/);
+  console.log("smoke-ui: GET /api/runs/<id>/stream — valid SSE framing, initial snapshot + feed history");
 } finally {
   await handle.close();
 }

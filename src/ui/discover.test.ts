@@ -55,6 +55,7 @@ test("valid runs are returned with workflow/status/updatedAt", () => {
     workflow: "bugfix",
     status: "running",
     updatedAt: "2026-01-01T00:00:00.000Z",
+    cost: 0,
   });
 });
 
@@ -98,4 +99,17 @@ test("sorted newest-first by directory mtime, mixing valid and error entries", a
     list.map((r) => r.runId),
     ["new-1", "old-1"],
   );
+});
+
+test("list entries carry the summed node cost (chip: workflow · day · $cost)", () => {
+  const home = tempHome();
+  writeRun(home, "9-1", {
+    nodes: {
+      a: { status: "done", artifacts: [], iteration: 0, cost: 1.25, gateHistory: [] },
+      b: { status: "running", artifacts: [], iteration: 0, cost: 0, gateHistory: [] },
+      c: { status: "done", artifacts: [], iteration: 0, cost: 2, gateHistory: [] },
+    },
+  });
+  const [e] = discoverRuns(home);
+  assert.equal(e?.cost, 3.25);
 });

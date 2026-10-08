@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -81,8 +81,9 @@ test("node order follows the workflow's own declared pipeline order (bugfix)", (
 test("node order follows the feature workflow when state.workflow is feature", () => {
   const { home } = setup("feature");
   const snap = buildRunSnapshot(home, "9-1");
+  // The fixture state carries bugfix-named nodes; those are state-only extras and are appended AFTER the workflow's own order.
   assert.deepEqual(
-    snap.nodeOrder,
+    snap.nodeOrder.slice(0, featureWorkflow.nodes.length),
     featureWorkflow.nodes.map((n) => n.id),
   );
 });
@@ -134,4 +135,158 @@ test("an unknown workflow name falls back to state.json's own node insertion ord
   const { home } = setup("bugfix", { workflow: "mystery" });
   const snap = buildRunSnapshot(home, "9-1");
   assert.deepEqual(snap.nodeOrder, ["reproduce", "implement", "review", "fix"]);
+});
+
+// ---------------------------------------------------------------------------
+// Mockup-port additions: view fields + the real-data quirks the mockup author found.
+// ---------------------------------------------------------------------------
+
+test("carries the raw run status, branch/base, plan title and a quote-stripped issueUrl (state.json stores literal quotes)", () => {
+  const { home, runDir } = setup("bugfix", {
+    issueUrl: '"https://github.com/o/r/issues/7"',
+    baseBranch: "stable/8.8",
+    branch: "fix/7-thing",
+  } as Partial<RunState>);
+  mkdirSync(join(runDir, "plan"), { recursive: true });
+  writeFileSync(join(runDir, "plan", "plan.md"), '---\ntitle: "Operate V1 GET returns 500 — Fix Plan"\n---\nbody\n');
+  const snap = buildRunSnapshot(home, "9-1");
+  assert.equal(snap.runStatus, "paused");
+  assert.equal(snap.issueUrl, "https://github.com/o/r/issues/7");
+  assert.equal(snap.baseBranch, "stable/8.8");
+  assert.equal(snap.branch, "fix/7-thing");
+  assert.equal(snap.planTitle, "Operate V1 GET returns 500");
+});
+
+test("issueUrl / planTitle are null when absent; a non-http issueUrl is dropped (never an href-able javascript: url)", () => {
+  const { home } = setup("bugfix");
+  const a = buildRunSnapshot(home, "9-1");
+  assert.equal(a.issueUrl, null);
+  assert.equal(a.planTitle, null);
+  const s2 = setup("bugfix", { issueUrl: "javascript:alert(1)" } as Partial<RunState>);
+  assert.equal(buildRunSnapshot(s2.home, "9-1").issueUrl, null);
+});
+
+test("gate card: shown ONLY when run status is paused AND a node is awaiting-gate (gate.json keeps pendingDecision after approval)", () => {
+  const brief = {
+    schema: 1, runId: "9-1", workflow: "bugfix", gateNodeId: "fix", iteration: 0, revision: "r.1",
+    gateArtifacts: [{ path: "/x/fix/summary.md", sha256: "d28f372f55cdabcdef" }],
+    upstreamArtifacts: [{ nodeId: "review", files: [] }],
+    validation: [{ nodeId: "reproduce", check: "noPlaceholders", ok: true }],
+    companion: { sessionId: "sess-1", reconstructed: false, status: "ok", resume: { sessionId: "sess-1", configDir: "/c", cwd: "/home/u/proj", prompt: "p" } },
+    pendingDecision: { actions: ["approve", "amend", "hold"], amendTargets: ["fix"], decidesNode: "verify", approveContinuesTo: ["verify", "pr"] },
+  };
+  // paused + awaiting -> card
+  const paused = setup("bugfix");
+  mkdirSync(join(paused.runDir, "fix"), { recursive: true });
+  writeFileSync(join(paused.runDir, "fix", "gate.json"), JSON.stringify(brief));
+  writeFileSync(join(paused.runDir, "fix", "summary.md"), "# S\n\n## Verify recommendation\n\nSkip. Nothing new.\n\n## Other\n");
+  const card = buildRunSnapshot(paused.home, "9-1").gate;
+  assert.ok(card !== null);
+  assert.equal(card.nodeId, "fix");
+  assert.equal(card.revision, "r.1");
+  assert.equal(card.round, 1);
+  assert.equal(card.maxIterations, 5);
+  assert.deepEqual(card.actions, ["approve", "amend", "hold"]);
+  assert.deepEqual(card.approveContinuesTo, ["verify", "pr"]);
+  assert.deepEqual(card.evidence, [{ name: "summary.md", sha: "d28f372f55cd" }]);
+  assert.deepEqual(card.upstream, ["review"]);
+  assert.equal(card.decidesNode, "verify");
+  assert.equal(card.advice, "Skip. Nothing new.");
+  assert.equal(card.companion?.cwd, "/home/u/proj");
+
+  // run status running (gate.json left behind after an approval) -> no card even though gate.json exists
+  const running = setup("bugfix", { status: "running" });
+  mkdirSync(join(running.runDir, "fix"), { recursive: true });
+  writeFileSync(join(running.runDir, "fix", "gate.json"), JSON.stringify(brief));
+  assert.equal(buildRunSnapshot(running.home, "9-1").gate, null);
+
+  // paused but no node awaiting -> no card
+  const noAwait = setup("bugfix");
+  const st = JSON.parse(readFileSync(join(noAwait.runDir, "state.json"), "utf8")) as RunState;
+  st.nodes["fix"] = { ...(st.nodes["fix"] as RunState["nodes"][string]), status: "done" };
+  writeFileSync(join(noAwait.runDir, "state.json"), JSON.stringify(st));
+  assert.equal(buildRunSnapshot(noAwait.home, "9-1").gate, null);
+});
+
+test("gate card without a persisted brief is still shown (lighter), and a brief for a DIFFERENT gate node is ignored", () => {
+  const a = setup("bugfix");
+  const card = buildRunSnapshot(a.home, "9-1").gate;
+  assert.ok(card !== null);
+  assert.equal(card.nodeId, "fix");
+  assert.equal(card.revision, null);
+  assert.deepEqual(card.actions, ["approve", "amend", "hold"]);
+
+  const b = setup("bugfix");
+  mkdirSync(join(b.runDir, "fix"), { recursive: true });
+  writeFileSync(join(b.runDir, "fix", "gate.json"), JSON.stringify({ gateNodeId: "reproduce", revision: "STALE", iteration: 0 }));
+  assert.equal(buildRunSnapshot(b.home, "9-1").gate?.revision, null);
+});
+
+test("skipped reason: a gate decision (next-node-decision.json run:false) vs optional vs plain `when`", () => {
+  const mk = (nodes: RunState["nodes"], decision?: unknown, workflow = "bugfix") => {
+    const s = setup(workflow as "bugfix", { nodes, status: "running" });
+    if (decision !== undefined) {
+      mkdirSync(join(s.runDir, "fix"), { recursive: true });
+      writeFileSync(join(s.runDir, "fix", "next-node-decision.json"), JSON.stringify(decision));
+    }
+    return buildRunSnapshot(s.home, "9-1");
+  };
+  const base = (over: Record<string, unknown> = {}) =>
+    ({ status: "skipped", artifacts: [], iteration: 0, cost: 0, gateHistory: [], ...over }) as RunState["nodes"][string];
+  const done = base({ status: "done" });
+  const viaDecision = mk({ fix: done, verify: base() }, { node: "verify", run: false });
+  assert.equal(viaDecision.nodes["verify"]?.skipReason, "decision");
+  // no decision file: verify has a `when` and is not optional -> "when"
+  const viaWhen = mk({ fix: done, verify: base() });
+  assert.equal(viaWhen.nodes["verify"]?.skipReason, "when");
+  // a decision file that says run:true does not explain a skip -> falls through
+  const runTrue = mk({ fix: done, verify: base() }, { node: "verify", run: true });
+  assert.equal(runTrue.nodes["verify"]?.skipReason, "when");
+  // non-skipped nodes have no reason
+  assert.equal(viaDecision.nodes["fix"]?.skipReason, null);
+});
+
+test("workflow node definitions are exposed serializably (no `when` function), with gate.maxIterations defaulting to 10", () => {
+  const { home } = setup("bugfix");
+  const snap = buildRunSnapshot(home, "9-1");
+  const verify = snap.defs["verify"];
+  assert.equal(verify?.hasWhen, true);
+  assert.equal(verify?.model, "sonnet");
+  assert.deepEqual(verify?.produces, ["verify-report.json", "demo.md"]);
+  assert.equal(snap.defs["fix"]?.gate?.maxIterations, 5);
+  assert.equal(snap.defs["fix"]?.gate?.decidesNode, "verify");
+  assert.equal(snap.defs["reproduce"]?.gate?.maxIterations, 10);
+  assert.equal(snap.defs["implement"]?.gate, null);
+  assert.doesNotThrow(() => JSON.stringify(snap));
+});
+
+test("nodes in state.json that the current workflow no longer defines (legacy digest, expand…) are appended, not dropped; workflow nodes missing from state render as pending", () => {
+  const { home } = setup("bugfix", {
+    nodes: {
+      reproduce: { status: "done", artifacts: [], iteration: 0, cost: 0, gateHistory: [] },
+      digest: { status: "done", artifacts: [], iteration: 0, cost: 0.9, gateHistory: [] },
+    },
+  });
+  const snap = buildRunSnapshot(home, "9-1");
+  assert.equal(snap.nodeOrder.at(-1), "digest");
+  assert.ok(snap.nodeOrder.includes("pr"));
+  assert.equal(snap.nodes["pr"]?.status, "pending");
+  assert.equal(snap.nodes["digest"]?.status, "done");
+  assert.equal(snap.defs["digest"], undefined);
+});
+
+test("per-node files: registered + extra from disk, plus bookkeeping files (gate.json, burn.json, gate-context.md) the CLI listing hides; transcript.log never", () => {
+  const { home, runDir } = setup("bugfix");
+  mkdirSync(join(runDir, "fix"), { recursive: true });
+  for (const f of ["summary.md", "changes.diff", "burn.json", "gate.json", "gate-context.md", "transcript.log"]) {
+    writeFileSync(join(runDir, "fix", f), "x");
+  }
+  const files = buildRunSnapshot(home, "9-1").nodes["fix"]?.files ?? [];
+  const byName = Object.fromEntries(files.map((f) => [f.name, f]));
+  assert.ok(byName["summary.md"] && byName["changes.diff"]);
+  assert.equal(byName["summary.md"]?.bookkeeping, false);
+  assert.equal(byName["gate.json"]?.bookkeeping, true);
+  assert.equal(byName["burn.json"]?.bookkeeping, true);
+  assert.equal(byName["transcript.log"], undefined);
+  assert.equal(byName["summary.md"]?.registered, false);
 });

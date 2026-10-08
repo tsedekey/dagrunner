@@ -74,7 +74,7 @@ test("renderMarkdown: paragraphs for plain text", () => {
 test("renderJson: pretty-prints valid JSON", () => {
   const html = renderJson('{"a":1}');
   assert.match(html, /<pre class="json">/);
-  assert.match(html, /&quot;a&quot;: 1/);
+  assert.match(html, /<span class="j-key">&quot;a&quot;<\/span>: <span class="j-num">1<\/span>/);
 });
 
 test("renderJson: malformed JSON renders escaped raw text instead of throwing", () => {
@@ -94,13 +94,14 @@ test("renderDiff: classifies file headers, hunks, additions, deletions, context"
     " unchanged",
   ].join("\n");
   const html = renderDiff(diff);
-  assert.match(html, /<span class="diff-meta">diff --git/);
-  assert.match(html, /<span class="diff-file">--- a\/x\.ts<\/span>/);
-  assert.match(html, /<span class="diff-file">\+\+\+ b\/x\.ts<\/span>/);
-  assert.match(html, /<span class="diff-hunk">@@ -1,2 \+1,2 @@<\/span>/);
-  assert.match(html, /<span class="diff-del">-old line<\/span>/);
-  assert.match(html, /<span class="diff-add">\+new line<\/span>/);
-  assert.match(html, /<span class="diff-ctx"> unchanged<\/span>/);
+  assert.match(html, /<span class="dl dl-meta"><span class="dg" aria-hidden="true"> <\/span>diff --git/);
+  assert.match(html, /<span class="dl dl-meta"><span class="dg" aria-hidden="true"> <\/span>--- a\/x\.ts<\/span>/);
+  assert.match(html, /<span class="dl dl-meta"><span class="dg" aria-hidden="true"> <\/span>\+\+\+ b\/x\.ts<\/span>/);
+  assert.match(html, /<span class="dl dl-hunk"><span class="dg" aria-hidden="true">@<\/span>@@ -1,2 \+1,2 @@<\/span>/);
+  // added/removed lines carry a glyph AND screen-reader text, never colour alone
+  assert.match(html, /<span class="dl dl-del"><span class="dg" aria-hidden="true">−<\/span>old line<span class="sr-only"> \(removed\)<\/span><\/span>/);
+  assert.match(html, /<span class="dl dl-add"><span class="dg" aria-hidden="true">\+<\/span>new line<span class="sr-only"> \(added\)<\/span><\/span>/);
+  assert.match(html, /<span class="dl dl-ctx"><span class="dg" aria-hidden="true"> <\/span> unchanged<\/span>/);
 });
 
 test("renderDiff escapes HTML-significant characters inside lines", () => {
@@ -117,11 +118,46 @@ test("artifactKindFor dispatches by extension", () => {
 });
 
 test("renderArtifact dispatches to the right renderer by path", () => {
-  assert.match(renderArtifact("a.md", "# hi"), /<h1>hi<\/h1>/);
+  assert.match(renderArtifact("a.md", "# hi"), /<div class="md"><h1>hi<\/h1><\/div>/);
   assert.match(renderArtifact("a.json", "{}"), /<pre class="json">/);
-  assert.match(renderArtifact("a.diff", "+x"), /diff-add/);
+  assert.match(renderArtifact("a.diff", "+x"), /dl-add/);
   assert.match(
     renderArtifact("a.log", "plain"),
     /<pre class="text">plain<\/pre>/,
   );
+});
+
+test("renderMarkdown: pipe tables become <table>, cells are escaped and keep inline markup", () => {
+  const html = renderMarkdown("| File | Claim |\n|---|---|\n| `a.java` | <img src=x onerror=alert(1)> **bold** |\n\nafter");
+  assert.match(html, /<div class="md-table"><table><thead><tr><th>File<\/th><th>Claim<\/th><\/tr><\/thead><tbody>/);
+  assert.match(html, /<td><code>a\.java<\/code><\/td>/);
+  assert.match(html, /<strong>bold<\/strong>/);
+  assert.doesNotMatch(html, /<img/);
+  assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.match(html, /<p>after<\/p>/);
+});
+
+test("renderMarkdown: blockquotes are escaped", () => {
+  const html = renderMarkdown("> quoted <b>x</b>");
+  assert.equal(html, "<blockquote>quoted &lt;b&gt;x&lt;/b&gt;</blockquote>");
+});
+
+test("renderMarkdown: consecutive text lines form ONE paragraph; indented list items stay list items", () => {
+  assert.equal(renderMarkdown("one\ntwo"), "<p>one two</p>");
+  assert.match(renderMarkdown("- a\n  - nested"), /<li>a<\/li>\n<li>nested<\/li>/);
+});
+
+test("renderJson: colours keys / strings / numbers / literals, escape-first per token (payload stays inert)", () => {
+  const html = renderJson(JSON.stringify({ "k</b>": '<img src=x onerror=alert(1)>', n: 2.5, ok: true, z: null }));
+  assert.match(html, /<span class="j-key">&quot;k&lt;\/b&gt;&quot;<\/span>:/);
+  assert.match(html, /<span class="j-str">&quot;&lt;img src=x onerror=alert\(1\)&gt;&quot;<\/span>/);
+  assert.match(html, /<span class="j-num">2\.5<\/span>/);
+  assert.match(html, /<span class="j-num">true<\/span>/);
+  assert.match(html, /<span class="j-num">null<\/span>/);
+  assert.doesNotMatch(html, /<img|<\/b>/);
+});
+
+test("renderJson: a string containing an escaped quote is not cut early", () => {
+  const html = renderJson(JSON.stringify({ a: 'say "hi" <x>' }));
+  assert.match(html, /<span class="j-str">&quot;say \\&quot;hi\\&quot; &lt;x&gt;&quot;<\/span>/);
 });

@@ -3,11 +3,15 @@
  * zero new dependencies (Node's built-in `http` only, no Express).
  *
  * Routes:
- *   GET /                          — the single-page timeline viewer
- *   GET /?run=<id>                 — same page, server-rendered with that run's data baked in
- *   GET /api/runs                  — JSON run list (discover.ts)
- *   GET /api/runs/:id               — JSON run-detail snapshot (run-snapshot.ts)
- *   GET /api/runs/:id/stream        — text/event-stream: new events.jsonl entries + refreshed snapshots
+ *   GET /                          — the static page shell (client-rendered from the JSON below; `?run=<id>` selects a run client-side)
+ *   GET /api/runs                  — JSON run list (discover.ts); the page polls it so new runs appear
+ *   GET /api/runs/:id               — JSON run view (run-snapshot.ts)
+ *   GET /api/runs/:id/feed          — activity-feed history (events.jsonl + every node's transcript.log)
+ *   GET /api/runs/:id/output?node=  — one node's agent output (its transcript.log)
+ *   GET /api/runs/:id/artifact?node=&name= — one artifact file rendered to safe HTML (lazy: content never rides in snapshots)
+ *   GET /api/runs/:id/stream        — text/event-stream: `snapshot` (whole view, on connect and whenever it changes)
+ *                                     + `feed` ({items}, history batch on connect, then live deltas from events.jsonl
+ *                                     and the transcripts of running nodes); `: ping` heartbeat when idle
  *
  * Never writes to a run directory, never touches active.lock, never calls any
  * decide/approve/amend/resume path — see DECISIONS.md § agent-driven-slice3-ui.
@@ -26,14 +30,11 @@ import { platform } from "node:os";
 import { computeHomePath } from "../config/xdg.js";
 import { discoverRuns } from "./discover.js";
 import { buildRunSnapshot } from "./run-snapshot.js";
-import { buildNodeViews } from "./node-views.js";
-import { renderPage, type NodeView } from "./page.js";
-import {
-  formatSse,
-  formatSseComment,
-  readNewEvents,
-  type SseOffset,
-} from "./sse.js";
+import { renderPage } from "./page.js";
+import { readArtifactView } from "./artifact.js";
+import { buildFeedHistory, buildNodeOutput, type FeedItem } from "./feed.js";
+import { createRunTailer, type RunTailer } from "./live.js";
+import { formatSse, formatSseComment } from "./sse.js";
 
 /** `dagrun ui --home <dir>` resolution: unlike `resolveHome()`, honours an explicit flag. Fails loud (throws), never a silent cwd fallback. */
 export function resolveUiHome(homeFlag?: string): string {
@@ -63,45 +64,68 @@ export type UiServerHandle = {
   close: () => Promise<void>;
 };
 
-const POLL_MS = 1000;
+const DEFAULT_POLL_MS = 1000;
+const NODE_ID_RE = /^[A-Za-z0-9._-]+$/;
+const OUTPUT_LIMIT = 300;
 
 export async function startUiServer(opts: {
   homeDir: string;
   port: number;
+  /** SSE poll interval; tests shrink it, the CLI uses the 1s default. */
+  pollMs?: number;
 }): Promise<UiServerHandle> {
   const { homeDir } = opts;
+  const pollMs = opts.pollMs ?? DEFAULT_POLL_MS;
 
-  type SseClient = { res: ServerResponse; offset: SseOffset };
-  const clientsByRun = new Map<string, Set<SseClient>>();
-  const timers = new Map<string, ReturnType<typeof setInterval>>();
+  // One watch (tailer + timer) per run that has at least one connected client,
+  // shared by all of that run's clients; torn down when the last one leaves.
+  type Watch = {
+    tailer: RunTailer;
+    clients: Set<ServerResponse>;
+    timer: ReturnType<typeof setInterval>;
+    lastView: string | null;
+  };
+  const watches = new Map<string, Watch>();
+
+  function viewJson(runId: string): string | null {
+    try {
+      return JSON.stringify(buildRunSnapshot(homeDir, runId));
+    } catch {
+      return null; // run vanished / state.json torn mid-write — keep serving what we have
+    }
+  }
+
+  function write(res: ServerResponse, frame: string): void {
+    try {
+      res.write(frame);
+    } catch {
+      // socket already gone — its 'close' handler removes it
+    }
+  }
 
   function tickRun(runId: string): void {
-    const clients = clientsByRun.get(runId);
-    if (clients === undefined || clients.size === 0) return;
-    const runDir = join(homeDir, "runs", runId);
-    const newEvents = new Map<SseClient, ReturnType<typeof readNewEvents>>();
-    let anyNew = false;
-    for (const client of clients) {
-      const events = readNewEvents(runDir, client.offset);
-      newEvents.set(client, events);
-      if (events.length > 0) anyNew = true;
-    }
-    if (!anyNew) {
-      for (const client of clients) client.res.write(formatSseComment("ping"));
-      return;
-    }
-    let snapshotText: string | null = null;
+    const w = watches.get(runId);
+    if (w === undefined) return;
+    let items: FeedItem[] = [];
     try {
-      snapshotText = JSON.stringify(buildRunSnapshot(homeDir, runId));
+      items = w.tailer.poll();
     } catch {
-      snapshotText = null; // run vanished/corrupted mid-stream — still deliver the raw events below
+      items = []; // a read-only observer must never take the server down
     }
-    for (const client of clients) {
-      for (const ev of newEvents.get(client) ?? [])
-        client.res.write(formatSse("event", ev));
-      if (snapshotText !== null)
-        client.res.write(`event: snapshot\ndata: ${snapshotText}\n\n`);
+    const json = viewJson(runId);
+    let sent = false;
+    if (items.length > 0) {
+      const frame = formatSse("feed", { items });
+      for (const c of w.clients) write(c, frame);
+      sent = true;
     }
+    if (json !== null && json !== w.lastView) {
+      w.lastView = json;
+      const frame = `event: snapshot\ndata: ${json}\n\n`;
+      for (const c of w.clients) write(c, frame);
+      sent = true;
+    }
+    if (!sent) for (const c of w.clients) write(c, formatSseComment("ping"));
   }
 
   function addClient(
@@ -109,29 +133,41 @@ export async function startUiServer(opts: {
     res: ServerResponse,
     req: IncomingMessage,
   ): void {
-    let set = clientsByRun.get(runId);
-    if (set === undefined) {
-      set = new Set();
-      clientsByRun.set(runId, set);
+    let w = watches.get(runId);
+    if (w === undefined) {
+      // The tailer primes its offsets to "now" BEFORE the history below is read, so a line
+      // written in between shows up in both — de-duped client-side by its stable id, never lost.
+      const tailer = createRunTailer(homeDir, runId);
+      const created: Watch = {
+        tailer,
+        clients: new Set(),
+        lastView: null,
+        timer: setInterval(() => tickRun(runId), pollMs),
+      };
+      watches.set(runId, created);
+      w = created;
     }
-    const runDir = join(homeDir, "runs", runId);
-    const offset: SseOffset = { bytesRead: 0 };
-    readNewEvents(runDir, offset); // fast-forward past history — SSE carries deltas only, the JSON endpoint carries the snapshot
-    const client: SseClient = { res, offset };
-    set.add(client);
-    if (!timers.has(runId)) {
-      timers.set(
-        runId,
-        setInterval(() => tickRun(runId), POLL_MS),
-      );
+    const watch = w;
+    watch.clients.add(res);
+
+    // First frames: current snapshot + recent feed history, so a (re)connecting client
+    // is complete without a separate fetch, then deltas follow.
+    const json = viewJson(runId);
+    if (json !== null) {
+      if (watch.lastView === null) watch.lastView = json;
+      write(res, `event: snapshot\ndata: ${json}\n\n`);
     }
+    try {
+      write(res, formatSse("feed", { ...buildFeedHistory(homeDir, runId), history: true }));
+    } catch {
+      // history is best-effort; live deltas still flow
+    }
+
     req.on("close", () => {
-      set?.delete(client);
-      if (set !== undefined && set.size === 0) {
-        const t = timers.get(runId);
-        if (t !== undefined) clearInterval(t);
-        timers.delete(runId);
-        clientsByRun.delete(runId);
+      watch.clients.delete(res);
+      if (watch.clients.size === 0) {
+        clearInterval(watch.timer);
+        if (watches.get(runId) === watch) watches.delete(runId);
       }
     });
   }
@@ -141,6 +177,7 @@ export async function startUiServer(opts: {
     res.writeHead(status, {
       "Content-Type": "application/json; charset=utf-8",
       "Content-Length": Buffer.byteLength(text),
+      "Cache-Control": "no-store",
     });
     res.end(text);
   }
@@ -149,39 +186,9 @@ export async function startUiServer(opts: {
     res.writeHead(status, {
       "Content-Type": "text/html; charset=utf-8",
       "Content-Length": Buffer.byteLength(html),
+      "Cache-Control": "no-store",
     });
     res.end(html);
-  }
-
-  function handleRoot(url: URL, res: ServerResponse): void {
-    const runParam = url.searchParams.get("run");
-    const runs = discoverRuns(homeDir);
-    let run = null;
-    let selectedError: string | null = null;
-    let nodeViews: NodeView[] = [];
-    if (runParam !== null) {
-      if (!isValidRunId(runParam)) {
-        selectedError = "invalid run id";
-      } else {
-        try {
-          run = buildRunSnapshot(homeDir, runParam);
-          nodeViews = buildNodeViews(run);
-        } catch (e) {
-          selectedError = e instanceof Error ? e.message : String(e);
-        }
-      }
-    }
-    sendHtml(
-      res,
-      200,
-      renderPage({
-        runs,
-        selectedRunId: runParam,
-        selectedError,
-        run,
-        nodeViews,
-      }),
-    );
   }
 
   function handleRequest(req: IncomingMessage, res: ServerResponse): void {
@@ -200,20 +207,40 @@ export async function startUiServer(opts: {
       return;
     }
 
-    const streamMatch = /^\/api\/runs\/([^/]+)\/stream$/.exec(url.pathname);
-    if (streamMatch !== null) {
-      const runId = decodeURIComponent(streamMatch[1] ?? "");
+    const subMatch = /^\/api\/runs\/([^/]+)\/(stream|feed|output|artifact)$/.exec(url.pathname);
+    if (subMatch !== null) {
+      const runId = decodeURIComponent(subMatch[1] ?? "");
+      const what = subMatch[2];
       if (!isValidRunId(runId) || !existsSync(join(homeDir, "runs", runId))) {
         sendJson(res, 404, { error: `run "${runId}" not found` });
         return;
       }
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      });
-      res.write(formatSseComment("connected"));
-      addClient(runId, res, req);
+      if (what === "stream") {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream; charset=utf-8",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        res.write(formatSseComment("connected"));
+        addClient(runId, res, req);
+        return;
+      }
+      if (what === "feed") {
+        sendJson(res, 200, buildFeedHistory(homeDir, runId));
+        return;
+      }
+      const node = url.searchParams.get("node") ?? "";
+      if (what === "output") {
+        if (!NODE_ID_RE.test(node) || node === "." || node === "..") {
+          sendJson(res, 400, { error: "invalid node id" });
+          return;
+        }
+        sendJson(res, 200, { items: buildNodeOutput(homeDir, runId, node, OUTPUT_LIMIT) });
+        return;
+      }
+      const r = readArtifactView(homeDir, runId, node, url.searchParams.get("name") ?? "");
+      if (r.ok) sendJson(res, 200, r.view);
+      else sendJson(res, r.status, { error: r.error });
       return;
     }
 
@@ -235,7 +262,7 @@ export async function startUiServer(opts: {
     }
 
     if (url.pathname === "/") {
-      handleRoot(url, res);
+      sendHtml(res, 200, renderPage());
       return;
     }
 
@@ -277,12 +304,11 @@ export async function startUiServer(opts: {
     url: `http://127.0.0.1:${port}/`,
     close: () =>
       new Promise<void>((resolve) => {
-        for (const set of clientsByRun.values()) {
-          for (const client of set) client.res.end();
+        for (const w of watches.values()) {
+          clearInterval(w.timer);
+          for (const client of w.clients) client.end();
         }
-        for (const t of timers.values()) clearInterval(t);
-        timers.clear();
-        clientsByRun.clear();
+        watches.clear();
         const closable = server as unknown as {
           closeAllConnections?: () => void;
         };

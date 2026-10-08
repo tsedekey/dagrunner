@@ -753,7 +753,7 @@ approve/finish. Both are engine plumbing, no agent involved:
 - **`gate.openedAt`**: `emitGateBrief` stamps the brief with the `gate.opened` event's ts (the existing
   event for that revision, or the one it just wrote); `status --json` `awaitingGate.since` already used it.
 
-**`dagrun ui` — read-only timeline viewer (v0.1.63).** A companion agent (or Eddie) needs a visual,
+**`dagrun ui` — read-only timeline viewer (v0.1.63; rebuilt to the approved mockup and made live in v0.1.67).** A companion agent (or Eddie) needs a visual,
 live-updating view of a run alongside the companion chat; `status --json`/`events.jsonl` are
 machine-readable but not a place to _look_. `dagrun ui [--port <n>] [--open] [--home <dir>]` starts a
 loopback-only (`127.0.0.1`) Node `http` server (zero new deps — no Express, no frontend framework, no
@@ -762,10 +762,16 @@ build step) and prints the URL; it never auto-opens a browser unless `--open` is
 (distinct from OTLP's 4317/4318; nothing else in this repo claims a port); `--port <n>` overrides, and a
 port already in use fails loud with the exact retry command — it never silently picks another port.
 
-- **One page, a run list, `?run=<id>` deep-link** — `src/ui/page.ts` renders a single self-contained HTML
-  document (inline `<style>`/`<script>`, no separate static asset files — avoids a dist-copy build step
-  the "no build step" rule would otherwise need) with a collapsible left rail (`discover.ts`) and the
-  selected run's timeline in the main pane.
+- **One page, a run-chips row, `?run=<id>` deep-link** — `src/ui/page.ts` serves a single self-contained
+  HTML document: a STATIC shell plus inline `<style>`/`<script>` (no static asset files — avoids a
+  dist-copy build step the "no build step" rule would otherwise need; nothing is loaded from the network,
+  system fonts only). The layout is the approved mockup (direction 2, "timeline"): run chips, issue/branch
+  line + hero title, status line, the gate "letter" card, a vertical PIPELINE with a status rail and a
+  per-node card (Artifacts / Output / Details tabs), an ACTIVITY feed (right column wide, below at ~760px)
+  with an "Agent messages" toggle, System/Light/Dark theme. The mockup was recovered (see DECISIONS.md
+  § ui-mockup-port-and-live-tail) after the first implementation was re-derived from a description and
+  came out "very basic". The header states live state honestly from the EventSource ("Live · connected" /
+  "Reconnecting…" / "Run finished").
 - **Strictly read-only**: the server never writes to a run directory, never touches `active.lock`, and
   never calls any decide/approve/amend/resume path. `run-snapshot.ts` wraps `cli/status-json.ts`'s
   `buildStatusJson` (the exact function `dagrun status --json` uses) so the CLI and the UI can never
@@ -774,31 +780,60 @@ port already in use fails loud with the exact retry command — it never silentl
   run before its first `gate show`/`gate open`/decide-propose has no `gate.json` yet; the UI then shows
   a lighter banner (reason/since only, no revision) with the same "run `dagrun gate show <run>`" hint —
   this mirrors the CLI's own staleness, not a UI bug.
-- **Progressive, no-JS-safe**: every node row is a native `<details>` (expand/collapse needs no JS) and
-  artifact content (markdown subset, pretty JSON, `+`/`-`-coloured diff — `src/ui/render.ts`, zero deps)
-  is rendered server-side into the initial HTML, so a no-JS page load already shows the real timeline;
-  a `<noscript>` note only covers the live-tail region. The inline `<script>` progressively adds: an
-  SSE-driven live event tail, a ticking elapsed-time readout, theme toggle persistence
-  (`prefers-color-scheme` + manual override), and a "copy `dagrun gate show <run>`" button — there is no
-  decide/approve control anywhere in the UI, by design.
-- **SSE** (`src/ui/sse.ts`): `GET /api/runs/:id/stream` tails `events.jsonl` by byte offset (only
-  complete lines — an in-flight append's torn tail is picked up on the next tick; a shrunk file resets
-  the offset), polling every second (not `fs.watch`, which is flaky cross-platform) and pushing new
-  events plus a refreshed snapshot as SSE frames, with a `: ping` heartbeat between changes. The initial
-  page load's data comes from the JSON snapshot endpoint, not SSE — SSE carries deltas only.
+- **Client-rendered** (reverses the v0.1.63 "progressive, no-JS-safe, server-rendered timeline"): the
+  shell has empty mount points; the pure renderers (`client-core.ts` — view data in, HTML out, evaluated
+  under `node:vm` in tests) and the DOM/network glue (`client-app.ts`) fill them from JSON. Why: live
+  progress needs the page to re-render from snapshots, which a server-rendered `<details>` timeline
+  cannot do; two render paths (server + client) would drift. Without JS the page shows only a `<noscript>`
+  note pointing at `dagrun status <run> --json`. **Escape by default**: client templates use
+  `T('…{x}…')` (escapes) vs `{{x}}` (pre-built HTML only); hrefs pass `safeHref` (http/https). Artifact
+  content is the one thing rendered on the server (`render.ts`, the single escaping path for content:
+  markdown subset incl. tables, syntax-coloured JSON, glyph-marked diffs) and fetched lazily from
+  `GET /api/runs/:id/artifact?node=&name=` (allowlist + 500KB cap + confinement to the run dir) — content
+  never rides in per-tick snapshots. There is no decide/approve control anywhere; the gate card says
+  decisions happen in the companion conversation. A live re-render replaces only the pipeline steps whose
+  HTML changed and preserves, keyed by node id, open nodes, selected tab/file, scroll positions, focus;
+  the feed auto-follows only if the reader is at the live edge (top — newest first).
+- **Real-data quirks handled in `run-snapshot.ts`** (the mockup author's findings): the gate card exists
+  only when the raw run status is `paused` AND a node is awaiting-gate and the brief's `gateNodeId`
+  matches (`gate.json` keeps `pendingDecision` after approval); `issueUrl` is stored with literal quotes
+  (stripped; non-http dropped); a `skipped` node's reason (decision / optional / condition) comes from the
+  deciding gate's `next-node-decision.json`; files are listed from disk (registered/extra, plus
+  gate.json/burn.json/gate-context.md as bookkeeping chips); state-only legacy nodes (digest, expand…) are
+  appended to the pipeline; serializable node definitions (no `when` fn) feed row meta and "Round N of M".
+- **SSE + live tail** (`sse.ts`, `feed.ts`, `transcript.ts`, `live.ts`): `events.jsonl` holds state
+  transitions only — a running node's activity (assistant text, tool calls) exists only in
+  `<node>/transcript.log` (one compact SDK message per line, each CUT at 8 KB with a trailing `…}`, so cut
+  lines are not valid JSON). One generic file tailer (`tailLines`: complete lines only, byte offsets,
+  shrink OR inode change → reset, never throws) serves both. Each poll (1 s, not `fs.watch`) re-reads
+  state.json to learn which nodes are `running` NOW, tails their `transcript.log`, and gives a node that
+  just stopped one final drain (offsets are fast-forwarded for every node at start and kept — an amend
+  re-runs a node into the same transcript file, and its earlier rounds must stay history); archived `<node>-attempts/` are never tailed live. `assistant` `text`
+  blocks and `tool_use` calls become feed items (thinking and other message types ignored); a cut
+  assistant line has its surviving `text`/`tool_use` salvaged by regex (flagged truncated) or becomes one
+  "(large message truncated)" note — never silently dropped. One item schema (`FeedItem`) for history and
+  live, with stable ids (`e:<offset>` / `t:<node>:<inode>:<offset>:<i>`) so the client de-dupes across
+  reconnects. Per run, one shared tailer + timer serves all clients (torn down with the last one); on
+  every (re)connect the server sends the current `snapshot` then a `feed` history batch (all engine events
+  + the newest ~150 transcript items), then `feed` deltas and a `snapshot` whenever the serialized view
+  changes; `: ping` heartbeat when idle. The page also polls `/api/runs` every 5 s so a run started after
+  load appears. Transcript lines carry a `timestamp` on `assistant`/`user` messages (after `message`, so a
+  cut line loses it → previous line's ts, flagged approximate).
 - **Discovery never hides a broken run** (`src/ui/discover.ts`): deliberately does NOT reuse
   `run-engine.ts`'s `listRuns`, which silently skips a run whose `state.json` fails to parse. The UI
   brief requires a corrupt run to render as an error card in the list, not vanish.
-- **Artifact preview allowlist** (`src/ui/node-views.ts`): only recognized text extensions
+- **Artifact preview allowlist** (`src/ui/artifact.ts`): only recognized text extensions
   (`.md/.json/.diff/.patch/.txt/.log/.yaml/.yml`) under a 500KB cap are read and rendered; anything else
-  (binary, oversized, vanished mid-request) degrades to a note, never a throw. Every `runId` taken from
-  a URL is validated against `^[A-Za-z0-9._-]+$` (no `..`, no separators) before it touches the filesystem.
+  (binary, oversized, vanished mid-request) degrades to a note, never a throw. Every `runId`/node/file name
+  taken from a URL is validated against `^[A-Za-z0-9._-]+$` and the resolved real path must stay inside the
+  run directory (symlinks pointing out are refused). The diff shown is the engine-written `changes.diff`
+  (v0.1.62); the UI never computes one.
 
 ## 3b. Validation — smoke:mock (per-plan gate) and smoke:live (occasional)
 
 `npm run verify-baseline` = `npm ci && typecheck && unit tests && smoke:mock`. The standing gate: run on every plan change.
 
-**smoke:mock** (`test/smoke/smoke-mock.ts`) drives both gated workflows in-process using the mock executor — zero API calls, deterministic. Asserts: gate pauses, produces-contract (and, since the verify-autonomy change, `outcomeGate`) at every relevant node, state transitions (awaiting-gate → paused → done), night-mode auto-approvals. Since v0.1.64 every `startRun` call here against `featureWorkflow` passes `noCompanion: true` (the legacy fresh-session path, same as bugfix's run B already did) — `featureWorkflow` now has `companionGates: true` and requires an explicit `--companion-session`/`--no-companion` choice (DECISIONS.md § feature-companion-gates-parity); the `pr` mock scenario stays `"success"` (not `"gate-pause"`) so these runs still bypass `pr`'s own gate pause exactly as before — proving that path is `smoke-gates-feature.ts`'s job, not this file's. Eight runs: **A** (feature workflow, full happy path — define/fix gates approved, `verify` runs autonomously to a `PASS` outcome, `pr` runs, run done — no election anywhere); **B** (bugfix workflow, same shape, proving the amendment's conditional-but-required `verify` on that workflow too); **C** (night-mode, clean plan — Gate 1 + Gate 2 auto-approved AND `verify` runs autonomously to `done`, the run completes fully unattended with no park, unlike the old verify-election design which always parked here); **D** (night-mode, seeded concern → parked at Gate 1, unchanged); **E** (stale gate from a prior workflow version auto-skipped on resume); **F** (a non-`PASS` `verify-report.json` outcome fails `verify` via `outcomeGate` and blocks `pr` — proven end-to-end through the real `startRun`/`resumeRun`/`runDag` path, with `resumeRun`'s intentional `process.exit(1)` on a failed run temporarily intercepted so the in-process smoke script can inspect the resulting `state.json` instead of dying with it); **G** (added by the structural-upgrades change — `noPlaceholders`: `define`'s `guide.md` contains an unresolved `TODO`, manually approved at Gate 1 via `resumeRun`'s `--approve` path, and the mechanical scan fails the node on the gate-approve transition itself — not `runDag`'s done-branch, since a gated node never reaches `done` there — blocking `implement` and failing the run); **H** (the same `noPlaceholders` proof through the OTHER gate-approve site — `startRun`'s night-mode auto-approve loop, using a placeholder-laden `guide.md` with no "Concerns / plan challenges" heading so it auto-approves rather than parking; needed a new `startRunCapturingExit` smoke helper mirroring `resumeRunCapturingExit` since `startRun`'s own night-mode loop also calls `process.exit(1)` on a failed run). G and H together are the load-bearing proof that `checkNoPlaceholders` is wired at BOTH places a gated node's status actually flips to `done`, not just where the analogous `checkOutcomeGate` happens to already live. Does NOT assert model output quality or exact session IDs. `npm run smoke:mock` chains four scripts: `smoke-mock.ts` (above) `&& smoke-gates.ts` (companion-gate routing/authorization on bugfix, §3g) `&& smoke-gates-feature.ts` (added v0.1.64: the same companion-gate path — define/fix/pr gates, the fix-gate verify decision, amend-at-pr-targets-fix, and the publication-timing proof that approving fix no longer auto-publishes — exercised end to end on `featureWorkflow`; a separate file from `smoke-gates.ts` because that one hardcodes `bugfixWorkflow`/`"reproduce"` throughout, while the docker-teardown/detach/session-recovery mechanics it also proves are workflow-agnostic and already generic) `&& smoke-ui.ts` (`dagrun ui`'s HTTP surface: drives two mock bugfix runs into a temp home, hits every JSON/SSE endpoint and the HTML page against the real server, and asserts neither run directory changed at all).
+**smoke:mock** (`test/smoke/smoke-mock.ts`) drives both gated workflows in-process using the mock executor — zero API calls, deterministic. Asserts: gate pauses, produces-contract (and, since the verify-autonomy change, `outcomeGate`) at every relevant node, state transitions (awaiting-gate → paused → done), night-mode auto-approvals. Since v0.1.64 every `startRun` call here against `featureWorkflow` passes `noCompanion: true` (the legacy fresh-session path, same as bugfix's run B already did) — `featureWorkflow` now has `companionGates: true` and requires an explicit `--companion-session`/`--no-companion` choice (DECISIONS.md § feature-companion-gates-parity); the `pr` mock scenario stays `"success"` (not `"gate-pause"`) so these runs still bypass `pr`'s own gate pause exactly as before — proving that path is `smoke-gates-feature.ts`'s job, not this file's. Eight runs: **A** (feature workflow, full happy path — define/fix gates approved, `verify` runs autonomously to a `PASS` outcome, `pr` runs, run done — no election anywhere); **B** (bugfix workflow, same shape, proving the amendment's conditional-but-required `verify` on that workflow too); **C** (night-mode, clean plan — Gate 1 + Gate 2 auto-approved AND `verify` runs autonomously to `done`, the run completes fully unattended with no park, unlike the old verify-election design which always parked here); **D** (night-mode, seeded concern → parked at Gate 1, unchanged); **E** (stale gate from a prior workflow version auto-skipped on resume); **F** (a non-`PASS` `verify-report.json` outcome fails `verify` via `outcomeGate` and blocks `pr` — proven end-to-end through the real `startRun`/`resumeRun`/`runDag` path, with `resumeRun`'s intentional `process.exit(1)` on a failed run temporarily intercepted so the in-process smoke script can inspect the resulting `state.json` instead of dying with it); **G** (added by the structural-upgrades change — `noPlaceholders`: `define`'s `guide.md` contains an unresolved `TODO`, manually approved at Gate 1 via `resumeRun`'s `--approve` path, and the mechanical scan fails the node on the gate-approve transition itself — not `runDag`'s done-branch, since a gated node never reaches `done` there — blocking `implement` and failing the run); **H** (the same `noPlaceholders` proof through the OTHER gate-approve site — `startRun`'s night-mode auto-approve loop, using a placeholder-laden `guide.md` with no "Concerns / plan challenges" heading so it auto-approves rather than parking; needed a new `startRunCapturingExit` smoke helper mirroring `resumeRunCapturingExit` since `startRun`'s own night-mode loop also calls `process.exit(1)` on a failed run). G and H together are the load-bearing proof that `checkNoPlaceholders` is wired at BOTH places a gated node's status actually flips to `done`, not just where the analogous `checkOutcomeGate` happens to already live. Does NOT assert model output quality or exact session IDs. `npm run smoke:mock` chains four scripts: `smoke-mock.ts` (above) `&& smoke-gates.ts` (companion-gate routing/authorization on bugfix, §3g) `&& smoke-gates-feature.ts` (added v0.1.64: the same companion-gate path — define/fix/pr gates, the fix-gate verify decision, amend-at-pr-targets-fix, and the publication-timing proof that approving fix no longer auto-publishes — exercised end to end on `featureWorkflow`; a separate file from `smoke-gates.ts` because that one hardcodes `bugfixWorkflow`/`"reproduce"` throughout, while the docker-teardown/detach/session-recovery mechanics it also proves are workflow-agnostic and already generic) `&& smoke-ui.ts` (`dagrun ui`'s HTTP surface: drives two mock bugfix runs into a temp home, hits every JSON/SSE endpoint (gate card present only for the paused run, feed history, the initial `snapshot` + `feed` SSE frames) and the static page shell against the real server, and asserts neither run directory changed at all). The live-update behaviour itself is proven by `src/ui/server.test.ts` (SSE client connects, THEN transcript/events/state are appended) and, in a real browser, by the manual CDP pass recorded in DECISIONS.md § ui-mockup-port-and-live-tail.
 
 **smoke:live** (`test/smoke/smoke.ts`) runs the real 8-step pipeline with the SDK — requires `ANTHROPIC_API_KEY`, ~35 min. Proves API auth, real session-resume, structured output from live model, worktree diff. Run when node prompts change (`payload/commands/*.md`) or when `sdk-runner.ts` changes. A bad prompt that passes mock but breaks model behaviour won't surface until the next smoke:live — that is the accepted tradeoff. **Reflection wiring (step 6):** smoke seeds a known `reflections.md` into `pr/` before the resume call so the SessionEnd hook has a deterministic file to capture — this proves hook wiring + env propagation in a real session without gating on spontaneous model output. The hook logic is separately proven by the unit test (`src/hooks/session-end.test.ts`).
 
@@ -1058,7 +1093,7 @@ value didn't disappear, only the reason to gate on it did.
 | **2b** | verify-election + verify (doc-only; cluster automation REMOVED, see §9) + Gate 3; pr node (terminal); pure-capture reflection via dagrun reflect-append; rerun command; PR post-process outside sandbox.                                                                                                                      | ✅ DONE            | 2a complete |
 | **3**  | Three interactive siblings, in order: (1) /seed-data [c8ctl, assumes human-started OC], (2) ci-babysit, (3) pr-triage. All local, human-driven.                                                                                                                                                                               | ✅ DONE            | —           |
 | **5**  | Bug fix workflow (`dagrun start bugfix`). New `reproduce` node (Gate 1: confirms bug is real, validates root cause); shorter pipeline — no verify node (regression test runs in implement/fix). `base_branch` from plan YAML frontmatter (hotfix branch support). Severity-aware night-mode (critical/blocker always pauses). | ✅ DONE            | —           |
-| **6**  | Live `dagrun ui` (Node-http + SSE + vanilla HTML, localhost-only, scrubbed)                                                                                                                                                                                                                                                   | someday            | —           |
+| **6**  | Live `dagrun ui` (Node-http + SSE + vanilla HTML, localhost-only, scrubbed)                                                                                                                                                                                                                                                   | shipped (§3g)      | —           |
 
 Key insight: Phases 1, 2, 3, and 5 are complete. Phase 6 remains future work.
 

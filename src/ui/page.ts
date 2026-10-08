@@ -2,411 +2,244 @@
  * page.ts — the single self-contained HTML page `dagrun ui` serves.
  *
  * Pure string templating (CLAUDE.md: "vanilla HTML string-templating, no
- * React/Vite/Tailwind/build step"). Takes already-computed view data (all fs
- * reads and artifact rendering happen in server.ts) so this module is a pure
- * function of its input and unit-testable without a filesystem or an HTTP
- * server. CSS and JS are inlined directly into the document — deliberately
- * NOT split into separate static files, since that would need a dist-copy
- * build step this project's "no build step" rule forbids (DECISIONS.md
- * § agent-driven-slice3-ui); the brief's "inline or same-origin" constraint
- * explicitly allows this.
+ * React/Vite/Tailwind/build step"): a STATIC shell + inline CSS + inline client
+ * script. Nothing is loaded from the network (system fonts only), and CSS/JS
+ * are deliberately NOT separate static files — that would need a dist-copy
+ * build step the "no build step" rule forbids.
  *
- * Progressive, not JS-required: every node row is a native `<details>` (no JS
- * needed to expand/collapse) and artifact content is rendered server-side, so
- * a no-JS page load already shows the real timeline. The inline `<script>`
- * only adds: an SSE-driven live event tail, a ticking elapsed-time readout,
- * theme toggle persistence, and a "copy gate show command" button.
+ * Client-rendered: the shell has empty mount points; `client-core.ts` (pure,
+ * unit-tested renderers) and `client-app.ts` (fetch/EventSource/DOM) fill them
+ * from the JSON endpoints and keep them live. This is the design of the
+ * approved mockup (direction 2, "timeline") and deliberately REVERSES the
+ * earlier "no-JS-safe, server-rendered timeline" decision — see DECISIONS.md
+ * § ui-mockup-port-and-live-tail. Without JS the page shows only a notice that
+ * points at `dagrun status <run> --json`.
  */
 
-import { escapeHtml } from "./render.js";
-import type { RunListEntry } from "./discover.js";
-import type { RunSnapshot } from "./run-snapshot.js";
-import type { GateHistoryEntry } from "../core/state.js";
+import { CORE_JS } from "./client-core.js";
+import { APP_JS } from "./client-app.js";
 
-export type NodeArtifactView = {
-  path: string;
-  name: string;
-  registered: boolean;
-  size: number | null;
-  mtime: string | null;
-  /** Already-rendered HTML (see render.ts), or a "not previewed" note — never raw untrusted markup. */
-  html: string;
-};
-
-export type NodeView = {
-  id: string;
-  status: string;
-  iteration: number;
-  durationMs: number | null;
-  cost: number;
-  startedAt: string | null;
-  endedAt: string | null;
-  artifacts: NodeArtifactView[];
-  gateHistory: GateHistoryEntry[];
-};
-
-export type PageData = {
-  runs: RunListEntry[];
-  selectedRunId: string | null;
-  /** Set when selectedRunId was given but failed to load (bad id, corrupt state, etc). */
-  selectedError: string | null;
-  run: RunSnapshot | null;
-  nodeViews: NodeView[];
-};
-
-const STATUS_META: Record<
-  string,
-  { icon: string; label: string; cls: string }
-> = {
-  pending: { icon: "○", label: "pending", cls: "pending" },
-  running: { icon: "◐", label: "running", cls: "running" },
-  done: { icon: "✓", label: "done", cls: "done" },
-  skipped: { icon: "⊘", label: "skipped", cls: "skipped" },
-  failed: { icon: "✗", label: "failed", cls: "failed" },
-  "awaiting-gate": { icon: "⏸", label: "awaiting decision", cls: "awaiting" },
-};
-
-function statusMeta(status: string): {
-  icon: string;
-  label: string;
-  cls: string;
-} {
-  return STATUS_META[status] ?? { icon: "?", label: status, cls: "unknown" };
+export const CSS = `
+:root{
+  --bg:#f6f7f9;--surface:#ffffff;--surface-2:#eef0f4;--ink:#1a1d24;--muted:#5b6270;--line:#dfe2e8;--spine:#cfd4dc;
+  --accent:#3b4ba8;--accent-soft:#e8eafa;--code-bg:#f0f1f5;--focus:#3b4ba8;
+  --st-done:#257547;--st-running:#2458c6;--st-gate:#9c4a05;--st-failed:#b3261e;--st-skipped:#5c616a;--st-pending:#5f6570;
+  --gate-bg:#fff6ea;--gate-line:#efc68f;
+  --term-bg:#1c1f2a;--term-ink:#dfe3ee;--term-muted:#8990a3;--term-accent:#aab5f5;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
 }
-
-function fmtMs(ms: number | null): string {
-  if (ms === null) return "—";
-  if (ms < 1000) return `${ms}ms`;
-  const s = ms / 1000;
-  if (s < 60) return `${s.toFixed(1)}s`;
-  return `${Math.floor(s / 60)}m${Math.round(s % 60)}s`;
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  color-scheme:dark;--bg:#121419;--surface:#1a1d24;--surface-2:#20242d;--ink:#e6e8ee;--muted:#9aa1ae;--line:#2c313b;--spine:#353b47;
+  --accent:#9eabf2;--accent-soft:#252a45;--code-bg:#232733;--focus:#9eabf2;
+  --st-done:#63c98f;--st-running:#7fa8ff;--st-gate:#f0a650;--st-failed:#f07b72;--st-skipped:#949aa5;--st-pending:#959cab;
+  --gate-bg:#2a2012;--gate-line:#634419;--term-bg:#0d0f14;
+}}
+:root[data-theme="dark"]{
+  color-scheme:dark;--bg:#121419;--surface:#1a1d24;--surface-2:#20242d;--ink:#e6e8ee;--muted:#9aa1ae;--line:#2c313b;--spine:#353b47;
+  --accent:#9eabf2;--accent-soft:#252a45;--code-bg:#232733;--focus:#9eabf2;
+  --st-done:#63c98f;--st-running:#7fa8ff;--st-gate:#f0a650;--st-failed:#f07b72;--st-skipped:#949aa5;--st-pending:#959cab;
+  --gate-bg:#2a2012;--gate-line:#634419;--term-bg:#0d0f14;
 }
-
-function fmtCost(usd: number): string {
-  return `$${usd.toFixed(4)}`;
-}
-
-function railHtml(runs: RunListEntry[], selectedRunId: string | null): string {
-  const items = runs
-    .map((r) => {
-      if (r.error !== undefined) {
-        return `<li class="run-entry run-error"><span class="run-id">${escapeHtml(r.runId)}</span><span class="run-error-msg">${escapeHtml(r.error)}</span></li>`;
-      }
-      const cls =
-        r.runId === selectedRunId ? "run-entry selected" : "run-entry";
-      return (
-        `<li class="${cls}"><a href="/?run=${encodeURIComponent(r.runId)}">` +
-        `<span class="run-id">${escapeHtml(r.runId)}</span>` +
-        `<span class="run-workflow">${escapeHtml(r.workflow)}</span>` +
-        `<span class="run-status status-${escapeHtml(statusMeta(r.status).cls)}">${statusMeta(r.status).icon} ${escapeHtml(r.status)}</span>` +
-        `<span class="run-updated">${escapeHtml(r.updatedAt)}</span>` +
-        `</a></li>`
-      );
-    })
-    .join("\n");
-  return (
-    `<details id="rail" open>` +
-    `<summary>Runs (${runs.length})</summary>` +
-    `<nav aria-label="Run list"><ul class="run-list">${items || '<li class="run-empty">No runs found.</li>'}</ul></nav>` +
-    `</details>`
-  );
-}
-
-function kpiHtml(run: RunSnapshot): string {
-  const meta = statusMeta(run.status);
-  const current =
-    run.currentNodes.length > 0
-      ? run.currentNodes.join(", ")
-      : (run.awaitingGate?.nodeId ?? "—");
-  return (
-    `<section class="kpi-strip" aria-label="Run summary">` +
-    `<div class="kpi"><span class="kpi-label">Run</span><span class="kpi-value">${escapeHtml(run.runId)}</span></div>` +
-    `<div class="kpi"><span class="kpi-label">Workflow</span><span class="kpi-value">${escapeHtml(run.workflow)}</span></div>` +
-    `<div class="kpi"><span class="kpi-label">Status</span><span class="kpi-value status-${escapeHtml(meta.cls)}">${meta.icon} ${escapeHtml(meta.label)}${run.stale ? " (stale)" : ""}</span></div>` +
-    `<div class="kpi"><span class="kpi-label">Elapsed</span><span class="kpi-value" data-elapsed data-created-at="${escapeHtml(run.createdAt)}" data-run-status="${escapeHtml(run.status)}">—</span></div>` +
-    `<div class="kpi"><span class="kpi-label">Total cost</span><span class="kpi-value">${fmtCost(run.totalCost)}</span></div>` +
-    `<div class="kpi"><span class="kpi-label">Current node</span><span class="kpi-value">${escapeHtml(current)}</span></div>` +
-    `</section>`
-  );
-}
-
-function decisionHistoryHtml(history: GateHistoryEntry[]): string {
-  if (history.length === 0)
-    return `<p class="muted">No decisions recorded yet.</p>`;
-  const rows = history
-    .map(
-      (h) =>
-        `<li><code>${escapeHtml(h.decisionId ?? "(legacy, no id)")}</code> — ` +
-        `${escapeHtml(h.action ?? h.decision)}${h.target !== undefined ? ` → ${escapeHtml(h.target)}` : ""} ` +
-        `at ${escapeHtml(h.timestamp)}${h.mode === "night" ? " (night-mode auto)" : ""}` +
-        `${h.comment !== undefined && h.comment !== "" ? `<br><span class="muted">${escapeHtml(h.comment)}</span>` : ""}</li>`,
-    )
-    .join("\n");
-  return `<ul class="decision-history">${rows}</ul>`;
-}
-
-function gateBannerHtml(run: RunSnapshot): string {
-  const ag = run.awaitingGate;
-  if (ag === null) return "";
-  const brief = run.gateBrief;
-  const copyCmd = `dagrun gate show ${run.runId}`;
-  const actions = brief?.pendingDecision.actions ?? [
-    "approve",
-    "amend",
-    "hold",
-  ];
-  const companionSessionId =
-    brief?.companion.sessionId ?? run.companion?.sessionId ?? null;
-  const resumeHint = brief?.companion.resumeHint;
-  const history = run.nodes[ag.nodeId]?.gateHistory ?? [];
-  return (
-    `<section class="gate-banner" aria-label="Gate awaiting decision" role="status">` +
-    `<h2>⏸ Awaiting decision — gate "${escapeHtml(ag.nodeId)}"</h2>` +
-    `<p>${escapeHtml(ag.reason)}</p>` +
-    `<dl class="gate-facts">` +
-    `<dt>Revision</dt><dd>${brief !== null ? `<code>${escapeHtml(brief.revision)}</code>` : `<em>not opened yet — run <code>${escapeHtml(copyCmd)}</code></em>`}</dd>` +
-    `<dt>Opened</dt><dd>${escapeHtml(brief?.openedAt ?? ag.since ?? "unknown")}</dd>` +
-    `<dt>Allowed actions</dt><dd>${actions.map(escapeHtml).join(", ")}</dd>` +
-    `<dt>Owning companion</dt><dd>${companionSessionId !== null ? `<code>${escapeHtml(companionSessionId)}</code>` : "none recorded"}${resumeHint !== undefined ? `<br><code class="resume-hint">${escapeHtml(resumeHint)}</code>` : ""}</dd>` +
-    `</dl>` +
-    `<h3>Decision history</h3>` +
-    decisionHistoryHtml(history) +
-    `<p class="gate-readonly-note"><strong>Read-only.</strong> Decisions happen in the companion conversation, not here — this viewer has no decide/approve control.</p>` +
-    `<p class="copy-row"><code id="gate-show-cmd">${escapeHtml(copyCmd)}</code> ` +
-    `<button type="button" data-copy-target="gate-show-cmd" class="copy-btn">Copy command</button></p>` +
-    `</section>`
-  );
-}
-
-function artifactHtml(a: NodeArtifactView): string {
-  return (
-    `<div class="artifact">` +
-    `<h4>${escapeHtml(a.name)} ${a.registered ? '<span class="badge badge-registered">registered</span>' : '<span class="badge badge-extra">extra</span>'}` +
-    `<span class="artifact-meta">${a.size !== null ? `${a.size}B` : ""} ${a.mtime !== null ? escapeHtml(a.mtime) : ""}</span></h4>` +
-    `<div class="artifact-content">${a.html}</div>` +
-    `</div>`
-  );
-}
-
-function nodeRowHtml(n: NodeView, expanded: boolean, runId: string): string {
-  const meta = statusMeta(n.status);
-  const artifacts =
-    n.artifacts.length > 0
-      ? n.artifacts.map(artifactHtml).join("\n")
-      : `<p class="muted">No artifacts yet.</p>`;
-  return (
-    `<details class="node-row status-${escapeHtml(meta.cls)}"${expanded ? " open" : ""} data-node="${escapeHtml(n.id)}">` +
-    `<summary>` +
-    `<span class="status-icon" aria-hidden="true">${meta.icon}</span>` +
-    `<span class="status-label">${escapeHtml(meta.label)}</span>` +
-    `<span class="node-id">${escapeHtml(n.id)}</span>` +
-    `<span class="node-meta">iter ${n.iteration} · ${fmtMs(n.durationMs)} · ${fmtCost(n.cost)}</span>` +
-    `</summary>` +
-    `<div class="node-body">` +
-    `<div class="artifact-list">${artifacts}</div>` +
-    (n.gateHistory.length > 0
-      ? `<div class="node-gate-history"><h4>Gate history</h4>${decisionHistoryHtml(n.gateHistory)}</div>`
-      : "") +
-    `<div class="live-tail" data-live-tail-for="${escapeHtml(n.id)}">` +
-    `<h4>Live output</h4>` +
-    `<pre class="tail-content" data-tail-content>(no live events yet)</pre>` +
-    `<noscript>Live output requires JavaScript. Poll instead: <code>dagrun status ${escapeHtml(runId)} --json</code></noscript>` +
-    `</div>` +
-    `</div>` +
-    `</details>`
-  );
-}
-
-function timelineHtml(run: RunSnapshot, nodeViews: NodeView[]): string {
-  const rows = nodeViews
-    .map((n) =>
-      nodeRowHtml(
-        n,
-        n.status === "running" || n.status === "awaiting-gate",
-        run.runId,
-      ),
-    )
-    .join("\n");
-  return `<section class="timeline" aria-label="Node timeline">${rows}</section>`;
-}
-
-const CSS = `
-:root {
-  color-scheme: light dark;
-  --bg: #f7f7f9; --fg: #1b1d23; --panel: #ffffff; --border: #d8dae0; --muted: #6b7280;
-  --pending: #9aa1ab; --running: #2563eb; --done: #16a34a; --skipped: #9333ea;
-  --failed: #dc2626; --awaiting: #d97706; --link: #2563eb; --add: #16a34a; --del: #dc2626;
-}
-@media (prefers-color-scheme: dark) {
-  :root { --bg: #14161a; --fg: #e6e7ea; --panel: #1c1f26; --border: #33363f; --muted: #9aa1ab; }
-}
-:root[data-theme="dark"] { --bg: #14161a; --fg: #e6e7ea; --panel: #1c1f26; --border: #33363f; --muted: #9aa1ab; }
-:root[data-theme="light"] { --bg: #f7f7f9; --fg: #1b1d23; --panel: #ffffff; --border: #d8dae0; --muted: #6b7280; }
-* { box-sizing: border-box; }
-body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--fg); }
-a { color: var(--link); }
-.layout { display: flex; min-height: 100vh; }
-#rail { width: 280px; flex: none; border-right: 1px solid var(--border); background: var(--panel); }
-#rail > summary { padding: 0.75rem 1rem; font-weight: 600; cursor: pointer; }
-.run-list { list-style: none; margin: 0; padding: 0 0.5rem 1rem; }
-.run-entry a { display: block; padding: 0.5rem; border-radius: 6px; text-decoration: none; color: inherit; }
-.run-entry.selected a { background: var(--border); }
-.run-entry { display: block; font-size: 0.85rem; }
-.run-entry a > span { display: block; }
-.run-id { font-weight: 600; }
-.run-workflow, .run-updated { color: var(--muted); font-size: 0.75rem; }
-.run-error { color: var(--failed); padding: 0.5rem; }
-main { flex: 1; padding: 1rem 1.5rem 3rem; max-width: 980px; }
-.kpi-strip { display: flex; flex-wrap: wrap; gap: 1.25rem; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
-.kpi { display: flex; flex-direction: column; }
-.kpi-label { font-size: 0.7rem; text-transform: uppercase; color: var(--muted); }
-.kpi-value { font-size: 1.05rem; font-weight: 600; }
-.status-pending { color: var(--pending); } .status-running { color: var(--running); }
-.status-done { color: var(--done); } .status-skipped { color: var(--skipped); }
-.status-failed { color: var(--failed); } .status-awaiting { color: var(--awaiting); }
-.gate-banner { border: 2px solid var(--awaiting); border-radius: 8px; padding: 1rem; margin-bottom: 1.25rem; background: var(--panel); }
-.gate-banner h2 { margin-top: 0; color: var(--awaiting); }
-.gate-facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 0.75rem; }
-.gate-facts dt { color: var(--muted); }
-.gate-readonly-note { font-size: 0.9rem; }
-.copy-row code { padding: 0.15rem 0.4rem; background: var(--bg); border-radius: 4px; }
-.copy-btn { margin-left: 0.5rem; cursor: pointer; }
-.node-row { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.6rem; background: var(--panel); }
-.node-row > summary { display: flex; align-items: center; gap: 0.6rem; padding: 0.6rem 0.9rem; cursor: pointer; list-style: none; }
-.node-row > summary::-webkit-details-marker { display: none; }
-.node-id { font-weight: 600; }
-.node-meta { color: var(--muted); font-size: 0.85rem; margin-left: auto; }
-.node-body { padding: 0 0.9rem 0.9rem; }
-.artifact { border-top: 1px solid var(--border); padding: 0.6rem 0; }
-.artifact h4 { display: flex; align-items: center; gap: 0.5rem; margin: 0 0 0.4rem; font-size: 0.9rem; }
-.artifact-meta { color: var(--muted); font-size: 0.75rem; margin-left: auto; }
-.badge { font-size: 0.65rem; padding: 0.1rem 0.4rem; border-radius: 4px; background: var(--border); }
-.artifact-content pre { overflow-x: auto; padding: 0.6rem; background: var(--bg); border-radius: 6px; }
-.diff-add { color: var(--add); } .diff-del { color: var(--del); }
-.diff-file, .diff-hunk { color: var(--running); } .diff-meta { color: var(--muted); }
-.live-tail { border-top: 1px dashed var(--border); margin-top: 0.6rem; padding-top: 0.6rem; }
-.tail-content { max-height: 160px; overflow-y: auto; background: var(--bg); padding: 0.5rem; border-radius: 6px; font-size: 0.8rem; }
-.muted { color: var(--muted); }
-.decision-history { padding-left: 1.1rem; }
-#theme-toggle { position: fixed; top: 0.6rem; right: 0.8rem; cursor: pointer; }
-@media (max-width: 760px) {
-  .layout { flex-direction: column; }
-  #rail { width: 100%; border-right: none; border-bottom: 1px solid var(--border); }
-  main { max-width: 100%; }
-}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--sans)}
+button,select{font:inherit;color:inherit}
+code{font-family:var(--mono)}
+a{color:var(--accent)}
+/* shared content styles */
+.st{display:inline-flex;align-items:center;gap:.4em;font-weight:600;font-size:.8125rem;line-height:1;white-space:nowrap}
+.st--done{color:var(--st-done)}.st--running{color:var(--st-running)}.st--awaiting-gate{color:var(--st-gate)}
+.st--failed{color:var(--st-failed)}.st--skipped{color:var(--st-skipped)}.st--pending{color:var(--st-pending)}
+.st-ico{flex:none;--ico-on:var(--surface)}
+.st-ico .spin{transform-origin:8px 8px;animation:dr-spin 1.1s linear infinite}
+@keyframes dr-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.st-ico .spin,.pulse{animation:none!important}}
+.md{font-size:.875rem;line-height:1.6;color:var(--ink);max-width:72ch}
+.md h1,.md h2,.md h3,.md h4,.md h5,.md h6{font-size:1rem;line-height:1.3;margin:1.2em 0 .4em;text-wrap:balance}
+.md h1,.md h2{font-size:1.0625rem}.md>:first-child{margin-top:0}
+.md p{margin:.5em 0}.md ul,.md ol{margin:.4em 0;padding-left:1.3em}.md li{margin:.2em 0}
+.md code,.inline-code{font-family:var(--mono);font-size:.8em;background:var(--code-bg);padding:.1em .35em;border-radius:4px;overflow-wrap:anywhere}
+.md pre,.json,.text{font-family:var(--mono);font-size:.78rem;line-height:1.55;background:var(--code-bg);color:var(--ink);padding:.8em 1em;border-radius:6px;overflow-x:auto;white-space:pre;margin:.6em 0}
+.md pre code{background:none;padding:0;font-size:inherit}
+.md blockquote{margin:.6em 0;padding-left:.9em;border-left:3px solid var(--line);color:var(--muted)}
+.md-table{overflow-x:auto}.md table{border-collapse:collapse;font-size:.8125rem}.md th,.md td{border:1px solid var(--line);padding:.35em .6em;text-align:left;vertical-align:top}
+.md a{color:var(--accent)}
+.json code{background:none;padding:0}
+.j-key{color:var(--accent)}.j-str{color:var(--st-done)}.j-num{color:var(--st-gate)}
+.placeholder{font-size:.8125rem;color:var(--muted);border:1px dashed var(--line);border-radius:6px;padding:.75em 1em;line-height:1.5}
+.tail{list-style:none;margin:0;padding:.6em 0;font-family:var(--mono);font-size:.75rem;line-height:1.5;background:var(--term-bg);color:var(--term-ink);border-radius:6px;max-height:22rem;overflow:auto}
+.tail li{display:grid;grid-template-columns:5.5em 4.6em 1fr;gap:.6em;padding:.1em .9em}
+.tail time{color:var(--term-muted)}.tail b{font-weight:600;color:var(--term-accent);overflow:hidden;text-overflow:ellipsis}
+.tail .tail-text span{color:var(--term-ink);font-style:italic}.tail span{overflow-wrap:anywhere}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.muted{color:var(--muted)}
+.err{color:var(--st-failed)}
+.decisions{list-style:none;margin:0;padding:0;display:grid;gap:.6rem}
+.dec{border:1px solid var(--line);border-radius:6px;padding:.6rem .75rem;background:var(--surface)}
+.dec-head{display:flex;flex-wrap:wrap;gap:.3rem .7rem;align-items:baseline;font-size:.8125rem}
+.dec-head time{margin-left:auto;color:var(--muted);font-variant-numeric:tabular-nums}
+.dec-action{font-weight:700;text-transform:uppercase;letter-spacing:.05em;font-size:.6875rem;padding:.15em .5em;border-radius:3px;border:1px solid currentColor}
+.dec--approve .dec-action{color:var(--st-done)}.dec--amend .dec-action,.dec--reject .dec-action{color:var(--st-gate)}.dec--hold .dec-action{color:var(--muted)}
+.dec-meta{display:grid;gap:.15rem;margin:.45rem 0 0;font-size:.75rem}
+.dec-meta div{display:grid;grid-template-columns:5.5em 1fr;gap:.5em}.dec-meta dt{color:var(--muted)}.dec-meta dd{margin:0;overflow-wrap:anywhere}
+.dec-meta code{font-family:var(--mono)}
+.dec-comment{margin-top:.4rem;font-size:.8125rem}.dec-comment summary{cursor:pointer;color:var(--accent)}.dec-comment p{margin:.4rem 0 0;line-height:1.55;max-width:70ch;white-space:pre-wrap}
+[hidden]{display:none!important}
+.decides{font-size:.8125rem;line-height:1.5}
+.diff{font-family:var(--mono);font-size:.74rem;line-height:1.5;background:var(--code-bg);border-radius:6px;padding:.6em 0;overflow-x:auto;margin:.4em 0;max-height:28rem}
+.diff code{background:none}
+.diff .dl{display:block;padding:0 .9em 0 0;white-space:pre}
+.diff .dg{display:inline-block;width:1.8em;text-align:center;color:var(--muted);user-select:none}
+.diff .dl-add{background:color-mix(in srgb,var(--st-done) 14%,transparent)}.diff .dl-add .dg{color:var(--st-done);font-weight:700}
+.diff .dl-del{background:color-mix(in srgb,var(--st-failed) 14%,transparent)}.diff .dl-del .dg{color:var(--st-failed);font-weight:700}
+.diff .dl-hunk{color:var(--accent)}.diff .dl-meta{color:var(--muted);font-weight:600}
+/* page */
+.wrap{max-width:84rem;margin:0 auto;padding-inline:clamp(16px,3vw,40px);padding-block:0 6rem}
+.bar{display:flex;align-items:center;gap:.75rem 1.25rem;flex-wrap:wrap;padding-block:1rem}
+.logo{font-weight:700;letter-spacing:-.01em}.logo span{color:var(--muted);font-weight:500}
+.bar .spacer{flex:1}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:.35rem .85rem;cursor:pointer;font-size:.8125rem}
+.btn:hover{border-color:var(--muted)}
+.watch{font-size:.8125rem;color:var(--muted);display:inline-flex;align-items:center;gap:.4rem}
+.watch i{width:.45rem;height:.45rem;border-radius:50%;background:var(--st-skipped)}
+.watch.live i{background:var(--st-done)}.watch.wait i{background:var(--st-gate)}.watch.bad i{background:var(--st-failed)}
+.watch.live i{animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.35}}
+.noscript{margin:1rem 0;padding:.8rem 1rem;border:1px solid var(--gate-line);background:var(--gate-bg);border-radius:8px}
+/* runs row */
+.runs{display:flex;gap:.5rem;overflow-x:auto;padding-bottom:.4rem;margin-bottom:1.5rem;scrollbar-width:thin}
+.runcard{flex:none;display:grid;gap:.25rem;min-width:9.5rem;text-align:left;border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:.5rem .65rem;cursor:pointer;text-decoration:none;color:inherit}
+.runcard[aria-current="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.runcard .rid{font-family:var(--mono);font-size:.78rem;font-weight:600}
+.runcard .rm{font-size:.72rem;color:var(--muted);display:flex;gap:.4rem;align-items:center}
+.runs-h{font-size:.72rem;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin:0 0 .45rem}
+/* hero */
+.hero{display:grid;gap:.6rem;margin-bottom:1.5rem;min-height:5rem}
+.eyebrow{font-size:.8125rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.3rem .8rem}
+.eyebrow code{font-size:.78rem}
+h1{font-family:var(--serif);font-weight:600;font-size:clamp(1.5rem,2.4vw,2.1rem);line-height:1.2;margin:0;text-wrap:balance;max-width:52ch;letter-spacing:-.005em;overflow-wrap:anywhere}
+.meta{display:flex;flex-wrap:wrap;gap:.5rem 1.6rem;font-size:.875rem;align-items:center}
+.meta b{font-variant-numeric:tabular-nums}
+.meta .lab{color:var(--muted);margin-right:.35rem}
+.run-st{font-size:.9rem}
+/* gate letter */
+.gate{background:var(--gate-bg);border:1px solid var(--gate-line);border-radius:14px;padding:1.25rem 1.4rem;margin-bottom:2rem;display:grid;gap:1rem;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr)}
+.gate h2{font-family:var(--serif);font-size:1.4rem;font-weight:600;margin:0 0 .4rem;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
+.gate h2 .st-ico{color:var(--st-gate)}
+.gate p{margin:.35rem 0;max-width:62ch}
+.gate .who{font-size:.875rem}
+.cmdrow{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.8rem}
+.cmd{font-family:var(--mono);font-size:.8125rem;background:var(--surface);border:1px solid var(--gate-line);border-radius:6px;padding:.3rem .6rem}
+.gfacts{display:grid;gap:.55rem;margin:0;font-size:.875rem;align-content:start}
+.gfacts div{display:grid;grid-template-columns:8.5rem 1fr;gap:.6rem}
+.gfacts dt{color:var(--muted)}.gfacts dd{margin:0;overflow-wrap:anywhere}
+.flow{display:flex;flex-wrap:wrap;gap:.25rem .35rem;align-items:center}
+.flow span{font-family:var(--mono);font-size:.78rem}
+.flow i{color:var(--muted);font-style:normal;font-size:.75rem}
+.gate details{grid-column:1/-1;border-top:1px solid var(--gate-line);padding-top:.7rem}
+.gate summary{cursor:pointer;font-weight:600;font-size:.875rem}
+.gate .decisions{margin-top:.6rem}
+/* columns */
+.cols{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(18rem,1fr);gap:2.5rem;align-items:start}
+.cols>section:last-child{position:sticky;top:1rem}
+.col-h{font-size:.72rem;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin:0 0 .8rem;display:flex;align-items:center;gap:.6rem}
+.col-h .fill{flex:1;height:1px;background:var(--line)}
+/* pipeline */
+.pipe{list-style:none;margin:0;padding:0;position:relative}
+.step{position:relative;padding-left:3rem;padding-bottom:.9rem}
+.step::before{content:"";position:absolute;left:1rem;top:1.9rem;bottom:-.1rem;width:2px;background:var(--spine)}
+.step:last-child::before{display:none}
+.step.done::before{background:var(--st-done)}
+.step.skipped::before{background:repeating-linear-gradient(var(--spine) 0 4px,transparent 4px 8px)}
+.marker{position:absolute;left:.25rem;top:.55rem;width:1.6rem;height:1.6rem;border-radius:50%;background:var(--bg);display:grid;place-items:center}
+.marker .st-ico{width:1.3rem;height:1.3rem}
+.row{border:1px solid var(--line);background:var(--surface);border-radius:10px}
+.step.running .row{border-color:var(--st-running);box-shadow:0 0 0 1px var(--st-running)}
+.step.awaiting-gate .row{border-color:var(--st-gate);box-shadow:0 0 0 1px var(--st-gate)}
+.step.skipped .row,.step.pending .row{background:transparent;border-style:dashed}
+.rowbtn{all:unset;box-sizing:border-box;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.2rem 1rem;width:100%;padding:.7rem 1rem;cursor:pointer;border-radius:10px}
+.rowbtn:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.nname{font-family:var(--serif);font-size:1.2rem;font-weight:600;display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap}
+.step.pending .nname,.step.skipped .nname{color:var(--muted)}
+.nmeta{grid-column:1;font-size:.8125rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.2rem .9rem;font-variant-numeric:tabular-nums}
+.nside{grid-row:1/3;grid-column:2;display:flex;flex-direction:column;align-items:flex-end;gap:.3rem;justify-content:center}
+.chev{color:var(--muted);transition:transform .15s}
+.rowbtn[aria-expanded="true"] .chev{transform:rotate(90deg)}
+.badge{font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;font-weight:700;color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:.05rem .4rem;font-family:var(--sans)}
+.badge--gate{color:var(--st-gate);border-color:currentColor}
+.detail{border-top:1px solid var(--line);padding:.9rem 1rem 1rem}
+.detail [role=tabpanel]{max-height:34rem;overflow:auto}
+.tabs{display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.9rem}
+.tab{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:.25rem .75rem;font-size:.8125rem;cursor:pointer;color:var(--muted)}
+.tab[aria-selected="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--ink);font-weight:600}
+.files{display:flex;flex-wrap:wrap;gap:.3rem;margin-bottom:.8rem}
+.file{font-family:var(--mono);font-size:.75rem;border:0;background:var(--surface-2);border-radius:4px;padding:.25rem .55rem;cursor:pointer;color:var(--ink)}
+.file[aria-pressed="true"]{background:var(--accent);color:var(--surface)}
+.file.expected{background:transparent;outline:1px dashed var(--line);color:var(--muted)}
+.file.bk{color:var(--muted)}
+.kv{display:grid;grid-template-columns:8rem 1fr;gap:.35rem .8rem;font-size:.8125rem;margin:0}
+.kv dt{color:var(--muted)}.kv dd{margin:0;overflow-wrap:anywhere}
+.note{font-size:.8rem;color:var(--muted);margin:.4rem 0 .7rem}
+.parallel{display:grid;grid-template-columns:1fr 1fr;gap:.6rem}
+.parallel .row{height:100%}
+.par-label{font-size:.72rem;color:var(--muted);margin:0 0 .35rem;letter-spacing:.04em}
+/* feed */
+.feed-tools{display:flex;gap:.6rem;align-items:center;font-size:.8125rem;margin-bottom:.6rem;color:var(--muted);flex-wrap:wrap}
+.feedbox{max-height:calc(100vh - 9rem);overflow:auto;padding-right:.3rem}
+.feed{list-style:none;margin:0;padding:0;font-size:.875rem}
+.day{font-size:.72rem;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);padding:.8rem 0 .3rem;position:sticky;top:0;background:var(--bg)}
+.ev{display:grid;grid-template-columns:3.4rem 1.1rem minmax(0,1fr);gap:.5rem;padding:.45rem 0;border-top:1px solid var(--line);align-items:start}
+.ev time{font-family:var(--mono);font-size:.75rem;color:var(--muted);padding-top:.1rem;font-variant-numeric:tabular-nums}
+.ev .k{font-size:.75rem;line-height:1.4;color:var(--muted);text-align:center}
+.ev-decision .k,.ev-gate .k{color:var(--st-gate)}.ev-start .k{color:var(--st-running)}.ev-session .k{color:var(--st-done)}.ev-fail .k{color:var(--st-failed)}
+.ev .t{overflow-wrap:anywhere}
+.ev-agent .t{color:var(--muted);font-style:italic}
+.ev-tool .t{font-size:.8125rem}
+.ev .tn{font-family:var(--mono);font-size:.75rem;font-weight:600;color:var(--ink)}
+.ev .nt{font-family:var(--mono);font-size:.72rem;color:var(--accent);margin-right:.35rem}
+.ev.new{animation:flash 1.4s ease-out}
+@keyframes flash{from{background:var(--accent-soft)}to{background:transparent}}
+@media (prefers-reduced-motion:reduce){.ev.new,.watch.live i{animation:none}.chev{transition:none}}
+@media (max-width:980px){.cols{grid-template-columns:minmax(0,1fr)}.cols>section:last-child{position:static}.feedbox{max-height:32rem}.gate{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:560px){.parallel{grid-template-columns:1fr}.gfacts div{grid-template-columns:1fr;gap:0}}
 `;
 
-const CLIENT_JS = `
-(function () {
-  var saved = localStorage.getItem('dagrun-ui-theme');
-  if (saved) document.documentElement.setAttribute('data-theme', saved);
-  var toggle = document.getElementById('theme-toggle');
-  if (toggle) {
-    toggle.addEventListener('click', function () {
-      var cur = document.documentElement.getAttribute('data-theme');
-      var next = cur === 'dark' ? 'light' : 'dark';
-      document.documentElement.setAttribute('data-theme', next);
-      localStorage.setItem('dagrun-ui-theme', next);
-    });
-  }
-  document.querySelectorAll('[data-copy-target]').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      var el = document.getElementById(btn.getAttribute('data-copy-target'));
-      if (!el) return;
-      var text = el.textContent || '';
-      var done = function () { btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy command'; }, 1500); };
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(done, done);
-      } else {
-        var ta = document.createElement('textarea');
-        ta.value = text; document.body.appendChild(ta); ta.select();
-        try { document.execCommand('copy'); } catch (e) {}
-        document.body.removeChild(ta); done();
-      }
-    });
-  });
-  var elapsedEl = document.querySelector('[data-elapsed]');
-  if (elapsedEl) {
-    var createdAt = new Date(elapsedEl.getAttribute('data-created-at')).getTime();
-    var runStatus = elapsedEl.getAttribute('data-run-status');
-    var terminal = runStatus === 'done' || runStatus === 'failed' || runStatus === 'aborted';
-    function tick() {
-      var s = Math.max(0, Math.floor((Date.now() - createdAt) / 1000));
-      var m = Math.floor(s / 60), r = s % 60;
-      elapsedEl.textContent = m + 'm' + (r < 10 ? '0' : '') + r + 's';
-    }
-    tick();
-    if (!terminal) setInterval(tick, 1000);
-  }
-  var params = new URLSearchParams(location.search);
-  var runId = params.get('run');
-  if (runId && window.EventSource) {
-    var es = new EventSource('/api/runs/' + encodeURIComponent(runId) + '/stream');
-    es.addEventListener('event', function (ev) {
-      try {
-        var data = JSON.parse(ev.data);
-        var node = data.node;
-        if (node) {
-          var tail = document.querySelector('[data-tail-content][data-live-tail-for="' + node + '"] , [data-live-tail-for="' + node + '"] [data-tail-content]');
-          var region = document.querySelector('[data-live-tail-for="' + node + '"]');
-          var pre = region ? region.querySelector('[data-tail-content]') : null;
-          if (pre) {
-            var line = (data.ts || '') + ' ' + data.type + (data.detail ? ' ' + JSON.stringify(data.detail) : '');
-            var lines = pre.textContent === '(no live events yet)' ? [] : pre.textContent.split('\\n');
-            lines.push(line);
-            if (lines.length > 50) lines = lines.slice(lines.length - 50);
-            pre.textContent = lines.join('\\n');
-          }
-        }
-      } catch (e) {}
-    });
-    es.addEventListener('snapshot', function () {
-      // A change landed — the safest, simplest refresh is a full reload of this page's
-      // data-bearing HTML. Deliberately NOT automatic: a companion-owned decision should
-      // not yank the page out from under someone reading an artifact. Just flag it.
-      var flag = document.getElementById('stale-flag');
-      if (flag) flag.hidden = false;
-    });
-  }
-})();
-`;
-
-export function renderPage(data: PageData): string {
-  const title =
-    data.run !== null
-      ? `dagrun ui — ${escapeHtml(data.run.runId)}`
-      : "dagrun ui";
-  const main =
-    data.run !== null
-      ? kpiHtml(data.run) +
-        gateBannerHtml(data.run) +
-        timelineHtml(data.run, data.nodeViews)
-      : data.selectedError !== null
-        ? `<p class="run-error">Could not load run${data.selectedRunId !== null ? ` "${escapeHtml(data.selectedRunId)}"` : ""}: ${escapeHtml(data.selectedError)}</p>`
-        : `<p class="muted">Select a run from the list to view its timeline.</p>`;
-  const staleFlag =
-    data.run !== null
-      ? `<p id="stale-flag" hidden class="muted">This run has new events — <a href="?run=${encodeURIComponent(data.run.runId)}">reload</a> to see them.</p>`
-      : "";
+export function renderPage(): string {
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(title)}</title>
+<title>dagrun ui</title>
+<meta name="description" content="dagrun ui: live, read-only view of a dagrunner run — pipeline, gate, activity.">
 <style>${CSS}</style>
 </head>
 <body>
-<button id="theme-toggle" type="button" aria-label="Toggle light/dark theme">◐</button>
-<div class="layout">
-${railHtml(data.runs, data.selectedRunId)}
-<main>
-${staleFlag}
-${main}
-</main>
+<div class="wrap">
+  <div class="bar">
+    <span class="logo">dagrun <span>ui</span></span>
+    <span class="watch wait" id="conn" role="status"><i></i><span id="connText">Connecting…</span></span>
+    <span class="spacer"></span>
+    <button class="btn" id="theme" type="button">Theme</button>
+  </div>
+  <noscript><p class="noscript">This viewer needs JavaScript. Without it, read the same data with <code>dagrun status &lt;run&gt; --json</code>.</p></noscript>
+  <section aria-labelledby="runsH"><h2 class="runs-h" id="runsH">Runs</h2><div class="runs" id="runs"></div></section>
+  <header class="hero" id="hero"></header>
+  <section class="gate" id="gate" aria-labelledby="gateH" hidden></section>
+  <div class="cols">
+    <section aria-labelledby="pipeH"><h2 class="col-h" id="pipeH">Pipeline <span class="fill"></span></h2><ol class="pipe" id="pipe"></ol></section>
+    <section aria-labelledby="feedH">
+      <h2 class="col-h" id="feedH">Activity <span class="fill"></span></h2>
+      <div class="feed-tools"><label><input type="checkbox" id="agentMsgs" checked> Agent messages</label><span id="feedCount"></span></div>
+      <div class="feedbox" id="feedbox"><ol class="feed" id="feed" aria-live="polite"></ol></div>
+      <p class="note">Engine events come from events.jsonl; agent messages and tool calls from each node's transcript.log, live while it runs.</p>
+    </section>
+  </div>
 </div>
-<noscript><p style="position:fixed;bottom:0;left:0;right:0;padding:0.4rem 1rem;background:#333;color:#fff;font-size:0.8rem;">JavaScript is off — this page shows a snapshot. Poll <code>dagrun status &lt;run&gt; --json</code> for live updates, or reload.</p></noscript>
-<script>${CLIENT_JS}</script>
+<script>${CORE_JS}</script>
+<script>${APP_JS}</script>
 </body>
 </html>`;
 }

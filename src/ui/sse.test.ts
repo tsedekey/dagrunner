@@ -129,3 +129,60 @@ test("readNewEvents: a shrunk file resets the offset instead of throwing", () =>
   assert.equal(after.length, 1);
   assert.equal(after[0]?.ts, "t0");
 });
+
+import { tailLines } from "./sse.js";
+import { renameSync } from "node:fs";
+
+test("tailLines: generic path tailer returns complete lines with their start byte offsets", () => {
+  const dir = tempRunDir();
+  const file = join(dir, "t.log");
+  writeFileSync(file, "aa\nbbb\nccc"); // 'ccc' is a torn tail
+  const offset: SseOffset = { bytesRead: 0 };
+  const got = tailLines(file, offset);
+  assert.deepEqual(got, [
+    { line: "aa", offset: 0 },
+    { line: "bbb", offset: 3 },
+  ]);
+  assert.equal(offset.bytesRead, 7);
+  appendFileSync(file, "\nd\n");
+  assert.deepEqual(tailLines(file, offset), [
+    { line: "ccc", offset: 7 },
+    { line: "d", offset: 11 },
+  ]);
+});
+
+test("tailLines: multi-byte characters keep byte (not char) offsets exact", () => {
+  const dir = tempRunDir();
+  const file = join(dir, "t.log");
+  writeFileSync(file, "é€\nx\n");
+  const got = tailLines(file, { bytesRead: 0 });
+  assert.deepEqual(got, [
+    { line: "é€", offset: 0 },
+    { line: "x", offset: 6 },
+  ]);
+});
+
+test("tailLines: a missing file is [] and later appearance is read from byte 0", () => {
+  const dir = tempRunDir();
+  const file = join(dir, "later.log");
+  const offset: SseOffset = { bytesRead: 0 };
+  assert.deepEqual(tailLines(file, offset), []);
+  writeFileSync(file, "one\n");
+  assert.deepEqual(tailLines(file, offset), [{ line: "one", offset: 0 }]);
+});
+
+test("tailLines: a replaced file that already grew PAST the old offset resets (inode change), not mid-file", () => {
+  const dir = tempRunDir();
+  const file = join(dir, "transcript.log");
+  writeFileSync(file, "old1\nold2\n");
+  const offset: SseOffset = { bytesRead: 0 };
+  tailLines(file, offset);
+  // `dagrun rerun` archives the live file and a fresh one grows larger before the next poll.
+  renameSync(file, join(dir, "attempt-1.log"));
+  writeFileSync(file, "new-line-one-is-long\nnew-line-two-is-long\nnew3\n");
+  const got = tailLines(file, offset);
+  assert.deepEqual(
+    got.map((l) => l.line),
+    ["new-line-one-is-long", "new-line-two-is-long", "new3"],
+  );
+});

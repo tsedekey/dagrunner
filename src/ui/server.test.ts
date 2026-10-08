@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
@@ -139,9 +139,10 @@ test("startUiServer: /api/runs, /api/runs/:id, / and /?run=<id> all serve, then 
     assert.equal(root.status, 200);
     assert.match(root.body, /<!doctype html>/);
 
+    // Client-rendered: `?run=<id>` serves the same static shell (the run is selected client-side from the URL).
     const withRun = await get(`${handle.url}?run=9-1`);
     assert.equal(withRun.status, 200);
-    assert.match(withRun.body, /9-1/);
+    assert.equal(withRun.body, root.body);
   } finally {
     await handle.close();
   }
@@ -213,4 +214,181 @@ test("startUiServer: never writes to the run directory (read-only, proven by an 
         `${f}:${statSync(join(runDir, f)).mtimeMs}:${statSync(join(runDir, f)).size}`,
     );
   assert.deepEqual(after, before);
+});
+
+// ---------------------------------------------------------------------------
+// LIVE behaviour — these are the tests that fail against the old tail-events-only server.
+// ---------------------------------------------------------------------------
+
+type Frame = { event: string; data: unknown };
+
+/** Minimal SSE client: collects parsed frames; `waitFor` polls them with a deadline. */
+function sseClient(url: string) {
+  const frames: Frame[] = [];
+  let buf = "";
+  const req = http.get(url, (res) => {
+    res.on("data", (c: Buffer) => {
+      buf += c.toString();
+      let i;
+      while ((i = buf.indexOf("\n\n")) !== -1) {
+        const raw = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        const ev = /^event: (.*)$/m.exec(raw)?.[1];
+        const data = /^data: (.*)$/m.exec(raw)?.[1];
+        if (ev !== undefined && data !== undefined) frames.push({ event: ev, data: JSON.parse(data) });
+      }
+    });
+  });
+  req.on("error", () => {});
+  return {
+    frames,
+    close: () => req.destroy(),
+    async waitFor(pred: (f: Frame) => boolean, ms = 4000): Promise<Frame> {
+      const end = Date.now() + ms;
+      for (;;) {
+        const hit = frames.find(pred);
+        if (hit !== undefined) return hit;
+        if (Date.now() > end) throw new Error(`timed out; frames so far: ${JSON.stringify(frames).slice(0, 600)}`);
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    },
+  };
+}
+
+const asstLine = (ts: string, text: string): string =>
+  JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text }] }, timestamp: ts }) + "\n";
+
+type FeedFrameData = { items: Array<{ id: string; text: string; node?: string; kind: string }> };
+const feedHas = (text: string) => (f: Frame): boolean =>
+  f.event === "feed" && (f.data as FeedFrameData).items.some((i) => i.text === text);
+
+test("LIVE: on connect the client gets the current snapshot and feed HISTORY; lines appended to a running node's transcript.log AFTER connect arrive as feed frames", async () => {
+  const home = tempHomeWithRun("9-1");
+  const runDir = join(home, "runs", "9-1");
+  mkdirSync(join(runDir, "implement"), { recursive: true });
+  const tfile = join(runDir, "implement", "transcript.log");
+  writeFileSync(tfile, asstLine("2026-01-01T00:00:01.000Z", "history line"));
+  const handle = await startUiServer({ homeDir: home, port: 0, pollMs: 40 });
+  const c = sseClient(`${handle.url}api/runs/9-1/stream`);
+  try {
+    const snap = await c.waitFor((f) => f.event === "snapshot");
+    assert.equal((snap.data as { runId: string }).runId, "9-1");
+    await c.waitFor(feedHas("history line"));
+
+    appendFileSync(tfile, asstLine("2026-01-01T00:00:02.000Z", "appended after connect"));
+    const live = await c.waitFor(feedHas("appended after connect"));
+    const item = (live.data as FeedFrameData).items.find((i) => i.text === "appended after connect");
+    assert.equal(item?.node, "implement");
+    assert.equal(item?.kind, "text");
+  } finally {
+    c.close();
+    await handle.close();
+  }
+});
+
+test("LIVE: an events.jsonl append and the matching state change push a feed frame AND a fresh snapshot", async () => {
+  const home = tempHomeWithRun("9-1");
+  const runDir = join(home, "runs", "9-1");
+  const handle = await startUiServer({ homeDir: home, port: 0, pollMs: 40 });
+  const c = sseClient(`${handle.url}api/runs/9-1/stream`);
+  try {
+    await c.waitFor((f) => f.event === "snapshot");
+    const before = c.frames.filter((f) => f.event === "snapshot").length;
+    // The engine would write state.json and its derived event together.
+    const st = JSON.parse(readFileSync(join(runDir, "state.json"), "utf8")) as RunState;
+    (st.nodes["implement"] as RunState["nodes"][string]).status = "done";
+    st.status = "done";
+    writeFileSync(join(runDir, "state.json"), JSON.stringify(st));
+    appendFileSync(join(runDir, "events.jsonl"), JSON.stringify({ ts: "2026-01-01T00:09:00.000Z", type: "node.finished", node: "implement", detail: { status: "done", cost: 1 } }) + "\n");
+    await c.waitFor((f) => f.event === "feed" && (f.data as FeedFrameData).items.some((i) => /implement done/.test(i.text)));
+    const snap = await c.waitFor((f) => f.event === "snapshot" && (f.data as { runStatus: string }).runStatus === "done");
+    assert.ok(c.frames.filter((f) => f.event === "snapshot").length > before);
+    assert.equal((snap.data as { nodes: Record<string, { status: string }> }).nodes["implement"]?.status, "done");
+  } finally {
+    c.close();
+    await handle.close();
+  }
+});
+
+test("LIVE: a node that starts running AFTER the client connected is tailed (transcript did not exist at connect time)", async () => {
+  const home = tempHomeWithRun("9-1", {
+    nodes: {
+      reproduce: { status: "done", artifacts: [], iteration: 0, cost: 0, gateHistory: [] },
+      implement: { status: "pending", artifacts: [], iteration: 0, cost: 0, gateHistory: [] },
+    },
+  });
+  const runDir = join(home, "runs", "9-1");
+  const handle = await startUiServer({ homeDir: home, port: 0, pollMs: 40 });
+  const c = sseClient(`${handle.url}api/runs/9-1/stream`);
+  try {
+    await c.waitFor((f) => f.event === "snapshot");
+    mkdirSync(join(runDir, "implement"), { recursive: true });
+    writeFileSync(join(runDir, "implement", "transcript.log"), asstLine("2026-01-01T00:00:05.000Z", "first words of a late node"));
+    const st = JSON.parse(readFileSync(join(runDir, "state.json"), "utf8")) as RunState;
+    (st.nodes["implement"] as RunState["nodes"][string]).status = "running";
+    writeFileSync(join(runDir, "state.json"), JSON.stringify(st));
+    await c.waitFor(feedHas("first words of a late node"));
+    await c.waitFor((f) => f.event === "snapshot" && (f.data as { currentNodes: string[] }).currentNodes.includes("implement"));
+  } finally {
+    c.close();
+    await handle.close();
+  }
+});
+
+test("LIVE: a run directory created AFTER the server started appears in /api/runs (the page polls this)", async () => {
+  const home = tempHomeWithRun("9-1");
+  const handle = await startUiServer({ homeDir: home, port: 0, pollMs: 40 });
+  try {
+    const first = JSON.parse((await get(`${handle.url}api/runs`)).body) as Array<{ runId: string }>;
+    assert.deepEqual(first.map((r) => r.runId), ["9-1"]);
+    const runDir = join(home, "runs", "9-2");
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, "state.json"),
+      JSON.stringify({ runId: "9-2", workflow: "bugfix", createdAt: "t", updatedAt: "t", status: "running", worktreePath: "/w", branch: "b", sourcePlanPath: "/p", nodes: {} }),
+    );
+    const second = JSON.parse((await get(`${handle.url}api/runs`)).body) as Array<{ runId: string }>;
+    assert.ok(second.some((r) => r.runId === "9-2"));
+  } finally {
+    await handle.close();
+  }
+});
+
+test("LIVE: two clients on one run share one tailer; closing both stops the timer and the server closes promptly", async () => {
+  const home = tempHomeWithRun("9-1");
+  const handle = await startUiServer({ homeDir: home, port: 0, pollMs: 40 });
+  const a = sseClient(`${handle.url}api/runs/9-1/stream`);
+  const b = sseClient(`${handle.url}api/runs/9-1/stream`);
+  await a.waitFor((f) => f.event === "snapshot");
+  await b.waitFor((f) => f.event === "snapshot");
+  a.close();
+  b.close();
+  await new Promise((r) => setTimeout(r, 120));
+  await handle.close(); // would hang the test run if a timer or socket leaked
+});
+
+test("REST: /feed, /output and /artifact serve history, one node's output, and a rendered artifact; bad inputs are 400/404", async () => {
+  const home = tempHomeWithRun("9-1");
+  const runDir = join(home, "runs", "9-1");
+  mkdirSync(join(runDir, "implement"), { recursive: true });
+  writeFileSync(join(runDir, "implement", "transcript.log"), asstLine("2026-01-01T00:00:01.000Z", "hello feed"));
+  writeFileSync(join(runDir, "implement", "summary.md"), "# Sum\n\n<script>alert(1)</script>");
+  const handle = await startUiServer({ homeDir: home, port: 0 });
+  try {
+    const feed = JSON.parse((await get(`${handle.url}api/runs/9-1/feed`)).body) as FeedFrameData & { total: number };
+    assert.ok(feed.items.some((i) => i.text === "hello feed"));
+    const out = JSON.parse((await get(`${handle.url}api/runs/9-1/output?node=implement`)).body) as FeedFrameData;
+    assert.deepEqual(out.items.map((i) => i.text), ["hello feed"]);
+    const art = await get(`${handle.url}api/runs/9-1/artifact?node=implement&name=summary.md`);
+    assert.equal(art.status, 200);
+    const view = JSON.parse(art.body) as { html: string };
+    assert.match(view.html, /<h1>Sum<\/h1>/);
+    assert.doesNotMatch(view.html, /<script/);
+    assert.equal((await get(`${handle.url}api/runs/9-1/artifact?node=implement&name=..%2F..%2Fx.md`)).status, 400);
+    assert.equal((await get(`${handle.url}api/runs/9-1/artifact?node=implement&name=nope.md`)).status, 404);
+    assert.equal((await get(`${handle.url}api/runs/nope/feed`)).status, 404);
+    assert.equal((await get(`${handle.url}api/runs/9-1/output?node=..`)).status, 400);
+  } finally {
+    await handle.close();
+  }
 });

@@ -1010,3 +1010,135 @@ this as "pending follow-up" — closing the gap on the engine side (v0.1.64). `f
   Pre-existing unrelated dirty files `payload/commands/implement.md`/`payload/commands/pr.md`
   (deliverables.txt staging discipline, no digest/companion content) left untouched and uncommitted,
   per the brief's scope — not part of this change.
+
+## § ui-mockup-port-and-live-tail
+
+`dagrun ui` rebuilt to the approved mockup and made actually live (v0.1.67). Design:
+`docs/dagrunner-master-architecture.md` §3g "`dagrun ui`". Trigger: Eddie used v0.1.63 on one real run —
+"very basic / quite different than I anticipated", and **live update did not work** (no progress, no agent
+comments).
+
+- **root cause 1 — design: the mockup was lost, then re-derived** · The approved mockup (direction 2 of 3,
+  "timeline") was scratch-only (§ agent-driven-slice3-ui says so); `page.ts` was re-derived from a
+  description. The mockup was later RECOVERED by replaying the builder subagent's transcript into
+  `~/.local/share/dagrunner/ui-mockup-recovered/` (built `direction-2-timeline.html`, `src/core.js`,
+  `src/core.css`, `src/build-fixture.mjs`, reference shots `shots/d2-1440.png`, `d2-760.png`).
+  {decision: where it lives, options: [commit it into the repo, keep outside], choice: OUTSIDE the repo,
+  rationale: the built file embeds a fixture of REAL run 59478-2 (real Camunda issue text); nothing from
+  the mockup, its fixture or that run's content was copied into the repo — only the CSS/markup structure
+  and renderer logic were ported, with synthetic data in tests}. Design parity was checked against the two
+  reference shots (see "browser evidence" below).
+- **root cause 2 — live was never wired** · (a) `events.jsonl` holds state transitions only; a running
+  node's assistant text/tool calls exist only in `<node>/transcript.log` (stdout + that file, sdk-runner.ts),
+  which the UI never tailed → "(no live events yet)" for the whole node. (b) the `snapshot` SSE handler
+  only un-hid a "reload" link — nothing re-rendered. (c) the run list was server-rendered once. The mockup
+  author's handback had listed "transcript parsing in `dagrun ui`" as UI work (no engine change) — never built.
+- **client-render reversal (explicit)** · {decision: server-rendered no-JS-safe timeline (§3g / § agent-driven-slice3-ui
+  "no-JS fallback") vs client-rendered from JSON, choice: client-rendered, rationale: live re-render from
+  snapshots is the whole point of the fix; keeping a server render path alongside a client one means two
+  renderers that drift. This REVERSES the recorded no-JS-safe decision; the page keeps a `<noscript>` note
+  pointing at `dagrun status <run> --json`. §3g updated in the same commit.} Still inline in `page.ts`/
+  `client-*.ts` (no static assets, no build step): the client JS is a `String.raw` literal with the rules
+  "no backticks / no `${` inside" (a page test parses both inline scripts so a slip fails loudly).
+- **escaping** · {decision: one escaping path, options: [mirror render.ts client-side, render everything
+  client-side with a second renderer, server-render ARTIFACT content only and escape-by-default templating for
+  everything else], choice: the last: artifact bodies come from `render.ts` (extended with tables,
+  blockquotes, coloured JSON, glyph diffs; escape-first per token), everything else goes through the client's
+  `T('{x}')` (escapes) / `{{x}}` (trusted) so unsafe output needs a deliberate `{{}}`; hrefs use `safeHref`.
+  Tests: hostile payloads (`<script>`, `onerror`, attribute break-out) in artifacts of every kind, assistant
+  messages, tool commands, node ids, branch/title/issueUrl, gate fields all render inert (structural
+  tag/attribute allowlist check under `node:vm`); the test was verified red by disabling `esc`.} The mockup's
+  own `core.js` interpolated node ids, gate actions, `def.command`, `dependsOn` and `issueUrl` unescaped — not ported.
+- **transcript tail design** · One generic `tailLines(path, offset)` (generalizing `readNewEvents`, whose tests
+  are kept and which is now a wrapper): complete lines only, shrink → reset, plus **inode change → reset**
+  (a rerun archives the transcript and the fresh file may already be larger than the old offset — a size
+  check alone would resume mid-file; test red→green). `live.ts` re-reads state.json each poll, tails
+  `transcript.log` of every `running` node (a file may not exist at connect; a node may start later),
+  drains once more after a node stops, and never tails `<node>-attempts/`. Offsets are fast-forwarded for EVERY
+  node at tailer start and kept for its lifetime: a gate amend / revise-self re-run appends to the SAME
+  `transcript.log` (only `dagrun rerun` archives it — real run 51496-1's `fix/transcript.log` holds several
+  sessions at iteration 3), so an earlier version that reset a node's offset when it started running again
+  would have replayed all earlier rounds as live deltas (caught in review; red→green tests: amend into the
+  same file, run→stop→run in one tailer). Per run ONE shared tailer + timer for all clients (torn down with the last client).
+  `assistant` `text` blocks → kind `text` (first meaningful line, 220 chars), `tool_use` → kind `tool`
+  (name + command / file_path basename / description, then pattern/query/url/prompt/path; like
+  `logProgress`); `thinking` and all other types ignored. Run-dir paths → `$RUN/…`, worktree paths →
+  relative/`$WORKTREE`.
+- **8 KB truncation handling** · sdk-runner cuts a line at 8192 chars + `…}`; the cut line is invalid JSON.
+  {decision: drop / emit a note / salvage, choice: salvage + note: for a cut line starting
+  `{"type":"assistant"`, regex-extract surviving `text` / `tool_use` blocks (flagged `truncated`, timestamp
+  approximate); if nothing survives emit ONE item "(large message truncated in transcript.log)"; cut
+  non-assistant lines (tool results) are skipped. Checked on real run 51496-1 reproduce: 167 lines, 7
+  unparseable (1 assistant, 6 user/system), 51 drafts, no crash. Real data showed cut assistant lines are
+  usually a giant `thinking` signature that eats the budget before the `text`/`tool_use`, so the note path
+  is the common one.}
+- **timestamps** · `assistant`/`user` stream lines DO carry an ISO `timestamp` — but after `message` in key
+  order, so a cut line loses it. Items use the line's own ts; else the previous line's ts, else node
+  `startedAt`/file mtime (history) or server receipt time (live), and are flagged `approx`.
+- **one item schema + de-dupe** · `FeedItem {id, ts, kind, node?, text, tool?, approx?, truncated?, source}` for
+  history, REST and live. Ids are derived from where the data lives (`e:<byte offset>`,
+  `t:<node>:<inode>:<byte offset>:<block>`), so history and tail compute the same id for the same line; the
+  client de-dupes by id → reconnect recovery needs no server sequence state. History = ALL engine events +
+  the newest 150 transcript items (cap documented; older agent items are counted "not shown", no
+  load-older endpoint — deliberately not built).
+- **SSE protocol** · On every (re)connect the server sends `snapshot` (whole view) then a `feed` history batch,
+  so reconnect recovery is automatic (the client also does a REST first paint, then opens the stream);
+  afterwards `feed` deltas and a `snapshot` whenever the serialized view differs from the last sent
+  (state, new files on disk, gate.json); `: ping` when idle. `startUiServer({pollMs})` lets tests run in ms.
+- **data derivations moved server-side** · `buildStatusJson` stays the shared source (CLI/UI can't drift);
+  `run-snapshot.ts` layers `runStatus` (raw — `status` folds paused into awaiting-gate), branch/base/
+  issueUrl (quotes stripped, non-http dropped)/plan title, serializable `defs` (no `when` fn;
+  `gate.maxIterations` default 10), per-node model/session/error/skipReason/files, and `gate` (the card).
+  Quirks: gate card only when raw `paused` AND awaiting AND brief's `gateNodeId` matches; skip reason from
+  the deciding gate's `next-node-decision.json`; legacy state-only nodes appended, workflow nodes absent from
+  state shown pending; bookkeeping files added in the UI layer only (`listNodeFiles`/gate brief unchanged).
+  Round numbering reproduced as the mockup did ("round N of M allowed (state.json iteration k)", N = brief.iteration+1);
+  engine numbering untouched. New endpoints: `/feed`, `/output?node=`, `/artifact?node=&name=`.
+- **tests** · red→green: tailer inode reset; run-snapshot quirks; render.ts additions; client renderers (incl.
+  XSS) under `node:vm`; feed/transcript/live units; server LIVE tests that FAIL against the old server (run
+  against a worktree of the previous commit: the three live tests time out at 4 s with no `feed`/`snapshot`
+  frames). `smoke-ui.ts` keeps the "neither run directory changed" proof and now also asserts the gate card
+  presence/absence and the initial SSE frames.
+- **browser evidence (real headless Chrome, driven over CDP with only Node built-ins)** · `--virtual-time-budget`
+  hung with SSE open (as expected), so shots and post-load proof use the DevTools protocol in real time.
+  Against a temp home with handwritten synthetic runs: screenshots at 1440 and 760, light and dark, for a run
+  paused at a gate and a run mid-node with agent messages, compared to `d2-1440.png`/`d2-760.png`; fixes made
+  because of that pass: tool paths containing a bare worktree dir (`cd <wt> && …`) were not shortened; the
+  `#dark`/`#light` URL override did not apply on a same-document hash change (added `hashchange`); runs were
+  ordered by directory mtime (chips now sort by the run's own `updatedAt`). Post-load proof (script appends
+  AFTER the page loaded, then reads the DOM, same document, no reload): appended transcript line + tool
+  call appear in the feed and in the open Output tail; state/event change re-renders the pipeline, hero
+  counters and cost; the next node auto-opens and its transcript is tailed; a new run directory appears as a
+  chip within the 5 s poll; run completion flips the header to "Run finished". State preservation checked
+  in the browser too: a reader scrolled up in the Output tail is not yanked down (scrollTop 40→40) while one
+  at the bottom follows; focus stays on the focused tab after its row re-renders; a selected Details tab
+  survives updates; a feed reader scrolled down keeps their place (anchor offset 64.6→64.5), at the top stays
+  at the top; the "running for" ticker advances. Manual read-only pass of compiled `dagrun ui` against the
+  REAL home on finished run 51496-1: sha256 of (path, mtime, size) of every file under `runs/` identical
+  before/after, no `active.lock`; screenshot read — "Skipped by decision" shown for verify, 206 feed items +
+  "509 older agent items not shown".
+- **what is NOT proven** · The node-evaluated tests prove the pure renderers and the SSE-client server tests
+  prove the server pushes; neither runs the DOM glue (`client-app.ts`). That glue is only exercised by the
+  manual CDP pass above (Chrome, macOS) — there is no committed browser test (no new deps). Firefox/Safari
+  untested. Reconnect recovery WAS driven end to end in Chrome: server process killed → header "Reconnecting…"; a transcript line written while it was down; server restarted on the same port → "Live · connected" and the missed line appears exactly once (feed 10 → 11 items, no duplicates), via the re-sent snapshot+history and client id de-dupe.
+  Still unproven: a partial network drop (as opposed to a killed server).
+- **gaps vs the mockup (every one)** · (1) replay bar, step data, SIMULATED/REAL labels, "replay stands in…"
+  text, embedded fixture: dropped. (2) the verify "Evidence" tab and illustrative DEMONSTRATED report:
+  dropped (illustrative, and the real pass value is now PROVISIONED) — verify-report.json/demo.md are
+  ordinary artifacts. (3) hardcoded `pr`/`digest` parallel block: replaced by generic dependency-depth
+  grouping (digest no longer exists in the workflow; legacy runs still show it). (4) the "worktree diff"
+  pseudo-file with "needs engine support": replaced by the real engine-written `changes.diff` file (an
+  artifact chip like any other). (5) live cost for a running node: shown as "at session end" — cost is only
+  recorded at node end; nothing invented. (6) per-node guide text on the gate card ("reproduction guide is
+  ready…") is now one generic sentence. (7) `reproduce`-specific "last iteration only" is derived from
+  `attempts.length > 1`. (8) friction.jsonl is not read — `node.finished` events carry cost/duration;
+  legacy runs without events.jsonl show agent items but no engine events. (9) "All N runs →" chip dropped
+  (all runs are chips, the row scrolls). (10) feed pane: its own scroll box, sticky beside the pipeline at
+  wide widths (the mockup flowed with the page), capped history, no load-older. (11) the feed note
+  ("Reconstructed from state.json…") replaced with the true sources. (12) added beyond the mockup: connection
+  indicator, "Running for" ticker, stale-driver label, `Output` tab backed by the live transcript, Details
+  "Attempts" list, hashchange theme override. (13) nothing from direction 1/3 (no KPI strip) was ported.
+- **ambiguity defaults** · Feed order newest-first (as the mockup), so "live edge" = top; "Agent messages"
+  toggle governs both `text` and `tool` items; a node is auto-opened (tab Output) the first time it is seen
+  running and the awaiting-gate node auto-opens — never re-opened after the user closes it; default selected
+  run = most recently updated readable run.
