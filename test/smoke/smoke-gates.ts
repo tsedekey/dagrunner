@@ -72,7 +72,15 @@ async function quiet<T>(fn: () => Promise<T>): Promise<T> {
   try { return await fn(); } finally { process.stdout.write = out; process.stderr.write = errw; }
 }
 const stateOf = (runDir: string): RunState => JSON.parse(readFileSync(join(runDir, "state.json"), "utf8")) as RunState;
-const briefOf = (runDir: string, gate: string): GateBrief => JSON.parse(readFileSync(join(runDir, gate, "gate.json"), "utf8")) as GateBrief;
+// A detached driver writes state.json (awaiting-gate) BEFORE emitGateBrief writes <gate>/gate.json, so a
+// poll that sees "awaiting-gate" can read the brief a moment too early (flaky ENOENT in step 14, seen on
+// the untouched baseline too; the same applies to status --json's revision, so the waits below also require
+// a non-null revision). Wait up to 15s for the file; a genuinely missing brief still fails loud.
+const briefOf = (runDir: string, gate: string): GateBrief => {
+  const f = join(runDir, gate, "gate.json");
+  for (let i = 0; i < 150 && !existsSync(f); i++) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  return JSON.parse(readFileSync(f, "utf8")) as GateBrief;
+};
 const stamp = Date.now();
 let seq = 0;
 function newHome(): { home: string; plan: string } {
@@ -605,7 +613,7 @@ async function toPrGate(over: { runNext: boolean } = { runNext: true }) {
   const d = detachedOut(st.stdout);
   assert.ok(d.log.endsWith(join("runs", d.runId, "driver.log")));
   const runDir = join(home, "runs", d.runId);
-  const paused = await waitFor(d.runId, (j) => j.status === "awaiting-gate", "awaiting-gate at reproduce");
+  const paused = await waitFor(d.runId, (j) => j.status === "awaiting-gate" && j.awaitingGate?.revision != null, "awaiting-gate at reproduce");
   assert.equal(paused.awaitingGate?.nodeId, "reproduce");
   assert.equal(paused.awaitingGate?.revision, briefOf(runDir, "reproduce").revision, "status reports the gate revision");
   assert.equal(paused.stale, false);
@@ -644,7 +652,7 @@ async function toPrGate(over: { runNext: boolean } = { runNext: true }) {
   const dec1 = cli([...decideArgs(rb, ["--confirm", cid]), "--detach"]);
   assert.equal(dec1.status, 0, `decide --detach failed: ${dec1.stdout}${dec1.stderr}`);
   assert.equal(detachedOut(dec1.stdout).runId, d.runId);
-  const atFix = await waitFor(d.runId, (j) => j.status === "awaiting-gate" && j.awaitingGate?.nodeId === "fix", "awaiting-gate at fix");
+  const atFix = await waitFor(d.runId, (j) => j.status === "awaiting-gate" && j.awaitingGate?.nodeId === "fix" && j.awaitingGate.revision != null, "awaiting-gate at fix");
   assert.equal(atFix.stale, false);
   assert.equal(atFix.nodes["reproduce"]?.status, "done");
   say("14b passed: live lock refuses a second driver (state untouched, reported by status); stale lock recovered; decide --detach advanced to fix");
@@ -654,12 +662,12 @@ async function toPrGate(over: { runNext: boolean } = { runNext: true }) {
   const fp = cli(decideArgs(fb2, ["--run-next", "yes"]));
   const fid = /--confirm ([0-9a-f]{16})/.exec(fp.stdout)?.[1] as string;
   assert.equal(cli([...decideArgs(fb2, ["--run-next", "yes", "--confirm", fid]), "--detach"]).status, 0);
-  await waitFor(d.runId, (j) => j.status === "awaiting-gate" && j.awaitingGate?.nodeId === "pr", "awaiting-gate at pr");
+  await waitFor(d.runId, (j) => j.status === "awaiting-gate" && j.awaitingGate?.nodeId === "pr" && j.awaitingGate.revision != null, "awaiting-gate at pr");
   const pb2 = briefOf(runDir, "pr");
   const pp = cli(decideArgs(pb2));
   const pid2 = /--confirm ([0-9a-f]{16})/.exec(pp.stdout)?.[1] as string;
   assert.equal(cli([...decideArgs(pb2, ["--confirm", pid2]), "--detach"]).status, 0);
-  const done = await waitFor(d.runId, (j) => j.status === "done", "done");
+  const done = await waitFor(d.runId, (j) => j.status === "done" && j.driver === null, "done and the driver lock released");
   assert.equal(done.stale, false);
   assert.equal(done.awaitingGate, null);
   assert.equal(done.driver, null, "lock released at the end");
