@@ -19,6 +19,7 @@ import type { Workflow } from "./types.js";
 import type { RunState } from "./state.js";
 import { checkNoPlaceholders, checkOutcomeGate } from "./dag.js";
 import { gitHead } from "./verify-evidence.js";
+import { deliverablesAdvisory } from "./deliverables.js";
 import { readVerifyEnv } from "./verify-cleanup.js";
 import { listNodeFiles } from "./node-files.js";
 
@@ -545,6 +546,10 @@ export function buildGateBrief(args: {
       });
     }
   }
+
+  // Pre-PR gate: advisory comparison of the worktree's changes with the declared
+  // deliverables manifests (pr stages declared paths only). Never blocking.
+  if (gateNodeId === "pr") validation.push(...deliverablesAdvisory(runDir, state));
 
   let verifyEnvironment: GateBrief["verifyEnvironment"];
   if (ancestorsOf(workflow, gateNodeId).includes("verify") && state.nodes["verify"]?.status === "done") {

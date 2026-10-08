@@ -212,6 +212,40 @@ this section surfaces to the human automatically — no other action is required
 
 ---
 
+## Step 4b — Declare deliverables (mandatory)
+
+The `pr` node stages **only** the paths declared in `implement/deliverables.txt` plus
+`fix/deliverables.txt` (never `git add -A`). A file you add or change here that is not declared is
+silently left out of the PR commit — a test file a fix once added was missed this way and cost a whole
+extra gate round. So:
+
+1. Write or **extend** `fix/deliverables.txt` in your artifacts dir: one repo-relative path per line,
+   listing every file you **add or change** in the worktree this round (source, tests, resources,
+   golden files). The artifacts dir survives gate revise rounds, so on a later round keep the earlier
+   lines and add the new ones — the file is the running union across rounds. Paths already listed in
+   `implement/deliverables.txt` may be repeated; `pr` unions and de-duplicates both files.
+2. Verify the list against git before you finish — every path you touched must be listed, and every
+   listed path must really differ from the base:
+
+```bash
+cd "$DAGRUN_WORKTREE"
+# changed since the base (committed, staged, unstaged) + untracked, excluding ignored/build output
+{ git diff --name-only HEAD; git ls-files --others --exclude-standard; } | grep -v '/target/' | sort -u > /tmp/fix-changed-$DAGRUN_RUN_ID.txt
+# anything changed but not declared in implement/ or fix/ deliverables.txt?
+cat "$DAGRUN_RUN_DIR/implement/deliverables.txt" "$DAGRUN_ARTIFACTS/deliverables.txt" 2>/dev/null | grep -v '^$' | sort -u > /tmp/fix-declared-$DAGRUN_RUN_ID.txt
+comm -23 /tmp/fix-changed-$DAGRUN_RUN_ID.txt /tmp/fix-declared-$DAGRUN_RUN_ID.txt
+```
+
+   Anything `comm` prints is changed but undeclared: either add it to `fix/deliverables.txt` (if it
+   belongs in the PR) or mention in `summary.md` why it is deliberately left out (unrelated dirt).
+   The pre-PR gate shows the same comparison as an advisory, so an undeclared change will be flagged
+   to the reviewer — but declaring it correctly here is your job.
+
+If you changed nothing in the worktree this round, write no `fix/deliverables.txt` entries and say so
+in `summary.md`.
+
+---
+
 ## Step 5 — Write reflections.md
 
 Write `$DAGRUN_ARTIFACTS/reflections.md`. This file is **required** whenever fixes were applied.
