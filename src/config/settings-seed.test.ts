@@ -22,7 +22,10 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import {
+  DENIED_NODE_PLUGINS,
   buildSeededSettings,
+  denyNodePlugins,
+  denyPluginsInSeededSettings,
   readSourcePassthrough,
   readWorkProfileMcpServers,
 } from "./settings-seed.js";
@@ -480,4 +483,95 @@ test("buildSeededSettings: golden snapshot (fixed inputs)", () => {
       `Snapshot: ${GOLDEN_PATH}\n` +
       `To update: UPDATE_SNAPSHOTS=1 node --test --import tsx src/config/settings-seed.test.ts`,
   );
+});
+
+// ---------------------------------------------------------------------------
+// Java-LSP denylist (run 51496-1: jdtls imported the worktree and compiled
+// broken classes into target/classes that a later mvn install packaged).
+// ---------------------------------------------------------------------------
+
+function profileWith(content: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "dr-profile-"));
+  writeFileSync(join(dir, "settings.json"), content, "utf8");
+  return dir;
+}
+const SEED_BASE = {
+  runDir: "/r",
+  homeDir: "/h",
+  tmpDir: "/tmp",
+  passthrough: { env: {}, mcpServers: undefined },
+};
+
+test("DENIED_NODE_PLUGINS is exactly the two Java LSPs", () => {
+  assert.deepEqual([...DENIED_NODE_PLUGINS], ["jdtls@claude-code-lsps", "jdtls-lsp@claude-plugins-official"]);
+});
+
+test("buildSeededSettings: denied Java LSPs come out explicit false; everything else mirrors unchanged", () => {
+  const dir = profileWith(
+    JSON.stringify({
+      enabledPlugins: {
+        "jdtls@claude-code-lsps": true,
+        "jdtls-lsp@claude-plugins-official": true,
+        "vtsls@claude-code-lsps": true,
+        "eng-kit@camunda-internal": true,
+        "typescript-lsp@claude-plugins-official": false,
+      },
+    }),
+  );
+  const s = buildSeededSettings({ ...SEED_BASE, claudeConfigDir: dir });
+  assert.deepEqual(s["enabledPlugins"], {
+    "jdtls@claude-code-lsps": false,
+    "jdtls-lsp@claude-plugins-official": false,
+    "vtsls@claude-code-lsps": true,
+    "eng-kit@camunda-internal": true,
+    "typescript-lsp@claude-plugins-official": false,
+  });
+});
+
+test("buildSeededSettings: a denied id absent from the profile is not invented", () => {
+  const dir = profileWith(JSON.stringify({ enabledPlugins: { "vtsls@claude-code-lsps": true } }));
+  const s = buildSeededSettings({ ...SEED_BASE, claudeConfigDir: dir });
+  assert.deepEqual(s["enabledPlugins"], { "vtsls@claude-code-lsps": true });
+});
+
+test("buildSeededSettings: unparseable profile settings still skip enabledPlugins (run not blocked)", () => {
+  const dir = profileWith("{ not json");
+  const s = buildSeededSettings({ ...SEED_BASE, claudeConfigDir: dir });
+  assert.equal("enabledPlugins" in s, false);
+});
+
+test("denyNodePlugins: pure, does not mutate its input", () => {
+  const input = { "jdtls@claude-code-lsps": true, other: true };
+  const out = denyNodePlugins(input);
+  assert.equal(input["jdtls@claude-code-lsps"], true);
+  assert.deepEqual(out, { "jdtls@claude-code-lsps": false, other: true });
+});
+
+test("denyPluginsInSeededSettings: flips only denied-and-true plugin keys in an already-seeded file", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dr-seeded-"));
+  const f = join(dir, "settings.json");
+  const original = {
+    permissions: { allow: ["Bash(ls:*)"] },
+    enabledPlugins: { "jdtls@claude-code-lsps": true, "vtsls@claude-code-lsps": true },
+  };
+  writeFileSync(f, JSON.stringify(original), "utf8");
+  assert.deepEqual(denyPluginsInSeededSettings(f), ["jdtls@claude-code-lsps"]);
+  const after = JSON.parse(readFileSync(f, "utf8")) as typeof original;
+  assert.equal(after.enabledPlugins["jdtls@claude-code-lsps"], false);
+  assert.equal(after.enabledPlugins["vtsls@claude-code-lsps"], true);
+  assert.deepEqual(after.permissions, original.permissions);
+  // idempotent: second call changes nothing
+  assert.deepEqual(denyPluginsInSeededSettings(f), []);
+});
+
+test("denyPluginsInSeededSettings: missing, unparseable, or plugin-less file → [] and untouched", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dr-seeded-"));
+  assert.deepEqual(denyPluginsInSeededSettings(join(dir, "nope.json")), []);
+  const bad = join(dir, "bad.json");
+  writeFileSync(bad, "{ nope", "utf8");
+  assert.deepEqual(denyPluginsInSeededSettings(bad), []);
+  assert.equal(readFileSync(bad, "utf8"), "{ nope");
+  const none = join(dir, "none.json");
+  writeFileSync(none, JSON.stringify({ permissions: {} }), "utf8");
+  assert.deepEqual(denyPluginsInSeededSettings(none), []);
 });

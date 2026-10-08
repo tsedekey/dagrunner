@@ -10,7 +10,7 @@
  * run-engine.ts writes it; preflight.ts displays it. Same function → no drift.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export interface SourcePassthrough {
@@ -91,6 +91,55 @@ export function readSourcePassthrough(
   } catch {
     return { env: {}, mcpServers: undefined };
   }
+}
+
+/**
+ * Plugin ids that must never be enabled in a node session, even when the
+ * Claude profile enables them. Java LSPs only (jdtls writes project files into
+ * the worktree and compiles into target/classes — see the mirroring comment in
+ * buildSeededSettings). Adding an id here is a deliberate, reviewed policy
+ * change; do not widen this to "all LSPs" (code-nav LSPs are a future
+ * opportunity — DECISIONS.md § review-51496-1-fixes, java-lsp-denylist).
+ */
+export const DENIED_NODE_PLUGINS: readonly string[] = [
+  "jdtls@claude-code-lsps",
+  "jdtls-lsp@claude-plugins-official",
+];
+
+/** Force every DENIED_NODE_PLUGINS id that is present to `false`; others untouched. */
+export function denyNodePlugins(
+  plugins: Record<string, boolean>,
+): Record<string, boolean> {
+  const out = { ...plugins };
+  for (const id of DENIED_NODE_PLUGINS) {
+    if (id in out) out[id] = false;
+  }
+  return out;
+}
+
+/**
+ * Apply the denylist to an ALREADY-SEEDED worktree settings.json (resumeRun
+ * does not re-seed settings, so a worktree seeded before the denylist existed
+ * keeps `jdtls: true`). Touches only `enabledPlugins` keys in
+ * DENIED_NODE_PLUGINS that are currently true. Returns the ids flipped (empty =
+ * file untouched). Missing/unparseable file → [] (not ours to repair).
+ */
+export function denyPluginsInSeededSettings(settingsPath: string): string[] {
+  if (!existsSync(settingsPath)) return [];
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+  } catch {
+    return [];
+  }
+  const ep = parsed["enabledPlugins"];
+  if (ep === null || typeof ep !== "object") return [];
+  const plugins = ep as Record<string, unknown>;
+  const flipped = DENIED_NODE_PLUGINS.filter((id) => plugins[id] === true);
+  if (flipped.length === 0) return [];
+  for (const id of flipped) plugins[id] = false;
+  writeFileSync(settingsPath, JSON.stringify(parsed, null, 2), "utf8");
+  return flipped;
 }
 
 /**
@@ -279,7 +328,14 @@ export function buildSeededSettings(opts: {
 
   // Mirror enabledPlugins from the Claude profile's global settings so LSP and
   // other marketplace plugins remain active when settingSources: ["project"]
-  // causes the global settings file to be skipped entirely.
+  // causes the global settings file to be skipped entirely — EXCEPT the Java
+  // LSPs in DENIED_NODE_PLUGINS, written explicitly as `false` (intent visible
+  // in the seeded file). Why: with jdtls mirrored on, Eclipse JDT imported the
+  // worktree (.classpath/.project/.settings in ~126 module dirs), compiled with
+  // ECJ into target/classes, and a later ./mvnw install packaged classes holding
+  // "Unresolved compilation problem" into installed jars; the fix node then
+  // failed with a misleading export timeout (run 51496-1). Narrow on purpose:
+  // everything else in the profile still mirrors unchanged.
   if (claudeConfigDir !== undefined && claudeConfigDir !== "") {
     const profileSettingsPath = join(claudeConfigDir, "settings.json");
     if (existsSync(profileSettingsPath)) {
@@ -294,7 +350,7 @@ export function buildSeededSettings(opts: {
             if (typeof v === "boolean") plugins[k] = v;
           }
           if (Object.keys(plugins).length > 0) {
-            settings["enabledPlugins"] = plugins;
+            settings["enabledPlugins"] = denyNodePlugins(plugins);
           }
         }
       } catch {

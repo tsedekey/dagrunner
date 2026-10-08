@@ -688,6 +688,7 @@ import {
   readSourcePassthrough,
   readWorkProfileMcpServers,
   buildSeededSettings,
+  denyPluginsInSeededSettings,
 } from "../config/settings-seed.js";
 
 // ---------------------------------------------------------------------------
@@ -1906,6 +1907,11 @@ export async function resumeRun(opts: {
     const dagrunnerRoot = new URL("../../", import.meta.url).pathname;
     const destClaude = join(state.worktreePath, ".claude");
     seedWorktreeSiblings(dagrunnerRoot, destClaude);
+    // resumeRun does not re-seed settings.json, so a worktree seeded before the
+    // Java-LSP denylist existed would keep `jdtls: true` — flip just those keys.
+    const flipped = denyPluginsInSeededSettings(join(destClaude, "settings.json"));
+    if (flipped.length > 0)
+      process.stdout.write(`dagrun: disabled Java LSP plugin(s) in this worktree's node settings: ${flipped.join(", ")}\n`);
   }
 
   // Export PR title prefix before executor/SDK query() so the pr node session inherits it.
