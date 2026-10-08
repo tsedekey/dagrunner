@@ -244,7 +244,8 @@ test("buildRunEnvironmentBlock: paths only — no env values, no secrets", () =>
   try {
     const block = buildRunEnvironmentBlock(ctx, wt);
     assert.ok(!block.includes("sk-test-secret"));
-    assert.equal(block.split("\n").length, 6);
+    assert.equal(block.split("\n").length, 7);
+    assert.ok(block.includes("- runId: r1"));
   } finally {
     delete process.env["ANTHROPIC_API_KEY"];
   }
@@ -267,7 +268,16 @@ test("payload/commands no longer tell nodes a literal path is unobtainable or to
       assert.ok(!re.test(text), `${name} still contains ${re}`);
     }
     if (nodeCommands.includes(name.replace(/\.md$/, ""))) {
-      assert.ok(text.includes("<run-environment>"), `${name} must point at the injected <run-environment> block`);
+      // $ARGUMENTS makes the engine-provided block land in the prompt deterministically
+      // (Claude Code substitutes it; without the placeholder it only appends trailing text).
+      assert.ok(text.includes("$ARGUMENTS"), `${name} must interpolate $ARGUMENTS (the run-environment block)`);
+      // Bash commands containing a variable expansion are rejected by the sandbox
+      // ("Contains simple_expansion", 21 of 46 denials in run 51496-1) — snippets must
+      // use the literal-path placeholders, not these variables.
+      assert.ok(
+        !/\$\{?DAGRUN_(ARTIFACTS|RUN_DIR|WORKTREE|RUN_ID)\b/.test(text),
+        `${name} still uses a $DAGRUN_* path variable in its snippets`,
+      );
     }
   }
 });

@@ -15,7 +15,7 @@ These facts are pre-verified — do not re-investigate them:
   copy the `java` line from `$DEVHARNESS_SRC/.tool-versions` into the worktree's
   `.tool-versions`:
   ```bash
-  grep '^java ' "$DEVHARNESS_SRC/.tool-versions" >> "$DAGRUN_WORKTREE/.tool-versions"
+  grep '^java ' "$DEVHARNESS_SRC/.tool-versions" >> "<worktree>/.tool-versions"
   ```
 - **`qa/acceptance-tests` module isolation:** this module resolves its ENTIRE dependency chain
   from `~/.m2`, NOT from the source tree — not just `clients/java`. When writing or modifying
@@ -44,22 +44,26 @@ These facts are pre-verified — do not re-investigate them:
 
 ---
 
-> **Run environment.** The engine appends a `<run-environment>` block to your prompt with the
-> **literal absolute** `artifactsDir`, `runDir` and `worktree` paths — use those directly:
+> **Run environment.** The block directly below gives the **literal absolute** `artifactsDir`,
+> `runDir`, `worktree` and `runId` for this session. Wherever this document writes `<artifactsDir>`,
+> `<runDir>`, `<worktree>` or `<runId>`, substitute those literal values — type the real path, never a
+> shell variable: the sandbox rejects Bash commands that contain a variable expansion
+> (`simple_expansion`), which cost earlier runs dozens of denied calls.
 >
-> - **Read** upstream artifacts at `<runDir>/<node>/<file>` with the Read tool (or `cat` in Bash).
+> - **Read** upstream artifacts at `<runDir>/<node>/<file>` with the Read tool (or `cat` of the literal path).
 > - **Write** your artifacts to `<artifactsDir>/<file>` with the Write tool using that exact absolute
->   path (or a heredoc redirect to it). `runDir` is read-only.
-> - `$DAGRUN_ARTIFACTS`, `$DAGRUN_RUN_DIR`, … are still set, and the `$DAGRUN_*` snippets below are
->   equivalent to the literal paths — but prefer the literal path in Bash commands: the sandbox may
->   reject a command that merely contains a variable expansion (`simple_expansion`), and a bare
->   `echo`/`printenv` of a variable is always rejected. Never print or discover them.
+>   path. `runDir` is read-only.
+> - Never print or discover environment variables (`echo`, `printenv`, `env`).
+
+Run environment (engine-provided):
+
+$ARGUMENTS
 
 Read the implementation guide via `cat`. Check these paths in order and use the first one that
 exists — **remember which one it was**, it decides whether the RED-step below applies:
 
-1. `cat "$DAGRUN_ARTIFACTS/../define/guide.md"` (feature workflow)
-2. `cat "$DAGRUN_ARTIFACTS/../reproduce/guide.md"` (bugfix workflow)
+1. `cat "<runDir>/define/guide.md"` (feature workflow)
+2. `cat "<runDir>/reproduce/guide.md"` (bugfix workflow)
 
 Also check for any reviewer feedback files at the same directory as the guide (`feedback-\*.md`).
 If any feedback files exist, incorporate those instructions into the implementation — they represent
@@ -96,7 +100,7 @@ If you read `define/guide.md`, before writing any implementation code:
 3. **Only then write the implementation** that makes the test pass.
 4. **Rerun the test to confirm it now passes (GREEN).** If it doesn't, keep iterating — do not move
    on with a still-red test.
-5. **Write `$DAGRUN_ARTIFACTS/red-evidence.md`** containing:
+5. **Write `<artifactsDir>/red-evidence.md`** containing:
    - Which test file and method/case this covers.
    - The captured RED failure output (step 2), with a one-line note on why it failed for the right
      reason.
@@ -110,15 +114,15 @@ accurately.
 
 ---
 
-Write a brief implementation summary to $DAGRUN_ARTIFACTS/summary.md describing:
+Write a brief implementation summary to <artifactsDir>/summary.md describing:
 
 1. What was implemented
 2. Files changed (can be hypothetical for smoke test purposes)
 
-Keep it under 100 words. Write to $DAGRUN_ARTIFACTS/summary.md.
+Keep it under 100 words. Write to <artifactsDir>/summary.md.
 
 Optionally, if you discover non-obvious facts about the Camunda code area while implementing
-(hidden coupling, module quirks, surprising invariants), write them to $DAGRUN_ARTIFACTS/reflections.md.
+(hidden coupling, module quirks, surprising invariants), write them to <artifactsDir>/reflections.md.
 Only write reflections.md if there is something genuinely useful for future runs. Absence is fine.
 
 ## Pre-stage deliverables check (mandatory)
@@ -151,20 +155,20 @@ After the deliverables check passes, stage **exactly** the confirmed deliverable
 
 1. Write every confirmed deliverable path (the same rows as the "Deliverables check" table, plus
    any file you deliberately changed that the guide's change surface names), one repo-relative
-   path per line, to `$DAGRUN_ARTIFACTS/deliverables.txt`. The `pr` node reads this file.
+   path per line, to `<artifactsDir>/deliverables.txt`. The `pr` node reads this file.
 2. Stage only those paths, then verify nothing else is in the index:
 
 ```bash
-cd "$DAGRUN_WORKTREE"
-cat > "$DAGRUN_ARTIFACTS/deliverables.txt" << 'PATHS'
+cd "<worktree>"
+cat > "<artifactsDir>/deliverables.txt" << 'PATHS'
 path/to/NewClass.java
 qa/acceptance-tests/...IT.java
 PATHS
 
-while IFS= read -r p; do [ -n "$p" ] && git add -- "$p"; done < "$DAGRUN_ARTIFACTS/deliverables.txt"
+while IFS= read -r p; do [ -n "$p" ] && git add -- "$p"; done < "<artifactsDir>/deliverables.txt"
 
 # Safety net: refuse if anything staged is not a declared deliverable
-unexpected=$(git diff --cached --name-only --no-renames | grep -vxF -f "$DAGRUN_ARTIFACTS/deliverables.txt")
+unexpected=$(git diff --cached --name-only --no-renames | grep -vxF -f "<artifactsDir>/deliverables.txt")
 if [ -n "$unexpected" ]; then
   echo "ERROR: staged paths not in deliverables.txt — refusing to proceed:" >&2
   echo "$unexpected" >&2
@@ -193,6 +197,6 @@ If the working tree is already clean, note it in summary.md and skip.
 ## Reflections (optional, do this last)
 
 After all artifacts are written, write any high-signal tips
-to $DAGRUN_ARTIFACTS/reflections.md — hidden couplings, build quirks, patterns worth
+to <artifactsDir>/reflections.md — hidden couplings, build quirks, patterns worth
 flagging for future runs. The SessionEnd hook captures this automatically.
 Absence is fine — only write if you discovered something non-obvious.

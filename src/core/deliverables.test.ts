@@ -178,8 +178,8 @@ test("payload/commands/fix.md carries the deliverables contract (declare, extend
   assert.match(md, /fix\/deliverables\.txt/);
   assert.match(md, /implement\/deliverables\.txt/);
   assert.match(md, /extend/i);
+  assert.match(md, /git status --porcelain/);
   assert.match(md, /git diff --name-only/);
-  assert.match(md, /git ls-files --others/);
   // pr.md's reader of the same files must stay in sync with what fix.md tells the node to write
   const pr = readFileSync(new URL("../../payload/commands/pr.md", import.meta.url), "utf8");
   assert.match(pr, /fix\/deliverables\.txt/);

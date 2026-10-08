@@ -4,24 +4,28 @@ You are running the **review node** of a dagrunner pipeline. Your job is to orch
 
 ---
 
-> **Run environment.** The engine appends a `<run-environment>` block to your prompt with the
-> **literal absolute** `artifactsDir`, `runDir` and `worktree` paths — use those directly:
+> **Run environment.** The block directly below gives the **literal absolute** `artifactsDir`,
+> `runDir`, `worktree` and `runId` for this session. Wherever this document writes `<artifactsDir>`,
+> `<runDir>`, `<worktree>` or `<runId>`, substitute those literal values — type the real path, never a
+> shell variable: the sandbox rejects Bash commands that contain a variable expansion
+> (`simple_expansion`), which cost earlier runs dozens of denied calls.
 >
-> - **Read** upstream artifacts at `<runDir>/<node>/<file>` with the Read tool (or `cat` in Bash).
+> - **Read** upstream artifacts at `<runDir>/<node>/<file>` with the Read tool (or `cat` of the literal path).
 > - **Write** your artifacts to `<artifactsDir>/<file>` with the Write tool using that exact absolute
->   path (or a heredoc redirect to it). `runDir` is read-only.
-> - `$DAGRUN_ARTIFACTS`, `$DAGRUN_RUN_DIR`, … are still set, and the `$DAGRUN_*` snippets below are
->   equivalent to the literal paths — but prefer the literal path in Bash commands: the sandbox may
->   reject a command that merely contains a variable expansion (`simple_expansion`), and a bare
->   `echo`/`printenv` of a variable is always rejected. Never print or discover them.
+>   path. `runDir` is read-only.
+> - Never print or discover environment variables (`echo`, `printenv`, `env`).
+
+Run environment (engine-provided):
+
+$ARGUMENTS
 
 ## Step 0 — Deliverables cross-check
 
 Read via `cat`:
 
 ```bash
-cat "$DAGRUN_ARTIFACTS/../plan/plan.md"
-cat "$DAGRUN_ARTIFACTS/../define/guide.md"
+cat "<runDir>/plan/plan.md"
+cat "<runDir>/define/guide.md"
 ```
 
 Extract every explicitly required deliverable: new files, new test classes, new modules, and any
@@ -121,11 +125,11 @@ Count the total number of findings in the merged array.
 
 ## Step 4 — Write findings.json
 
-Write the following JSON object to `$DAGRUN_ARTIFACTS/findings.json`:
+Write the following JSON object to `<artifactsDir>/findings.json`:
 
 ```json
 {
-  "run_id": "<value of $DAGRUN_RUN_ID env var>",
+  "run_id": "<value of <runId> env var>",
   "timestamp": "<ISO 8601 timestamp>",
   "triage": {
     "touches_public_api": true/false,
@@ -157,7 +161,7 @@ The file must be valid JSON matching that schema exactly. Do not write any other
 
 ## Step 5 — Optional reflections (write only if substantive)
 
-Optionally write `$DAGRUN_ARTIFACTS/reflections.md` if you observed anything that would help
+Optionally write `<artifactsDir>/reflections.md` if you observed anything that would help
 future implementations in this code area avoid the same class of issue. Good candidates:
 
 - A recurring anti-pattern across multiple findings (e.g. "every public method in this module
@@ -174,8 +178,8 @@ those are already in findings.json. The SessionEnd hook captures this file autom
 
 ## Constraints
 
-- Read-only: do not edit, write to, or run commands that modify files in the worktree (only write to `$DAGRUN_ARTIFACTS/`).
-- The findings.json must be written to `$DAGRUN_ARTIFACTS/findings.json` — NOT to the worktree.
+- Read-only: do not edit, write to, or run commands that modify files in the worktree (only write to `<artifactsDir>/`).
+- The findings.json must be written to `<artifactsDir>/findings.json` — NOT to the worktree.
 - `reviewers_skipped` must be an array (empty `[]` if all reviewers ran successfully).
 - Every finding must have all seven fields including `grounded`.
 - An empty findings array `"findings": []` is valid and correct when no issues are found.

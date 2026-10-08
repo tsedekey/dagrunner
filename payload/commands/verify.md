@@ -20,24 +20,28 @@ not run them).
 Env vars you have:
 
 - `$DEVHARNESS_SRC` — permanent camunda/camunda checkout (do not modify)
-- `$DAGRUN_ARTIFACTS` — write `verify-report.json` and `demo.md` here (nowhere else)
-- `$DAGRUN_RUN_ID`, `$DAGRUN_WORKTREE` (your cwd), `$DAGRUN_RUN_DIR` (read upstream artifacts here)
+- `<artifactsDir>` — write `verify-report.json` and `demo.md` here (nowhere else)
+- `<runId>`, `<worktree>` (your cwd), `<runDir>` (read upstream artifacts here)
 
-> **Run environment.** The engine appends a `<run-environment>` block to your prompt with the
-> **literal absolute** `artifactsDir`, `runDir` and `worktree` paths — use those directly:
+> **Run environment.** The block directly below gives the **literal absolute** `artifactsDir`,
+> `runDir`, `worktree` and `runId` for this session. Wherever this document writes `<artifactsDir>`,
+> `<runDir>`, `<worktree>` or `<runId>`, substitute those literal values — type the real path, never a
+> shell variable: the sandbox rejects Bash commands that contain a variable expansion
+> (`simple_expansion`), which cost earlier runs dozens of denied calls.
 >
-> - **Read** upstream artifacts at `<runDir>/<node>/<file>` with the Read tool (or `cat` in Bash).
+> - **Read** upstream artifacts at `<runDir>/<node>/<file>` with the Read tool (or `cat` of the literal path).
 > - **Write** your artifacts to `<artifactsDir>/<file>` with the Write tool using that exact absolute
->   path (or a heredoc redirect to it). `runDir` is read-only.
-> - `$DAGRUN_ARTIFACTS`, `$DAGRUN_RUN_DIR`, … are still set, and the `$DAGRUN_*` snippets below are
->   equivalent to the literal paths — but prefer the literal path in Bash commands: the sandbox may
->   reject a command that merely contains a variable expansion (`simple_expansion`), and a bare
->   `echo`/`printenv` of a variable is always rejected. Never print or discover them.
+>   path. `runDir` is read-only.
+> - Never print or discover environment variables (`echo`, `printenv`, `env`).
+
+Run environment (engine-provided):
+
+$ARGUMENTS
 
 ## Known constraints (pre-verified — do not re-investigate)
 
 - **Maven:** `./mvnw <goal>` directly; no `JAVA_HOME=...` prefix. If it says "No version is set for
-  command java": `grep '^java ' "$DEVHARNESS_SRC/.tool-versions" >> "$DAGRUN_WORKTREE/.tool-versions"`.
+  command java": `grep '^java ' "$DEVHARNESS_SRC/.tool-versions" >> "<worktree>/.tool-versions"`.
 - **This session is one-shot and non-resumable.** `ScheduleWakeup` is disallowed. If a command
   auto-backgrounds, poll it to completion in this same turn with `TaskOutput(task_id, block: true,
 timeout: <bounded>)`. A denied/errored `Monitor`/`TaskOutput` setup is NOT "something is watching".
@@ -49,9 +53,9 @@ timeout: <bounded>)`. A denied/errored `Monitor`/`TaskOutput` setup is NOT "some
 ## Step 1 — Read what Eddie should try
 
 ```bash
-cat "$DAGRUN_RUN_DIR/define/guide.md" 2>/dev/null || cat "$DAGRUN_RUN_DIR/reproduce/guide.md"
-cat "$DAGRUN_RUN_DIR/fix/summary.md"
-cat "$DAGRUN_RUN_DIR/fix/next-node-decision.json"
+cat "<runDir>/define/guide.md" 2>/dev/null || cat "<runDir>/reproduce/guide.md"
+cat "<runDir>/fix/summary.md"
+cat "<runDir>/fix/next-node-decision.json"
 ```
 
 From the guide take the expected behavior / acceptance criteria and, for a bug, the failing
@@ -68,7 +72,7 @@ find; do not assume anything below exists:
 ```bash
 docker info > /dev/null 2>&1 && echo docker_reachable=0 || echo docker_reachable=1
 command -v c8ctl >/dev/null 2>&1 && echo c8ctl=present || echo c8ctl=absent
-ls "$DAGRUN_WORKTREE"/c8run "$DAGRUN_WORKTREE"/docker-compose* "$DAGRUN_WORKTREE"/*/docker-compose* 2>/dev/null
+ls "<worktree>"/c8run "<worktree>"/docker-compose* "<worktree>"/*/docker-compose* 2>/dev/null
 ```
 
 **Default for anything with a runtime surface (web app, REST endpoint, config property, engine
@@ -80,9 +84,9 @@ behavior): a real process on a bound loopback port**, using only pre-approved ex
    ```bash
    ./mvnw install -pl dist -am -Dquickly -T1C            # -> dist/target/camunda-zeebe*.tar.gz
    docker build --build-arg BASE=public --build-arg DISTBALL=<that tar.gz> \
-     -f camunda.Dockerfile -t dagrun-$DAGRUN_RUN_ID-camunda .
-   docker run -d --name dagrun-$DAGRUN_RUN_ID-camunda -p 127.0.0.1:<free-port>:8080 \
-     dagrun-$DAGRUN_RUN_ID-camunda
+     -f camunda.Dockerfile -t dagrun-<runId>-camunda .
+   docker run -d --name dagrun-<runId>-camunda -p 127.0.0.1:<free-port>:8080 \
+     dagrun-<runId>-camunda
    ```
 
    (Pattern from `docs/zeebe/building_docker_images.md`; adjust to what the repo actually has —
@@ -112,8 +116,8 @@ The artifact you provision MUST be built from this worktree. A stock released im
 **baseline** — it can never stand in for an unbuilt source change.
 
 ```bash
-git -C "$DAGRUN_WORKTREE" rev-parse HEAD
-git -C "$DAGRUN_WORKTREE" status --porcelain -uall
+git -C "<worktree>" rev-parse HEAD
+git -C "<worktree>" status --porcelain -uall
 ```
 
 `dirtyFiles` may be given either as those raw porcelain lines or as bare paths — the engine
@@ -130,7 +134,7 @@ when you finish, or the node fails.
 ## Step 4 — Provision, prove readiness, write the manual steps, STOP
 
 1. **Local disposable target only.** Bind to loopback (`127.0.0.1`), use fresh state, and prefix
-   EVERY container/network/image tag/volume/temp dir you create with `dagrun-$DAGRUN_RUN_ID-` (use
+   EVERY container/network/image tag/volume/temp dir you create with `dagrun-<runId>-` (use
    the run id via inline shell expansion). The teardown refuses anything without that exact prefix.
    Ignore ambient endpoints: never use any `ZEEBE_*`/`CAMUNDA_*` address or credential already in the
    environment, and never touch a resource you did not create.
@@ -153,14 +157,14 @@ when you finish, or the node fails.
 
 If you cannot reach `PROVISIONED` (build/startup failed, readiness never came up, capability
 denied), no human will ever test the leftovers: stop and remove everything you created
-(`dagrun-$DAGRUN_RUN_ID-*` containers, networks, image tags, volumes, temp dirs), verify with
+(`dagrun-<runId>-*` containers, networks, image tags, volumes, temp dirs), verify with
 `docker ps -a --filter name=dagrun-...`, and write `BLOCKED_RUNTIME` with a `reason` and an honest
 `cleanup: {"status": "clean|leftovers", "leftovers": [...]}` (still list anything you created in
 `target.ownedResources` if leftovers remain). This is never a pass.
 
 ## Step 6 — Write the evidence
 
-### `$DAGRUN_ARTIFACTS/demo.md` (for Eddie — he follows this by hand)
+### `<artifactsDir>/demo.md` (for Eddie — he follows this by hand)
 
 - **How to reach it**: host (`127.0.0.1`), the host port, base URLs / UI paths. No credentials that
   are secret; the demo user is fine if it is a throwaway default of the disposable container.
@@ -172,7 +176,7 @@ denied), no human will ever test the leftovers: stop and remove everything you c
 - **Teardown**: the environment stays up until he gives his verdict to the companion session;
   the verdict decision removes it (`dagrun verify cleanup <run-id>` also does).
 
-### `$DAGRUN_ARTIFACTS/verify-report.json`
+### `<artifactsDir>/verify-report.json`
 
 Always written, on every path. Valid JSON. Schema (`schemaVersion` is literally `3`):
 
@@ -226,11 +230,11 @@ environments are `BLOCKED_RUNTIME`, never `PROVISIONED`.
 ## Step 7 — Reflections (optional, last)
 
 Anything non-obvious (a capability that looked available but wasn't, an env gotcha) →
-`$DAGRUN_ARTIFACTS/reflections.md`. Absence is fine.
+`<artifactsDir>/reflections.md`. Absence is fine.
 
 ## Constraints
 
-- Write only to `$DAGRUN_ARTIFACTS/` (and disposable runtime resources you own). No worktree edits,
+- Write only to `<artifactsDir>/` (and disposable runtime resources you own). No worktree edits,
   no commits, no `git add`, no `formatCommand`, no test authoring.
 - Do not extend an approved scope: no production/remote endpoints, no unrelated downloads or image
   pulls, no global config changes.

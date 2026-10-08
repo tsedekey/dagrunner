@@ -1,18 +1,22 @@
-> **Run environment.** The engine appends a `<run-environment>` block to your prompt with the
-> **literal absolute** `artifactsDir`, `runDir` and `worktree` paths — use those directly:
+> **Run environment.** The block directly below gives the **literal absolute** `artifactsDir`,
+> `runDir`, `worktree` and `runId` for this session. Wherever this document writes `<artifactsDir>`,
+> `<runDir>`, `<worktree>` or `<runId>`, substitute those literal values — type the real path, never a
+> shell variable: the sandbox rejects Bash commands that contain a variable expansion
+> (`simple_expansion`), which cost earlier runs dozens of denied calls.
 >
-> - **Read** upstream artifacts at `<runDir>/<node>/<file>` with the Read tool (or `cat` in Bash).
+> - **Read** upstream artifacts at `<runDir>/<node>/<file>` with the Read tool (or `cat` of the literal path).
 > - **Write** your artifacts to `<artifactsDir>/<file>` with the Write tool using that exact absolute
->   path (or a heredoc redirect to it). `runDir` is read-only.
-> - `$DAGRUN_ARTIFACTS`, `$DAGRUN_RUN_DIR`, … are still set, and the `$DAGRUN_*` snippets below are
->   equivalent to the literal paths — but prefer the literal path in Bash commands: the sandbox may
->   reject a command that merely contains a variable expansion (`simple_expansion`), and a bare
->   `echo`/`printenv` of a variable is always rejected. Never print or discover them.
+>   path. `runDir` is read-only.
+> - Never print or discover environment variables (`echo`, `printenv`, `env`).
+
+Run environment (engine-provided):
+
+$ARGUMENTS
 
 Read the bug fix plan via `cat`:
 
 ```bash
-cat "$DAGRUN_ARTIFACTS/../plan/plan.md"
+cat "<runDir>/plan/plan.md"
 ```
 
 ## Step 1 — Understand the bug
@@ -39,7 +43,7 @@ If the test passes (bug appears already fixed), or cannot be found, or the test 
 must be resolved before writing the guide, not deferred with a placeholder — if something genuinely
 can't be resolved yet, say so in prose rather than leaving a placeholder token.
 
-Write to $DAGRUN_ARTIFACTS/guide.md. Cover:
+Write to <artifactsDir>/guide.md. Cover:
 
 1. **Confirmed root cause** — what you found when reproducing the failure
 2. **Fix approach** — minimal, targeted change to address the root cause
@@ -67,7 +71,7 @@ If the bug reproduces cleanly and the root cause matches the plan, omit the sect
 ## Step 5 — Reflections (optional, do this last)
 
 After guide.md is written and all other steps are complete, write any useful tips
-or gotchas to $DAGRUN_ARTIFACTS/reflections.md. Cover both:
+or gotchas to <artifactsDir>/reflections.md. Cover both:
 
 - Non-obvious facts about the Camunda code area (module invariants, gotchas, hidden coupling)
 - Anything that would help future reproduce runs (tricky reproduction steps, environment setup)

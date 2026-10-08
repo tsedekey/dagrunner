@@ -184,10 +184,11 @@ export function buildRunEnvironmentBlock(
 ): string {
   return [
     "<run-environment>",
-    "Literal absolute paths for this node session. Use them exactly as written; there is no need to print or discover any $DAGRUN_* variable.",
+    "Literal absolute paths for this node session. Use them exactly as written (substitute them for <artifactsDir>/<runDir>/<worktree>/<runId> in your instructions); never use a shell variable for them and never print or discover environment variables.",
     `- artifactsDir (write ALL your output artifacts here, using the Write tool with this exact path or a heredoc redirect to it): ${ctx.artifactsDir}`,
     `- runDir (READ-ONLY; upstream nodes' artifacts are at <runDir>/<node>/<file>): ${ctx.runDir}`,
     `- worktree (your cwd: the repo checkout you work in): ${worktreePath}`,
+    `- runId: ${basename(ctx.runDir)}`,
     "</run-environment>",
   ].join("\n");
 }
@@ -196,8 +197,9 @@ export function buildRunEnvironmentBlock(
  * Assemble the prompt for one node execution.
  *   first run:   `<command> <run-environment block>` — the block rides as the
  *                slash command's arguments (single space after the command so
- *                the command name still parses; commands without $ARGUMENTS get
- *                them appended by Claude Code).
+ *                the command name still parses; every node command interpolates
+ *                $ARGUMENTS so delivery does not depend on Claude Code appending
+ *                trailing text — enforced by a payload test).
  *   gate resume: the latest feedback-N.md as the next user turn so Claude
  *                revises with full session memory (Theme 5), then the block.
  */
