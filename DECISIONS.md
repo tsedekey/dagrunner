@@ -1142,3 +1142,20 @@ comments).
   toggle governs both `text` and `tool` items; a node is auto-opened (tab Output) the first time it is seen
   running and the awaiting-gate node auto-opens — never re-opened after the user closes it; default selected
   run = most recently updated readable run.
+
+
+## § review-51496-1-fixes
+
+Six fixes from the review of real run `51496-1` (companion reflections dated 2026-10-08), one commit each, v0.1.68-v0.1.73.
+
+- **cost-double-counting** (commit 1, v0.1.68) · Gate rounds re-added a resumed session's CUMULATIVE cost.
+  {decision: how node cost accrues, options: [keep summing + subtract on read, store per-session ledger, store `priorSessionsCost` and replace], choice: `NodeState.priorSessionsCost?` + pure `accrueSessionCost(prev, resumedFrom, result)`,
+  rationale: smallest state that gives "sum over distinct sessions of latest cumulative"; resume detection uses the sessionId the executor was HANDED (`ctx.sessionId`), not just equality with the stored one, so a `rerun` against a mock that reuses a constant id still counts as a new session}.
+  Evidence: run 51496-1 `fix` had 4 sessions-rounds with one sessionId, friction 3.82/6.49/12.14/13.23, state.json 35.675 (sum), true 13.23; `pr` 1.22 vs 0.78; run total shown $45.48 vs true ~$22.60. Test is red on the old code (35.68 vs 13.23).
+  {decision: legacy state without the field, options: [reconstruct from friction.jsonl, treat as unknown/0 base, add as before], choice: base 0 on a resume (assume one session),
+  rationale: right for the dominant gate-revise case, self-corrects the inflated figure on the next round (that attempt's delta is then negative, once); under-counts only a legacy node that used two distinct sessions}.
+  {decision: historical runs, options: [rewrite state.json from friction.jsonl, leave], choice: leave, rationale: friction.jsonl keeps the truth and rewriting finished runs' state is out of scope; old runs still show inflated node costs (4 other runs show gaps of $0.85-$6.58)}.
+  Also fixed in passing: the `runDag` done path and `rerunNode` REPLACED cost (`cost: result.cost`), which dropped earlier sessions' spend for a node invalidated by an amend then re-executed; both now go through `accrueSessionCost`.
+  Known gap left alone: a `failed` execution (SDK error / contract violation) does not accrue to node.cost and its attempt cost is now 0 (was the session's cumulative figure); its spend is in friction.jsonl only. `rerunNode` does not write `attempts[]` (pre-existing), so the `sum(attempts)==cost` invariant covers `runDag` paths only.
+  `--max-budget-usd` (run-level) is parsed in cli.ts and typed on `startRun` but never read, so it does not consume these numbers; per-node `maxBudget` is passed to the SDK per session.
+  Consumers audited (all sum `node.cost`, none sum friction): `cli.ts` status, `cli/report.ts` renderCostTotals, `cli/status-json.ts`, `ui/run-snapshot.ts` totalCost, `ui/discover.ts` run cost, `core/events.ts` node.finished; `report.ts` renders friction lines as opaque text; `burn.json` is overwritten per execution (latest cumulative wins). None needed changes.

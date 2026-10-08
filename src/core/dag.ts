@@ -11,7 +11,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Node, Workflow, Ctx } from "./types.js";
 import type { NodeStatus, RunState } from "./state.js";
-import { writeState } from "./state.js";
+import { accrueSessionCost, writeState } from "./state.js";
 import type { NodeExecutor } from "../runtime/mock-executor.js";
 import { checkEvidence, gitDirtyPaths, gitHead } from "./verify-evidence.js";
 
@@ -336,6 +336,12 @@ export async function runDag(
   // Track retries: nodeId → retry count used.
   const retries = new Map<string, number>();
 
+  // Session id each node was handed this round (cost accrual: resume vs new session),
+  // and the cost delta each completed execution added (recorded on its attempt).
+  const resumedFrom = new Map<string, string | undefined>();
+  const attemptCost = new Map<string, number>();
+  const priorSessionOf = (id: string): string | undefined => resumedFrom.get(id);
+
   // Build per-node artifact dirs from the stateFile path (parent = run dir).
   const runDir = stateFile.replace(/\/state\.json$/, "");
 
@@ -445,6 +451,7 @@ export async function runDag(
           throw new Error(`runDag: node "${id}" not in workflow`);
         const artifactsDir = join(runDir, id);
         const priorSessionId = run.nodes[id]?.sessionId;
+        resumedFrom.set(id, priorSessionId);
         const execCtx = {
           runDir,
           artifactsDir,
@@ -500,10 +507,13 @@ export async function runDag(
                 endedAt: now,
               });
             } else {
+              const acc = accrueSessionCost(run.nodes[id], priorSessionOf(id), result);
+              attemptCost.set(id, acc.delta);
               updateNode(id, {
                 status: "done",
                 artifacts: result.artifacts,
-                cost: result.cost,
+                cost: acc.cost,
+                priorSessionsCost: acc.priorSessionsCost,
                 sessionId: result.sessionId,
                 endedAt: now,
               });
@@ -541,7 +551,8 @@ export async function runDag(
 
       // A retry resets to pending (same attempt continues); anything else closes it.
       if (run.nodes[id]?.status !== "pending") {
-        closeAttempt(id, result.status === "done" ? result.cost : 0);
+        closeAttempt(id, attemptCost.get(id) ?? 0);
+        attemptCost.delete(id);
       }
       save();
     }
@@ -555,14 +566,18 @@ export async function runDag(
         typeof result,
         { status: "awaiting-gate" }
       >;
+      // gateRes.cost is the session's CUMULATIVE total (a gate round resumes
+      // the same session) — accrueSessionCost replaces, never re-adds.
+      const acc = accrueSessionCost(run.nodes[id], priorSessionOf(id), gateRes);
       updateNode(id, {
         status: "awaiting-gate",
         sessionId: gateRes.sessionId,
         iteration: gateRes.iteration,
-        cost: (run.nodes[id]?.cost ?? 0) + gateRes.cost,
+        cost: acc.cost,
+        priorSessionsCost: acc.priorSessionsCost,
         endedAt: now,
       });
-      closeAttempt(id, gateRes.cost);
+      closeAttempt(id, acc.delta);
       run = { ...run, status: "paused" };
       save();
       return run; // Checkpoint-and-exit.

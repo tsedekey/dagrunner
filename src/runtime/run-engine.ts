@@ -31,7 +31,7 @@ import { join, basename, dirname } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import type { Workflow } from "../core/types.js";
 import type { DagrunnerConfig } from "../config/xdg.js";
-import { readState, writeState } from "../core/state.js";
+import { accrueSessionCost, readState, writeState } from "../core/state.js";
 import { appendEvent } from "../core/events.js";
 import {
   formatTeardown,
@@ -2330,10 +2330,14 @@ export async function rerunNode(opts: {
           };
         } else {
           newStatus = "done";
+          // rerun never resumes a session (execCtx has no sessionId) → always a
+          // NEW session: its cumulative cost ADDS to what the node accrued before.
+          const acc = accrueSessionCost(prev, undefined, result);
           updates = {
             status: newStatus,
             artifacts: result.artifacts,
-            cost: result.cost,
+            cost: acc.cost,
+            priorSessionsCost: acc.priorSessionsCost,
             sessionId: result.sessionId,
             endedAt: now,
           };
@@ -2342,11 +2346,13 @@ export async function rerunNode(opts: {
     }
   } else if (result.status === "awaiting-gate") {
     newStatus = "awaiting-gate";
+    const acc = accrueSessionCost(prev, undefined, result);
     updates = {
       status: newStatus,
       iteration: result.iteration,
       sessionId: result.sessionId,
-      cost: result.cost,
+      cost: acc.cost,
+      priorSessionsCost: acc.priorSessionsCost,
       endedAt: now,
     };
   } else {

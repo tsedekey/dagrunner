@@ -336,6 +336,11 @@ export function makeSDKRunner(
       }
     }
 
+    // friction.jsonl `costUsd` is the SDK result's `total_cost_usd`: CUMULATIVE per
+    // session (a gate-resumed node reuses one sessionId, so its entries read
+    // 3.82 -> 6.49 -> 12.14 -> 13.23, not increments). It is the raw truth: never
+    // sum entries naively; take the latest per sessionId, then sum across sessions
+    // (that is what state.json node.cost does, see core/state.ts accrueSessionCost).
     // Write friction entry with real cost. The Claude Code SessionEnd hook
     // payload contains only {session_id, transcript_path, cwd, hook_event_name,
     // reason} — no cost field — so the hook cannot record it. Write here

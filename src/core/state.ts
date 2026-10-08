@@ -91,12 +91,26 @@ export type NodeState = {
   iteration: number;
   /** Claude session ID, persisted for gate resume. */
   sessionId?: string;
-  /** Cumulative cost in USD for this node's SDK session(s). */
+  /**
+   * Cost in USD of this node: the sum, over DISTINCT SDK sessions that executed
+   * it, of each session's latest CUMULATIVE cost. The SDK's `total_cost_usd` is
+   * cumulative for a resumed session (gate reject / amend resume the same
+   * sessionId), so a resume REPLACES that session's contribution and a new
+   * session ADDS — see `accrueSessionCost`. Executions that end `failed` do not
+   * accrue (their spend is only in friction.jsonl).
+   */
   cost: number;
   /** History of gate decisions for this node. */
   gateHistory: GateHistoryEntry[];
   /** Last error message if status === 'failed'. */
   error?: string;
+  /**
+   * Part of `cost` contributed by sessions OTHER than `sessionId` (the latest
+   * one) — i.e. what a resume of `sessionId` must keep when it replaces that
+   * session's cumulative figure. Absent on state written before this field
+   * existed; `accrueSessionCost` then assumes a single session (base 0).
+   */
+  priorSessionsCost?: number;
   /** Number of interrupt-driven retries consumed. Absent = 0. */
   interruptRetries?: number;
   /**
@@ -114,9 +128,44 @@ export type NodeAttempt = {
   startedAt: string;
   endedAt: string;
   durationMs: number;
-  /** Cost of THIS execution only (not cumulative). */
+  /** What THIS execution added to the node's cost (delta; attempts sum to `cost`). */
   cost: number;
 };
+
+/**
+ * Fold one finished SDK execution into a node's cost.
+ *
+ * `result.cost` is the SESSION's cumulative total. `resumedFrom` is the
+ * sessionId the executor was handed (`ctx.sessionId`); only an execution that
+ * resumed that very session (result.sessionId === resumedFrom) replaces its
+ * contribution. Anything else (fresh start, `dagrun rerun`, an amend reset that
+ * dropped sessionId, a recovery that minted a new id) is a NEW session and adds
+ * to everything accrued so far.
+ *
+ * Legacy state (no `priorSessionsCost`) on a resume: assume the node ran in one
+ * session (base 0). That is right for the common gate-revise case and corrects
+ * the old double-counted figure on the next resume; the only miss is a legacy
+ * node that ever used two distinct sessions (under-counts the earlier one).
+ *
+ * `delta` is what this execution changed in the node's cost; recorded as the
+ * attempt's cost so sum(attempts[].cost) === node.cost. It can be negative once,
+ * when it corrects a legacy inflated figure.
+ */
+export function accrueSessionCost(
+  prev: Pick<NodeState, "cost" | "sessionId" | "priorSessionsCost"> | undefined,
+  resumedFrom: string | undefined,
+  result: { sessionId: string; cost: number },
+): { cost: number; priorSessionsCost: number; delta: number } {
+  const prevCost = prev?.cost ?? 0;
+  const resumed =
+    resumedFrom !== undefined &&
+    resumedFrom !== "" &&
+    prev?.sessionId === resumedFrom &&
+    result.sessionId === resumedFrom;
+  const base = resumed ? Math.min(prev?.priorSessionsCost ?? 0, prevCost) : prevCost;
+  const cost = base + result.cost;
+  return { cost, priorSessionsCost: base, delta: cost - prevCost };
+}
 
 // ---------------------------------------------------------------------------
 // Run-level state
