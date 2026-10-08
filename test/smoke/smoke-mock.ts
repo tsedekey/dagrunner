@@ -704,6 +704,16 @@ writeFileSync(
   JSON.stringify(staleState, null, 2),
   "utf8",
 );
+// The stale run's pr node is "done" — as a real finished one, it published a PR
+// (prUrl set), so runPrPostProcess has nothing to do. A done pr node WITHOUT
+// deliverables now fails the run loud (see run-engine.ts runPrPostProcess).
+mkdirSync(join(staleRunDir, "pr"), { recursive: true });
+writeFileSync(join(staleRunDir, "pr", "body.md"), "stale pr body\n", "utf8");
+writeFileSync(
+  join(staleRunDir, "pr", "pr-meta.json"),
+  JSON.stringify({ title: "stale", prUrl: "https://example.invalid/pull/1" }),
+  "utf8",
+);
 
 await resumeRun({
   runId: STALE_RUN_ID,

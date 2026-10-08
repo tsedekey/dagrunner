@@ -82,6 +82,27 @@ async function quiet<T>(fn: () => Promise<T>): Promise<T> {
     process.stderr.write = errw;
   }
 }
+class Exit extends Error {
+  constructor(public code: number) {
+    super(`exit ${code}`);
+  }
+}
+/** Run fn with process.exit intercepted; returns the exit code (0 if it returned normally). */
+async function captureExit(fn: () => Promise<unknown>): Promise<number> {
+  const real = process.exit.bind(process);
+  process.exit = ((c?: number) => {
+    throw new Exit(c ?? 0);
+  }) as typeof process.exit;
+  try {
+    await fn();
+    return 0;
+  } catch (e) {
+    if (e instanceof Exit) return e.code;
+    throw e;
+  } finally {
+    process.exit = real;
+  }
+}
 const stateOf = (runDir: string): RunState =>
   JSON.parse(readFileSync(join(runDir, "state.json"), "utf8")) as RunState;
 const briefOf = (runDir: string, gate: string): GateBrief =>
@@ -139,7 +160,10 @@ const factory =
     return result;
   };
 
-async function newRun(over: Record<string, NodeScenario> = {}) {
+async function newRun(
+  over: Record<string, NodeScenario> = {},
+  fx: (over?: Record<string, NodeScenario>) => () => NodeExecutor = factory,
+) {
   const { home, plan } = newHome();
   await quiet(() =>
     startRun({
@@ -147,7 +171,7 @@ async function newRun(over: Record<string, NodeScenario> = {}) {
       planPath: plan,
       homeDir: home,
       config,
-      executorFactory: factory(over),
+      executorFactory: fx(over),
       companionSessionId: SESSION,
     }),
   );
@@ -159,6 +183,7 @@ const decide = (
   brief: GateBrief,
   o: Record<string, unknown>,
   over: Record<string, NodeScenario> = {},
+  fx: (over?: Record<string, NodeScenario>) => () => NodeExecutor = factory,
 ) =>
   quiet(() =>
     gateDecide({
@@ -169,7 +194,7 @@ const decide = (
       revision: brief.revision,
       action: "approve",
       ...o,
-      executorFactory: factory(over),
+      executorFactory: fx(over),
     } as never),
   );
 /** propose, then confirm — returns the decision id. */
@@ -447,6 +472,56 @@ const R = await newRun();
   );
   say(
     '7 passed: amend at the pre-PR gate re-runs fix, invalidates + archives verify/pr, no publication (featureWorkflow pr.gate.amendTargets: ["fix"])',
+  );
+}
+
+// ===========================================================================
+// 8. Fail loud: the pr node "wrote" body.md/pr-meta.json into the WORKTREE
+//    (.dagrun-pr-output/) instead of its artifacts dir — the exact miswrite of
+//    run 51496-1. Approving the pre-PR gate must FAIL the run (exit 1, pr node
+//    failed with a clear error), never report "done" with nothing published.
+// ===========================================================================
+{
+  const strayFactory =
+    (over: Record<string, NodeScenario> = {}) =>
+    (): NodeExecutor => {
+      const inner = factory(over)();
+      return async (id, node, ctx) => {
+        const res = await inner(id, node, ctx);
+        if (id === "pr") {
+          const stray = join(ctx.worktreePath, ".dagrun-pr-output");
+          mkdirSync(stray, { recursive: true });
+          for (const f of ["body.md", "pr-meta.json"]) {
+            writeFileSync(
+              join(stray, f),
+              readFileSync(join(ctx.artifactsDir, f), "utf8"),
+            );
+            rmSync(join(ctx.artifactsDir, f), { force: true });
+          }
+        }
+        return res;
+      };
+    };
+  const X = await newRun({}, strayFactory);
+  const bd = briefOf(X.runDir, "define");
+  await decide(X, bd, { confirm: await propose(X, bd, {}) }, {}, strayFactory);
+  const bf = briefOf(X.runDir, "fix");
+  const idf = await propose(X, bf, { runNext: false });
+  await decide(X, bf, { runNext: false, confirm: idf }, {}, strayFactory);
+  assert.equal(stateOf(X.runDir).nodes["pr"]?.status, "awaiting-gate");
+  const bp = briefOf(X.runDir, "pr");
+  const idp = await propose(X, bp, {});
+  const code = await captureExit(() =>
+    decide(X, bp, { confirm: idp }, {}, strayFactory),
+  );
+  assert.equal(code, 1, "approving a pr gate with no usable deliverables must exit 1");
+  const sx = stateOf(X.runDir);
+  assert.equal(sx.nodes["pr"]?.status, "failed");
+  assert.equal(sx.status, "failed", "run must not report done");
+  assert.match(sx.nodes["pr"]?.error ?? "", /\.dagrun-pr-output/);
+  assert.match(sx.nodes["pr"]?.error ?? "", /dagrun rerun .* pr/);
+  say(
+    "8 passed: pr deliverables written to the worktree stray dir -> pr gate approval FAILS the run (exit 1, pr failed, hint names .dagrun-pr-output)",
   );
 }
 

@@ -28,7 +28,7 @@
  *   may relocate them to a shared types module in Block 4.
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Node } from "../core/types.js";
 import { gitDirtyPaths, gitHead } from "../core/verify-evidence.js";
@@ -157,6 +157,31 @@ const MOCK_GATE_ARTIFACT = "awaiting-review.md";
  * behaviour. Unrecognised node ids default to 'success'.
  */
 export function createMockExecutor(scenarios: ScenarioMap = {}): NodeExecutor {
+  const base = createScenarioExecutor(scenarios);
+  return async function mockExecutor(nodeId, node, ctx) {
+    const res = await base(nodeId, node, ctx);
+    // A real /pr session writes pr-meta.json (title; no prUrl yet) next to body.md,
+    // and runPrPostProcess now FAILS the run when it is missing — so a mock pr
+    // node that "wrote its output" must model that too. Not for missing-produces
+    // (that scenario models a node that wrote nothing).
+    if (
+      nodeId === "pr" &&
+      scenarios[nodeId] !== "missing-produces" &&
+      (res.status === "done" || res.status === "awaiting-gate") &&
+      existsSync(ctx.artifactsDir) &&
+      !existsSync(join(ctx.artifactsDir, "pr-meta.json"))
+    ) {
+      writeFileSync(
+        join(ctx.artifactsDir, "pr-meta.json"),
+        JSON.stringify({ title: "feat: mock pr" }, null, 2),
+        "utf8",
+      );
+    }
+    return res;
+  };
+}
+
+function createScenarioExecutor(scenarios: ScenarioMap): NodeExecutor {
   return async function mockExecutor(
     nodeId: string,
     node: Node,
@@ -366,7 +391,7 @@ export function createMockExecutor(scenarios: ScenarioMap = {}): NodeExecutor {
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const MOCK_NODE: Node = {

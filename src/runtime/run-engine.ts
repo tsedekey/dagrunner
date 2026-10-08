@@ -1098,7 +1098,11 @@ export async function startRun(opts: {
   const ctx = makeCtx(runDir);
   const result = await runDag(workflow, executor, state, { ctx, stateFile });
 
-  runPrPostProcess(readState(stateFile), runDir);
+  if (!runPrPostProcess(readState(stateFile), runDir, stateFile).ok) {
+    releaseLock(homeDir);
+    process.stdout.write(`dagrun: run ${runId} failed\n`);
+    process.exit(1);
+  }
 
   // Night-mode: auto-resolve agent-decidable gates in a loop.
   if (opts.nightMode === true && result.status === "paused") {
@@ -1228,7 +1232,11 @@ export async function startRun(opts: {
         ctx,
         stateFile,
       });
-      runPrPostProcess(readState(stateFile), runDir);
+      if (!runPrPostProcess(readState(stateFile), runDir, stateFile).ok) {
+        releaseLock(homeDir);
+        process.stdout.write(`dagrun: run ${runId} failed\n`);
+        process.exit(1);
+      }
       nightState = readState(stateFile);
 
       if (nightResult.status !== "paused") {
@@ -1924,7 +1932,11 @@ export async function resumeRun(opts: {
   const ctx = makeCtx(runDir);
   const result = await runDag(workflow, executor, state, { ctx, stateFile });
 
-  runPrPostProcess(readState(stateFile), runDir);
+  if (!runPrPostProcess(readState(stateFile), runDir, stateFile).ok) {
+    releaseLock(homeDir);
+    process.stdout.write(`dagrun: run ${runId} failed\n`);
+    process.exit(1);
+  }
 
   if (result.status === "paused") {
     releaseLock(homeDir);
@@ -1961,12 +1973,23 @@ export async function resumeRun(opts: {
  * Bash tool without the sandbox's proxy in the way.
  *
  * Reads pr-meta.json for the branch and title written by the agent.
- * Writes prUrl back to pr-meta.json on success, pr-error.txt on failure.
+ * Writes prUrl back to pr-meta.json on success, pr-error.txt on push/gh failure.
  * Idempotent — skips if prUrl is already set.
+ *
+ * Fails LOUD when the deliverables themselves are missing/unparseable: the pr
+ * node is marked `failed` (state.json error, pr/pr-error.txt, node.finished
+ * event), the run `failed`, and the caller gets `{ok:false}` and must exit
+ * nonzero — see the four call sites. Push/`gh` failures keep their existing
+ * softer contract (pr-error.txt + message, node stays done): the deliverables
+ * are intact and a manual command is printed; the smokes pin that behaviour.
  */
-function runPrPostProcess(state: RunState, runDir: string): void {
+export function runPrPostProcess(
+  state: RunState,
+  runDir: string,
+  stateFile: string,
+): { ok: true } | { ok: false; error: string } {
   const prNodeState = state.nodes["pr"];
-  if (prNodeState?.status !== "done") return;
+  if (prNodeState?.status !== "done") return { ok: true };
 
   // Primary locations (correct): runs/<id>/pr/body.md and pr-meta.json.
   // Fallback locations (miswrite): agent used $DAGRUN_RUN_DIR instead of
@@ -1982,7 +2005,46 @@ function runPrPostProcess(state: RunState, runDir: string): void {
     : existsSync(join(runDir, "body.md"))
       ? join(runDir, "body.md")
       : "";
-  if (metaPath === "" || bodyPath === "") return;
+
+  // Fail loud (CLAUDE.md): an approved pr gate whose deliverables are missing
+  // or unreadable must NOT look like a finished run. Run 51496-1: the pr node
+  // wrote both files to <worktree>/.dagrun-pr-output/, this function silently
+  // returned, the run reported "done" and nothing was ever pushed.
+  const failPr = (reason: string): { ok: false; error: string } => {
+    const stray = join(state.worktreePath, ".dagrun-pr-output");
+    const error =
+      `pr deliverables not usable: ${reason}. Expected ${join(runDir, "pr", "body.md")} ` +
+      `and ${join(runDir, "pr", "pr-meta.json")} (valid JSON).` +
+      (existsSync(stray)
+        ? ` Found a stray ${stray} in the worktree — the pr node wrote its output there instead of $DAGRUN_ARTIFACTS.`
+        : "") +
+      ` Nothing was pushed and no PR was created. Re-run the pr node: dagrun rerun ${state.runId} pr`;
+    const errorPath = join(runDir, "pr", "pr-error.txt");
+    try {
+      mkdirSync(join(runDir, "pr"), { recursive: true });
+      writeFileSync(errorPath, error + "\n", "utf8");
+    } catch {
+      // the state.json error below is the authoritative record
+    }
+    const now = new Date().toISOString();
+    writeState(stateFile, {
+      ...state,
+      status: "failed",
+      updatedAt: now,
+      nodes: {
+        ...state.nodes,
+        pr: { ...prNodeState, status: "failed", error, endedAt: now },
+      },
+    });
+    process.stderr.write(`dagrun: ${error}\n`);
+    return { ok: false, error };
+  };
+
+  const missing = [
+    ...(bodyPath === "" ? ["body.md"] : []),
+    ...(metaPath === "" ? ["pr-meta.json"] : []),
+  ];
+  if (missing.length > 0) return failPr(`missing ${missing.join(" and ")}`);
 
   let meta: Record<string, unknown>;
   try {
@@ -1990,11 +2052,13 @@ function runPrPostProcess(state: RunState, runDir: string): void {
       string,
       unknown
     >;
-  } catch {
-    return;
+  } catch (e) {
+    return failPr(
+      `${metaPath} is not valid JSON (${e instanceof Error ? e.message : String(e)})`,
+    );
   }
 
-  if (typeof meta["prUrl"] === "string" && meta["prUrl"] !== "") return;
+  if (typeof meta["prUrl"] === "string" && meta["prUrl"] !== "") return { ok: true };
 
   const worktreePath = state.worktreePath;
   const title =
@@ -2008,7 +2072,7 @@ function runPrPostProcess(state: RunState, runDir: string): void {
     const msg = e instanceof Error ? e.message : String(e);
     writeFileSync(errorPath, `git push failed: ${msg}\n`);
     process.stdout.write(`dagrun: git push failed — see ${errorPath}\n`);
-    return;
+    return { ok: true }; // publication failure is surfaced via pr-error.txt (existing contract, smoke-pinned)
   }
 
   // Create the draft PR, targeting the run's base branch (supports hotfix branches).
@@ -2029,6 +2093,7 @@ function runPrPostProcess(state: RunState, runDir: string): void {
       `  Manual: cd "${worktreePath}" && gh pr create --draft --title ${JSON.stringify(title)} --body-file "${bodyPath}" --base ${JSON.stringify(baseBranch)}\n`,
     );
   }
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -2373,7 +2438,12 @@ export async function rerunNode(opts: {
     },
   };
   writeState(stateFile, updatedState);
-  runPrPostProcess(updatedState, runDir);
+  const prPost = runPrPostProcess(updatedState, runDir, stateFile);
+  if (!prPost.ok) {
+    // rerunNode holds no run lock (debug tool) — just report and exit nonzero.
+    process.stdout.write(`dagrun: node "${nodeId}" rerun → failed\n`);
+    process.exit(1);
+  }
 
   process.stdout.write(`dagrun: node "${nodeId}" rerun → ${newStatus}\n`);
   if (newStatus === "done" || newStatus === "awaiting-gate") {

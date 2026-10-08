@@ -37,8 +37,10 @@ import {
   severityForcesPause,
   archivePriorAttempt,
   archiveInterruptedNodeArtifacts,
+  runPrPostProcess,
 } from "./run-engine.js";
 import type { RunState, NodeState } from "../core/state.js";
+import { readState, writeState } from "../core/state.js";
 
 // ---------------------------------------------------------------------------
 // Minimal RunState/NodeState fixture helper (archiveInterruptedNodeArtifacts
@@ -799,4 +801,111 @@ test("archiveInterruptedNodeArtifacts: no-op when the reset node has no prior ar
     true,
     "a clean artifacts dir must still exist for the retry to write into",
   );
+});
+
+
+// ---------------------------------------------------------------------------
+// runPrPostProcess — missing/unparseable pr deliverables must FAIL the node
+// (run 51496-1: the pr node wrote body.md/pr-meta.json into the worktree, the
+// post-process silently returned, the run reported "done", nothing was pushed).
+// ---------------------------------------------------------------------------
+
+function prRun(opts: { prStatus?: NodeState["status"]; withPrNode?: boolean } = {}): {
+  runDir: string;
+  worktree: string;
+  stateFile: string;
+} {
+  const root = mkdtempSync(join(tmpdir(), "dr-prpp-"));
+  const runDir = join(root, "run");
+  const worktree = join(root, "wt");
+  mkdirSync(join(runDir, "pr"), { recursive: true });
+  mkdirSync(worktree, { recursive: true });
+  const state: RunState = {
+    runId: "r1",
+    workflow: "bugfix",
+    createdAt: "T",
+    updatedAt: "T",
+    status: "running",
+    worktreePath: worktree,
+    branch: "b",
+    sourcePlanPath: "/p",
+    nodes:
+      opts.withPrNode === false
+        ? { fix: nodeState("done") }
+        : { fix: nodeState("done"), pr: nodeState(opts.prStatus ?? "done") },
+  };
+  const stateFile = join(runDir, "state.json");
+  writeState(stateFile, state);
+  return { runDir, worktree, stateFile };
+}
+
+function postProcess(r: { runDir: string; stateFile: string }) {
+  return runPrPostProcess(readState(r.stateFile), r.runDir, r.stateFile);
+}
+
+test("runPrPostProcess: missing body.md fails the pr node and the run, naming expected paths", () => {
+  const r = prRun();
+  writeFileSync(join(r.runDir, "pr", "pr-meta.json"), JSON.stringify({ title: "t", prUrl: "http://x/1" }));
+  const res = postProcess(r);
+  assert.equal(res.ok, false);
+  const after = readState(r.stateFile);
+  assert.equal(after.nodes["pr"]?.status, "failed");
+  assert.equal(after.status, "failed");
+  const err = after.nodes["pr"]?.error ?? "";
+  assert.match(err, /body\.md/);
+  assert.ok(err.includes(join(r.runDir, "pr")), "error names the expected directory");
+  assert.ok(existsSync(join(r.runDir, "pr", "pr-error.txt")));
+});
+
+test("runPrPostProcess: missing pr-meta.json fails loud", () => {
+  const r = prRun();
+  writeFileSync(join(r.runDir, "pr", "body.md"), "body");
+  const res = postProcess(r);
+  assert.equal(res.ok, false);
+  assert.match(readState(r.stateFile).nodes["pr"]?.error ?? "", /pr-meta\.json/);
+  assert.equal(readState(r.stateFile).status, "failed");
+});
+
+test("runPrPostProcess: unparseable pr-meta.json fails loud with the parse error", () => {
+  const r = prRun();
+  writeFileSync(join(r.runDir, "pr", "body.md"), "body");
+  writeFileSync(join(r.runDir, "pr", "pr-meta.json"), "{ not json");
+  const res = postProcess(r);
+  assert.equal(res.ok, false);
+  assert.match(readState(r.stateFile).nodes["pr"]?.error ?? "", /not valid JSON/);
+  assert.equal(readState(r.stateFile).nodes["pr"]?.status, "failed");
+});
+
+test("runPrPostProcess: deliverables only in <worktree>/.dagrun-pr-output/ fail with a hint naming that dir", () => {
+  const r = prRun();
+  mkdirSync(join(r.worktree, ".dagrun-pr-output"), { recursive: true });
+  writeFileSync(join(r.worktree, ".dagrun-pr-output", "body.md"), "body");
+  writeFileSync(join(r.worktree, ".dagrun-pr-output", "pr-meta.json"), "{}");
+  const res = postProcess(r);
+  assert.equal(res.ok, false);
+  const err = readState(r.stateFile).nodes["pr"]?.error ?? "";
+  assert.ok(err.includes(join(r.worktree, ".dagrun-pr-output")), `hint missing: ${err}`);
+  assert.match(err, /dagrun rerun r1 pr/);
+});
+
+test("runPrPostProcess: legitimate skips are unchanged (prUrl already set; pr not done; no pr node)", () => {
+  const withUrl = prRun();
+  writeFileSync(join(withUrl.runDir, "pr", "body.md"), "body");
+  writeFileSync(join(withUrl.runDir, "pr", "pr-meta.json"), JSON.stringify({ title: "t", prUrl: "http://x/1" }));
+  assert.equal(postProcess(withUrl).ok, true);
+  assert.equal(readState(withUrl.stateFile).nodes["pr"]?.status, "done");
+
+  const awaiting = prRun({ prStatus: "awaiting-gate" }); // no files at all: pr not done yet
+  assert.equal(postProcess(awaiting).ok, true);
+  assert.equal(readState(awaiting.stateFile).nodes["pr"]?.status, "awaiting-gate");
+
+  const noPr = prRun({ withPrNode: false });
+  assert.equal(postProcess(noPr).ok, true);
+});
+
+test("runPrPostProcess: miswrite fallback in the run dir root still works (unchanged)", () => {
+  const r = prRun();
+  writeFileSync(join(r.runDir, "body.md"), "body");
+  writeFileSync(join(r.runDir, "pr-meta.json"), JSON.stringify({ title: "t", prUrl: "http://x/2" }));
+  assert.equal(postProcess(r).ok, true);
 });

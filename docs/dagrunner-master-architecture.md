@@ -565,7 +565,17 @@ via feedback-N.md, or a workflow-declared `gate.amendTargets` ancestor — bugfi
 archives and resets every downstream node so no stale evidence is reused), `hold` (record, stay
 paused). Legacy `resume --approve/--reject` is refused on companion runs. Independently, nothing here
 authorizes merge, reviewer requests, marking ready, or backport labels; the draft PR is pushed/created
-only after the pre-PR gate is approved (`runPrPostProcess`).
+only after the pre-PR gate is approved (`runPrPostProcess`). **That step fails loud**: if the pr node's
+`body.md` / `pr-meta.json` are missing or `pr-meta.json` is not valid JSON, the pr node is marked `failed`
+(state.json `error` names the expected paths, hints at a stray `<worktree>/.dagrun-pr-output/`, and says
+`dagrun rerun <run> pr`; also written to `pr/pr-error.txt`), the run is `failed`, and every caller
+(`startRun`, the night-mode loop, `resumeRun` — which also serves companion `gate decide --confirm` — and
+`rerunNode`) exits 1. Why: pr is a gated node, so approval flips it to `done` without the `produces` check
+that ungated nodes get; run `51496-1` approved a pr gate whose output had been written into the worktree,
+printed "run done", and nothing was ever pushed. Skips that stay silent: `prUrl` already set (idempotent),
+pr node not `done`, no pr node. Push / `gh pr create` failures keep the softer contract (message +
+`pr-error.txt`, node stays `done`, manual command printed) — the deliverables are intact and the smokes pin
+it. The mock executor writes a `pr-meta.json` for a `pr` node so mock runs model a real pr session.
 
 **Gate-reading now also covers digest's old job (v0.1.65 — `DECISIONS.md §
 digest-removed-folded-into-companion`).** The now-removed `digest` node (§3f) read
