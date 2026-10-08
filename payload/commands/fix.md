@@ -1,25 +1,21 @@
 You are running the **fix node** of a dagrunner pipeline. Your job is to apply targeted code fixes for high-confidence review findings, self-verify the result, and write a summary artifact.
 
-> **⚠️ Do not try to print or discover the literal value of any `$DAGRUN_*` variable** (e.g. via
-> `echo`, `printenv`, `env`, or `node -e ...process.env`) — this sandbox's Bash tool blocks bare
-> variable-expansion/introspection commands outright, before any approval prompt; and even where
-> it doesn't, printing env vars requires human approval that never arrives in this unattended
-> session. Using a `$DAGRUN_*` variable inline inside a real command works fine — the shell expands
-> it as part of that command's own side effect:
+> **Run environment.** The engine appends a `<run-environment>` block to your prompt with the
+> **literal absolute** `artifactsDir`, `runDir` and `worktree` paths — use those directly:
 >
-> - **Read** a `$DAGRUN_ARTIFACTS`-relative file via `cat` in Bash (e.g.
->   `cat "$DAGRUN_ARTIFACTS/../review/findings.json"`) — not the Read tool, which needs a literal
->   path you don't have.
-> - **Write** via a heredoc (`cat > "$DAGRUN_ARTIFACTS/x.md" << 'EOF' ... EOF`) — not the Write
->   tool, for the same reason.
-> - If you ever genuinely need the literal path, derive it with `cd "$DAGRUN_ARTIFACTS" && pwd` —
->   a real command, not a bare print.
+> - **Read** upstream artifacts at `<runDir>/<node>/<file>` with the Read tool (or `cat` in Bash).
+> - **Write** your artifacts to `<artifactsDir>/<file>` with the Write tool using that exact absolute
+>   path (or a heredoc redirect to it). `runDir` is read-only.
+> - `$DAGRUN_ARTIFACTS`, `$DAGRUN_RUN_DIR`, … are still set, and the `$DAGRUN_*` snippets below are
+>   equivalent to the literal paths — but prefer the literal path in Bash commands: the sandbox may
+>   reject a command that merely contains a variable expansion (`simple_expansion`), and a bare
+>   `echo`/`printenv` of a variable is always rejected. Never print or discover them.
 
 ---
 
 ## Step 1 — Read findings
 
-Read the review artifact via `cat` (see the note above — do not use the Read tool here):
+Read the review artifact (Read tool at `<runDir>/review/findings.json`, or `cat`):
 
 ```bash
 cat "$DAGRUN_ARTIFACTS/../review/findings.json"

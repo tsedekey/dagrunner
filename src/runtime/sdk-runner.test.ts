@@ -17,7 +17,13 @@ import {
   selectPermissionMode,
   buildBaseQueryOptions,
   applyNodeOptions,
+  buildNodePrompt,
+  buildRunEnvironmentBlock,
 } from "./sdk-runner.js";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { ExecutionCtx } from "./mock-executor.js";
 import { buildSeededSettings } from "../config/settings-seed.js";
 import type { Node } from "../core/types.js";
 
@@ -185,4 +191,83 @@ test("teeth-check: seeded settings always wire the deny-guard (stop-verifier) ho
     stopCommands.some((c) => c.includes("stop-verifier")),
     `deny-guard (stop-verifier) hook must be present in Stop hooks; got: ${JSON.stringify(stopCommands)}`,
   );
+});
+
+// ---------------------------------------------------------------------------
+// Run-environment block — the engine hands nodes their literal paths
+// ---------------------------------------------------------------------------
+
+function promptFixture(): { ctx: ExecutionCtx; wt: string } {
+  const root = mkdtempSync(join(tmpdir(), "dr-prompt-"));
+  const runDir = join(root, "runs", "r1");
+  const artifactsDir = join(runDir, "fix");
+  const wt = join(root, "worktrees", "r1");
+  mkdirSync(artifactsDir, { recursive: true });
+  return { ctx: { runDir, artifactsDir, worktreePath: wt }, wt };
+}
+
+test("buildNodePrompt: first run = slash command + single space + block with the literal paths", () => {
+  const { ctx, wt } = promptFixture();
+  const prompt = buildNodePrompt(baseNode({ command: "/fix" }), ctx, wt);
+  // single space after the command so the command name still parses
+  assert.ok(prompt.startsWith("/fix <run-environment>\n"), prompt);
+  assert.ok(prompt.includes(ctx.artifactsDir));
+  assert.ok(prompt.includes(ctx.runDir));
+  assert.ok(prompt.includes(wt));
+  assert.ok(prompt.endsWith("</run-environment>"));
+});
+
+test("buildNodePrompt: feedback resume keeps <reviewer-feedback> first and appends the block", () => {
+  const { ctx, wt } = promptFixture();
+  writeFileSync(join(ctx.artifactsDir, "feedback-1.md"), "please add a test\n");
+  const prompt = buildNodePrompt(
+    baseNode({ command: "/fix", produces: ["summary.md"] }),
+    { ...ctx, sessionId: "sess-1" },
+    wt,
+  );
+  assert.ok(prompt.startsWith("<reviewer-feedback>\nplease add a test\n</reviewer-feedback>"), prompt);
+  assert.ok(prompt.includes(join(ctx.artifactsDir, "summary.md")), "default revision instruction unchanged");
+  assert.ok(prompt.includes(`artifactsDir (`) && prompt.includes(ctx.artifactsDir));
+  assert.ok(prompt.endsWith("</run-environment>"));
+});
+
+test("buildNodePrompt: resumed session without a feedback file still carries the block", () => {
+  const { ctx, wt } = promptFixture();
+  const prompt = buildNodePrompt(baseNode({ command: "/fix" }), { ...ctx, sessionId: "sess-1" }, wt);
+  assert.ok(prompt.startsWith("/fix <run-environment>"));
+  assert.ok(prompt.includes(ctx.runDir));
+});
+
+test("buildRunEnvironmentBlock: paths only — no env values, no secrets", () => {
+  const { ctx, wt } = promptFixture();
+  process.env["ANTHROPIC_API_KEY"] = "sk-test-secret";
+  try {
+    const block = buildRunEnvironmentBlock(ctx, wt);
+    assert.ok(!block.includes("sk-test-secret"));
+    assert.equal(block.split("\n").length, 6);
+  } finally {
+    delete process.env["ANTHROPIC_API_KEY"];
+  }
+});
+
+test("payload/commands no longer tell nodes a literal path is unobtainable or to avoid the Write tool", () => {
+  const dir = join(new URL("../../payload/commands/", import.meta.url).pathname);
+  const banned = [
+    /no reliable way to\s+obtain one/i,
+    /not the Write\s+tool/i,
+    /never via the Write tool/i,
+    /not the Read tool, which needs/i,
+    /Do not try to print or discover the literal value/i,
+    /a literal path you don't have/i,
+  ];
+  const nodeCommands = ["define", "reproduce", "implement", "review", "fix", "verify", "pr"];
+  for (const name of readdirSync(dir)) {
+    const text = readFileSync(join(dir, name), "utf8");
+    for (const re of banned) {
+      assert.ok(!re.test(text), `${name} still contains ${re}`);
+    }
+    if (nodeCommands.includes(name.replace(/\.md$/, ""))) {
+      assert.ok(text.includes("<run-environment>"), `${name} must point at the injected <run-environment> block`);
+    }
+  }
 });

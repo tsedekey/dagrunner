@@ -6,35 +6,27 @@ produce the artifacts.
 
 ## Step 0 — Confirm output directory
 
+The engine appends a `<run-environment>` block to your prompt with the **literal absolute**
+`artifactsDir`, `runDir` and `worktree` paths. `artifactsDir` (it ends with the node name, `pr/`) is
+the **only** directory you may write to — put `body.md` and `pr-meta.json` there, nowhere else: not
+the worktree, not a scratch dir (a `.dagrun-pr-output/` in the worktree is NOT picked up and fails the
+run). `runDir` is read-only in this session — never write there.
+
 ```bash
 mkdir -p "$DAGRUN_ARTIFACTS"
 ```
 
-The value of `$DAGRUN_ARTIFACTS` is the **only** directory you may write to.
-It ends with the node name (`pr/`), not `artifacts/`.
-
-**Do not try to print or discover the literal value of `$DAGRUN_ARTIFACTS`**
-(e.g. via `echo "$DAGRUN_ARTIFACTS"`, `printenv`, or `env`) — this sandbox's
-Bash tool blocks bare variable-expansion/introspection commands outright,
-before any approval prompt. Using the variable inline inside a real command
-(`mkdir -p "$DAGRUN_ARTIFACTS"`, or a heredoc redirect as in Step 2/3) works
-fine — the shell expands it as part of that command's own side effect. It is
-only _printing_ a variable's bare value that gets rejected. Because of this,
-write every artifact via heredoc (see Step 2/3), never via the Write tool —
-the Write tool needs a literal path string, and there is no reliable way to
-obtain one in this sandbox.
-
-All output files go to `$DAGRUN_ARTIFACTS/`.
-`$DAGRUN_RUN_DIR` is read-only in this session — never write there.
+You may write with the Write tool using the literal `artifactsDir` path from the block, or with a
+heredoc redirect (as in Step 2/3). `$DAGRUN_ARTIFACTS` holds the same path and the snippets below use
+it, but prefer the literal path in Bash commands: the sandbox may reject a command that merely
+contains a variable expansion (`simple_expansion`), and a bare `echo`/`printenv` of a variable is
+always rejected. Never print or discover it.
 
 ## Step 1 — Read all available artifacts
 
-**Do not try to print or discover the literal value of any `$DAGRUN_*` variable** (e.g. via `echo`,
-`printenv`, or `env`) — this sandbox's Bash tool blocks bare variable-expansion/introspection
-commands outright, before any approval prompt (same constraint as Step 0's `$DAGRUN_ARTIFACTS`
-note). Read each of these inputs via `cat` in Bash (not the Read tool, which needs a literal path
-you don't have) — a `$DAGRUN_*` variable used inline inside a real command like `cat` expands fine,
-it is only a bare print that gets rejected:
+Read each of these inputs from the literal `runDir` in your `<run-environment>` block (Read tool or
+`cat`). `$DAGRUN_RUN_DIR` holds the same path and the snippet below uses it, but the literal path is
+preferred (see Step 0):
 
 ```bash
 cat "$DAGRUN_RUN_DIR/plan/plan.md" 2>/dev/null
@@ -86,7 +78,7 @@ BODY
 
 ## Step 3 — Write metadata
 
-Use a heredoc (not the Write tool — see Step 0) to write `$DAGRUN_ARTIFACTS/pr-meta.json`:
+Write `pr-meta.json` into `artifactsDir` (Write tool with the literal path, or the heredoc below):
 
 The `title` field must follow [Conventional Commits](https://www.conventionalcommits.org/) format
 as required by the Camunda monorepo:
@@ -101,18 +93,16 @@ as required by the Camunda monorepo:
 - **short description** — lowercase, imperative mood, no period, ≤60 chars after the prefix.
   Example: `feat: add retry logic to job activation` ✓ `feat: Added Retry Logic` ✗
 
-First, run this to get the branch name (a real command, not a bare variable print —
-this one is not blocked):
+First, run this to get the branch name:
 
 ```bash
 cd "$DAGRUN_WORKTREE" && git rev-parse --abbrev-ref HEAD
 ```
 
-Then write the heredoc yourself with that branch name and the other computed values
-(`title`, `verifyRan`, `createdAt`) substituted in as literal text. Leave
-`$DAGRUN_RUN_ID`/`$DAGRUN_WORKTREE`/`$DAGRUN_ARTIFACTS` as shell variables — the shell
-expands those safely as part of the heredoc's own redirect, you don't need to know
-their bare values:
+Then write the file with that branch name and the other computed values (`title`, `verifyRan`,
+`createdAt`) substituted in as literal text. With the heredoc form, `$DAGRUN_RUN_ID` /
+`$DAGRUN_WORKTREE` / `$DAGRUN_ARTIFACTS` may stay shell variables (the shell expands them inside the
+heredoc); with the Write tool use the literal paths from your `<run-environment>` block:
 
 ```bash
 cat > "$DAGRUN_ARTIFACTS/pr-meta.json" << META

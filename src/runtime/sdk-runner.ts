@@ -167,6 +167,68 @@ export function applyNodeOptions(options: Options, node: Node): Options {
 }
 
 // ---------------------------------------------------------------------------
+// Node prompt assembly
+// ---------------------------------------------------------------------------
+
+/**
+ * The fixed "Run environment" block appended to EVERY node prompt. The engine
+ * knows the literal absolute paths (ctx.artifactsDir etc.), so nodes must not
+ * have to discover them: run 51496-1 logged 46 permission_denied events, most
+ * of them nodes probing `$DAGRUN_*` via expansion/process-substitution, and the
+ * pr node wrote its deliverables into the worktree because the old prompts told
+ * it no literal path was obtainable. Paths only — never env values or secrets.
+ */
+export function buildRunEnvironmentBlock(
+  ctx: ExecutionCtx,
+  worktreePath: string,
+): string {
+  return [
+    "<run-environment>",
+    "Literal absolute paths for this node session. Use them exactly as written; there is no need to print or discover any $DAGRUN_* variable.",
+    `- artifactsDir (write ALL your output artifacts here, using the Write tool with this exact path or a heredoc redirect to it): ${ctx.artifactsDir}`,
+    `- runDir (READ-ONLY; upstream nodes' artifacts are at <runDir>/<node>/<file>): ${ctx.runDir}`,
+    `- worktree (your cwd: the repo checkout you work in): ${worktreePath}`,
+    "</run-environment>",
+  ].join("\n");
+}
+
+/**
+ * Assemble the prompt for one node execution.
+ *   first run:   `<command> <run-environment block>` — the block rides as the
+ *                slash command's arguments (single space after the command so
+ *                the command name still parses; commands without $ARGUMENTS get
+ *                them appended by Claude Code).
+ *   gate resume: the latest feedback-N.md as the next user turn so Claude
+ *                revises with full session memory (Theme 5), then the block.
+ */
+export function buildNodePrompt(
+  node: Node,
+  ctx: ExecutionCtx,
+  worktreePath: string,
+): string {
+  const env = buildRunEnvironmentBlock(ctx, worktreePath);
+  if (ctx.sessionId !== undefined && ctx.sessionId !== "") {
+    const feedbacks = readdirSync(ctx.artifactsDir)
+      .filter((f) => /^feedback-\d+\.md$/.test(f))
+      .sort();
+    const latest = feedbacks[feedbacks.length - 1];
+    if (latest !== undefined) {
+      const feedbackText = readFileSync(join(ctx.artifactsDir, latest), "utf8").trim();
+      const revisionBody =
+        node.revisionInstruction !== undefined
+          ? node.revisionInstruction.replace(/\{artifactsDir\}/g, ctx.artifactsDir)
+          : // Default: rewrite the primary artifact completely.
+            `Incorporate this feedback and rewrite ${join(ctx.artifactsDir, node.produces?.[0] ?? "artifact")} completely with the changes applied.`;
+      return (
+        `<reviewer-feedback>\n${feedbackText}\n</reviewer-feedback>\n\n` +
+        `${revisionBody}\n\n${env}`
+      );
+    }
+  }
+  return `${node.command} ${env}`;
+}
+
+// ---------------------------------------------------------------------------
 // makeSDKRunner
 // ---------------------------------------------------------------------------
 
@@ -198,37 +260,7 @@ export function makeSDKRunner(
     );
     mkdirSync(ctx.artifactsDir, { recursive: true });
 
-    // Determine prompt: on gate resume feed the latest feedback as the next
-    // user turn so Claude revises with full session memory (Theme 5).
-    let prompt = node.command;
-    if (ctx.sessionId !== undefined && ctx.sessionId !== "") {
-      const feedbacks = readdirSync(ctx.artifactsDir)
-        .filter((f) => /^feedback-\d+\.md$/.test(f))
-        .sort();
-      const latest = feedbacks[feedbacks.length - 1];
-      if (latest !== undefined) {
-        const feedbackPath = join(ctx.artifactsDir, latest);
-        const feedbackText = readFileSync(feedbackPath, "utf8").trim();
-        const revisionBody =
-          node.revisionInstruction !== undefined
-            ? node.revisionInstruction.replace(
-                /\{artifactsDir\}/g,
-                ctx.artifactsDir,
-              )
-            : (() => {
-                // Default: rewrite the primary artifact completely.
-                const primaryArtifact = node.produces?.[0] ?? "artifact";
-                const artifactFullPath = join(
-                  ctx.artifactsDir,
-                  primaryArtifact,
-                );
-                return `Incorporate this feedback and rewrite ${artifactFullPath} completely with the changes applied.`;
-              })();
-        prompt =
-          `<reviewer-feedback>\n${feedbackText}\n</reviewer-feedback>\n\n` +
-          revisionBody;
-      }
-    }
+    const prompt = buildNodePrompt(node, ctx, worktreePath);
 
     // Build SDK options object — only set keys whose values are defined
     // (exactOptionalPropertyTypes: never assign key: undefined).

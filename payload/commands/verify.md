@@ -23,9 +23,16 @@ Env vars you have:
 - `$DAGRUN_ARTIFACTS` — write `verify-report.json` and `demo.md` here (nowhere else)
 - `$DAGRUN_RUN_ID`, `$DAGRUN_WORKTREE` (your cwd), `$DAGRUN_RUN_DIR` (read upstream artifacts here)
 
-> **Do not print or discover the literal value of any `$DAGRUN_*` variable** (`echo`, `printenv`,
-> `env`, `node -e ...`) — the sandbox blocks it. Use the variable inline inside a real command
-> (`cat "$DAGRUN_RUN_DIR/..."`, heredoc writes to `"$DAGRUN_ARTIFACTS/..."`).
+> **Run environment.** The engine appends a `<run-environment>` block to your prompt with the
+> **literal absolute** `artifactsDir`, `runDir` and `worktree` paths — use those directly:
+>
+> - **Read** upstream artifacts at `<runDir>/<node>/<file>` with the Read tool (or `cat` in Bash).
+> - **Write** your artifacts to `<artifactsDir>/<file>` with the Write tool using that exact absolute
+>   path (or a heredoc redirect to it). `runDir` is read-only.
+> - `$DAGRUN_ARTIFACTS`, `$DAGRUN_RUN_DIR`, … are still set, and the `$DAGRUN_*` snippets below are
+>   equivalent to the literal paths — but prefer the literal path in Bash commands: the sandbox may
+>   reject a command that merely contains a variable expansion (`simple_expansion`), and a bare
+>   `echo`/`printenv` of a variable is always rejected. Never print or discover them.
 
 ## Known constraints (pre-verified — do not re-investigate)
 
