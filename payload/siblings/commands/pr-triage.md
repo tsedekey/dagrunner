@@ -55,7 +55,10 @@ Parse `$ARGUMENTS` (all optional). Validate this is a git checkout on a real bra
 name — not detached HEAD). Discover the open PR for that branch via `gh`. Fail loud if the
 checkout or branch is missing, or if no open PR is found — PR discovery is the real gate, not the
 branch name. All values (PR number, repo, run-id) are auto-discovered from git if not supplied as
-arguments.
+arguments. **`--run-id` contract:** every phase script resolves the run id the same way — `--run-id <id>`
+in the args string it is passed (`"$ARGUMENTS"`), else `$DAGRUN_RUN_ID`, else the sanitized branch name —
+so pass `"$ARGUMENTS"` to each phase script (the blocks below do) and keep deriving `RUN_ID` the same way
+in any inline step.
 
 ```bash
 SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/pr-triage"
@@ -77,7 +80,7 @@ Fetch all three comment types. Compute which are new or edited since the last ti
 
 ```bash
 SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/pr-triage"
-zsh "$SCRIPT_DIR/phase-1-fetch-comments.sh"
+zsh "$SCRIPT_DIR/phase-1-fetch-comments.sh" "$ARGUMENTS"
 ```
 
 **PHASE_1_CHECKPOINT:**
@@ -96,7 +99,7 @@ Phase 5 still runs to update the tick timestamp.
 
 ```bash
 SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/pr-triage"
-zsh "$SCRIPT_DIR/phase-2-noop-gate.sh"
+zsh "$SCRIPT_DIR/phase-2-noop-gate.sh" "$ARGUMENTS"
 ```
 
 If the script exits 0 with "tick is a no-op" output, skip to Phase 5. Otherwise continue.
@@ -113,7 +116,9 @@ If the script exits 0 with "tick is a no-op" output, skip to Phase 5. Otherwise 
 **MODEL WORK — no script.** Derive the artifacts path, then read the tick and triage state:
 
 ```bash
-RUN_ID="${DAGRUN_RUN_ID:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-')}"
+# same precedence as every phase script: --run-id in $ARGUMENTS > DAGRUN_RUN_ID > sanitized branch
+RUN_ID_ARG=$(echo "$ARGUMENTS" | sed -n 's/.*--run-id[[:space:]]*\([^[:space:]]*\).*/\1/p')
+RUN_ID="${RUN_ID_ARG:-${DAGRUN_RUN_ID:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-')}}"
 ARTIFACTS_DIR="${DAGRUN_ARTIFACTS:-$HOME/.local/share/dagrunner/runs/${RUN_ID}/pr-triage}"
 TRIAGE_STATE="$ARTIFACTS_DIR/triage-state.json"
 TICK_FILE="$ARTIFACTS_DIR/pr-triage-tick.json"
@@ -414,7 +419,7 @@ tick that did not reach Phase 5 will re-process on the next wake (fail-safe).
 
 ```bash
 SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/pr-triage"
-zsh "$SCRIPT_DIR/phase-5-persist.sh"
+zsh "$SCRIPT_DIR/phase-5-persist.sh" "$ARGUMENTS"
 ```
 
 **PHASE_5_CHECKPOINT:**

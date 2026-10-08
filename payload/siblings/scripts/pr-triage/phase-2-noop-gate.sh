@@ -1,7 +1,9 @@
 #!/bin/zsh
 set -euo pipefail
 
-RUN_ID="${DAGRUN_RUN_ID:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-')}"
+# Same precedence as phase 0: --run-id <id> in the args string ($1) > DAGRUN_RUN_ID > sanitized branch.
+RUN_ID_ARG=$(echo "${1:-}" | sed -n 's/.*--run-id[[:space:]]*\([^[:space:]]*\).*/\1/p')
+RUN_ID="${RUN_ID_ARG:-${DAGRUN_RUN_ID:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-')}}"
 ARTIFACTS_DIR="${DAGRUN_ARTIFACTS:-$HOME/.local/share/dagrunner/runs/${RUN_ID}/pr-triage}"
 TICK_FILE="$ARTIFACTS_DIR/pr-triage-tick.json"
 NEW_OR_EDITED_FILE="$ARTIFACTS_DIR/new-or-edited.json"

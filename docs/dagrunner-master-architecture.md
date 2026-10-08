@@ -1044,7 +1044,14 @@ edit source files, or commit. The two commands share the same worktree but have 
 separation enforced by convention.
 
 **Artifact path:** `~/.local/share/dagrunner/runs/<run-id>/pr-triage/` — drafts live in
-`pr-triage/drafts/<comment-id>.md`; triage state in `pr-triage/triage-state.json`.
+`pr-triage/drafts/<comment-id>.md`; triage ledger in `pr-triage/triage-state.json` (written by phase 5,
+read by phase 1) and the phase-0 identity record (`{run_id, pr_number, repo, ...}`) in the separate
+`pr-triage/pr-triage-state.json` — two files by design, not a mismatch. **Run-id contract (v0.1.73):**
+every phase script (pr-triage 1/2/5 and ci-babysit 1-6) resolves the run id exactly like phase 0 —
+`--run-id <id>` in the args string it is passed, else `$DAGRUN_RUN_ID`, else the sanitized branch name —
+so a non-dagrunner checkout run with `--run-id X` finds `runs/X/...`; the command docs pass
+`"$ARGUMENTS"` to every phase (they used to pass nothing after phase 0, so later phases silently fell
+back to the branch-derived id and failed with "State file not found").
 
 **Poll machinery:** reuses ci-babysit's scheduled-task / poll loop and `--since` incremental
 pattern (§9.2) — it does NOT build a second loop; per tick it ingests only new/edited comments

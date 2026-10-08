@@ -63,7 +63,7 @@ Compute what has changed since the last tick.
 
 ```bash
 SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/ci-babysit"
-zsh "$SCRIPT_DIR/phase-1-fetch-state.sh"
+zsh "$SCRIPT_DIR/phase-1-fetch-state.sh" "$ARGUMENTS"
 ```
 
 **PHASE_1_CHECKPOINT:**
@@ -84,7 +84,7 @@ write the tick log.
 
 ```bash
 SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/ci-babysit"
-zsh "$SCRIPT_DIR/phase-2-noop-gate.sh"
+zsh "$SCRIPT_DIR/phase-2-noop-gate.sh" "$ARGUMENTS"
 ```
 
 **PHASE_2_CHECKPOINT:**
@@ -102,7 +102,7 @@ conflicts. Push with `--force-with-lease` after a clean rebase.
 
 ```bash
 SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/ci-babysit"
-zsh "$SCRIPT_DIR/phase-3-rebase.sh"
+zsh "$SCRIPT_DIR/phase-3-rebase.sh" "$ARGUMENTS"
 ```
 
 **PHASE_3_CHECKPOINT:**
@@ -120,7 +120,7 @@ Fetch the failure log for every check currently in `fail` bucket. Write logs to
 
 ```bash
 SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/ci-babysit"
-zsh "$SCRIPT_DIR/phase-4a-collect-logs.sh"
+zsh "$SCRIPT_DIR/phase-4a-collect-logs.sh" "$ARGUMENTS"
 ```
 
 **PHASE_4a_CHECKPOINT:**
@@ -189,7 +189,7 @@ tick. The next tick will observe the updated check results.
 
 ```bash
 SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/ci-babysit"
-zsh "$SCRIPT_DIR/phase-4d-push.sh"
+zsh "$SCRIPT_DIR/phase-4d-push.sh" "$ARGUMENTS"
 ```
 
 **PHASE_4_CHECKPOINT:**
@@ -206,7 +206,7 @@ Present the draft → ready summary when all checks pass. **NEVER call `gh pr re
 
 ```bash
 SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/ci-babysit"
-zsh "$SCRIPT_DIR/phase-5-ready-gate.sh"
+zsh "$SCRIPT_DIR/phase-5-ready-gate.sh" "$ARGUMENTS"
 ```
 
 **PHASE_5_CHECKPOINT:**
@@ -224,7 +224,7 @@ that did not reach Phase 6 will re-process the same transitions on the next wake
 
 ```bash
 SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/ci-babysit"
-zsh "$SCRIPT_DIR/phase-6-persist.sh"
+zsh "$SCRIPT_DIR/phase-6-persist.sh" "$ARGUMENTS"
 ```
 
 ---
