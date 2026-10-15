@@ -32,7 +32,7 @@ import {
 import { appendReflection } from "./reflect-append.js";
 import { generateReport } from "./report.js";
 import type { BurnDoc } from "../runtime/burn.js";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { assertAuth } from "../runtime/launcher.js";
@@ -51,6 +51,8 @@ import {
 } from "../runtime/run-engine.js";
 import { readState, writeState } from "../core/state.js";
 import { verifyCleanup } from "../runtime/verify-cli.js";
+import { defaultExec, suggestReviewers } from "../runtime/reviewers-cli.js";
+import { parseReviewersConfig } from "../config/reviewers-config.js";
 import { pendingVerifyEnvs } from "../core/verify-cleanup.js";
 import {
   gateAttach,
@@ -485,6 +487,38 @@ function cmdVerify(argv: string[]): void {
   }
   const code = verifyCleanup({ homeDir: resolveHome(), runId });
   if (code !== 0) process.exit(code);
+}
+
+/**
+ * `dagrun reviewers (<run-id> | --run-dir <abs path>)` — REPORT-ONLY reviewer
+ * suggestion for a run's PR (see runtime/reviewers-cli.ts). The pr node passes
+ * the literal runDir from its run-environment block, so no DAGRUNNER_HOME is
+ * needed: the home is `<runDir>/../..`. Exits 1 on any lookup failure.
+ */
+function cmdReviewers(argv: string[]): void {
+  const runDirFlag = flagValue(argv, "--run-dir");
+  const positional = argv.find((a) => !a.startsWith("--") && a !== runDirFlag);
+  if (runDirFlag === undefined && positional === undefined) {
+    process.stderr.write(
+      "Usage: dagrun reviewers <run-id> | dagrun reviewers --run-dir <abs-run-dir>   (suggest an Expert + a Stretch reviewer; report-only)\n",
+    );
+    process.exit(1);
+  }
+  const homeDir = runDirFlag !== undefined ? dirname(dirname(resolve(runDirFlag))) : resolveHome();
+  const runDir = runDirFlag !== undefined ? resolve(runDirFlag) : join(homeDir, "runs", positional ?? "");
+  if (!existsSync(join(runDir, "state.json"))) {
+    process.stderr.write(`dagrun reviewers: no run state at "${runDir}"\n`);
+    process.exit(1);
+  }
+  const config = resolveConfig(homeDir);
+  const r = suggestReviewers({
+    runDir,
+    config: config.reviewers ?? parseReviewersConfig(undefined),
+    exec: defaultExec(),
+  });
+  (r.exitCode === 0 ? process.stdout : process.stderr).write(r.md);
+  process.stdout.write(`dagrun reviewers: wrote ${join(runDir, "pr", "reviewers.json")} and reviewers.md\n`);
+  if (r.exitCode !== 0) process.exit(r.exitCode);
 }
 
 function cmdStatus(argv: string[]): void {
@@ -1059,6 +1093,7 @@ function printHelp(): void {
       "  dagrun gate decide <run-id> --gate <node> --revision <rev> --action approve|amend|hold [--run-next yes|no] [--target <node>] [--comment <text>] [--confirm <id> [--detach]]",
       "  dagrun gate attach <run-id> --session <id> [--reconstructed] [--replace] [--reseed]",
       "  dagrun verify cleanup <run-id>                               (tear down the provisioned verify environment)",
+      "  dagrun reviewers <run-id> | --run-dir <abs-run-dir>          (suggest an Expert + a Stretch reviewer for the PR; report-only, never posts)",
       "  dagrun status [<run-id>] [--json]                            (--json: read-only machine-readable status; poll this after --detach)",
       `  dagrun ui [--port <n>] [--open] [--home <dir>]               (read-only timeline viewer, loopback-only; default port ${DEFAULT_UI_PORT})`,
       "  dagrun list",
@@ -1130,6 +1165,10 @@ async function main(argv: string[]): Promise<number> {
 
     case "verify":
       cmdVerify(rest);
+      return 0;
+
+    case "reviewers":
+      cmdReviewers(rest);
       return 0;
 
     case "status":

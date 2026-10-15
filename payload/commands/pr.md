@@ -182,7 +182,30 @@ Co-Authored-By, no other trailers.
 
 Under normal flow `implement.md` commits first — this is a no-op if that happened.
 
-## Step 5 — Reflections (optional, do this last)
+## Step 5 — Suggest reviewers (report-only)
+
+Run exactly this one command, with the literal `runDir` from the run-environment block above (no
+variable, no pipe, no redirect):
+
+```bash
+dagrun reviewers --run-dir "<runDir>"
+```
+
+It reads the Core Features Alpha team roster, your committed diff and the review queues from GitHub,
+writes `reviewers.json` and `reviewers.md` into `artifactsDir` itself, and prints two suggestions —
+an **Expert** and a **Stretch** — each with a one-line reason and the real numbers behind it.
+
+- Put the **Expert** and **Stretch** lines it printed into your final output, verbatim. Do not
+  re-rank, re-word or add anyone.
+- **Report-only.** Never run `gh pr edit --add-reviewer`, `gh pr comment`, `gh api` writes or any
+  other command that posts to GitHub, and never put a reviewer name or `@handle` into `body.md` or
+  `pr-meta.json` — `body.md` is posted to GitHub verbatim.
+- If the command exits non-zero it has already recorded the failure in `reviewers.json`. State
+  `REVIEWER SUGGESTION FAILED: <the message it printed>` in your final output. Do **not** invent,
+  guess or look up reviewers another way, and do not retry with other commands. A failed suggestion
+  does not fail the PR — carry on to the next step.
+
+## Step 6 — Reflections (optional, do this last)
 
 After all artifacts are confirmed, write any tips about the PR process or code
 area to <artifactsDir>/reflections.md. The SessionEnd hook captures this

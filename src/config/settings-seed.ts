@@ -210,6 +210,9 @@ export function buildSeededSettings(opts: {
         "Bash(mvn *)",
         "Bash(curl *)",
         "Bash(jq *)",
+        // pr node: report-only reviewer suggestion (runtime/reviewers-cli.ts). Its own
+        // gh/git child processes are not subject to this list; only the one command is.
+        "Bash(dagrun reviewers *)",
         // Docker daemon reachability check + testcontainer inspection — verify's
         // preflight (D2/D4 of the verify-autonomy change). Testcontainers itself
         // talks to the daemon directly from the JVM, not via this Bash allowlist;

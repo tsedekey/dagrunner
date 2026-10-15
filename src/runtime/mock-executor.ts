@@ -177,6 +177,21 @@ export function createMockExecutor(scenarios: ScenarioMap = {}): NodeExecutor {
         "utf8",
       );
     }
+    // …and (since the reviewer suggestion) a canned pr/reviewers.json, so the pre-PR
+    // gate's "absent file is a ✗" advisory is not tripped by mock runs.
+    if (
+      nodeId === "pr" &&
+      scenarios[nodeId] !== "missing-produces" &&
+      (res.status === "done" || res.status === "awaiting-gate") &&
+      existsSync(ctx.artifactsDir) &&
+      !existsSync(join(ctx.artifactsDir, "reviewers.json"))
+    ) {
+      writeFileSync(
+        join(ctx.artifactsDir, "reviewers.json"),
+        JSON.stringify({ status: "insufficient", mock: true, expert: null, stretch: null, notes: ["mock executor — no lookup performed"] }, null, 2),
+        "utf8",
+      );
+    }
     return res;
   };
 }

@@ -20,6 +20,7 @@ import type { RunState } from "./state.js";
 import { checkNoPlaceholders, checkOutcomeGate } from "./dag.js";
 import { gitHead } from "./verify-evidence.js";
 import { deliverablesAdvisory } from "./deliverables.js";
+import { reviewersAdvisory } from "./reviewers.js";
 import { readVerifyEnv } from "./verify-cleanup.js";
 import { listNodeFiles } from "./node-files.js";
 
@@ -549,7 +550,12 @@ export function buildGateBrief(args: {
 
   // Pre-PR gate: advisory comparison of the worktree's changes with the declared
   // deliverables manifests (pr stages declared paths only). Never blocking.
-  if (gateNodeId === "pr") validation.push(...deliverablesAdvisory(runDir, state));
+  // Same gate: the report-only reviewer suggestion (pr/reviewers.json) — a failed or
+  // skipped lookup shows as ✗ here rather than vanishing.
+  if (gateNodeId === "pr") {
+    validation.push(...deliverablesAdvisory(runDir, state));
+    validation.push(...reviewersAdvisory(runDir));
+  }
 
   let verifyEnvironment: GateBrief["verifyEnvironment"];
   if (ancestorsOf(workflow, gateNodeId).includes("verify") && state.nodes["verify"]?.status === "done") {

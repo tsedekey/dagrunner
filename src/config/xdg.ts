@@ -11,6 +11,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { parseReviewersConfig, type ReviewersConfig } from "./reviewers-config.js";
 
 // ---------------------------------------------------------------------------
 // Config type
@@ -28,6 +29,12 @@ export type DagrunnerConfig = {
   maxParallel?: number;
   /** Root directory for worktrees. Default: <DAGRUNNER_HOME>/worktrees */
   worktreeRoot?: string;
+  /**
+   * Validated `reviewers` block (pr-node reviewer suggestion). Undefined when
+   * the block is absent — consumers fall back to parseReviewersConfig(undefined)
+   * (documented defaults). A present-but-malformed block exits at load.
+   */
+  reviewers?: ReviewersConfig;
 };
 
 // ---------------------------------------------------------------------------
@@ -172,6 +179,16 @@ export function resolveConfig(
   const worktreeRoot = raw["worktreeRoot"];
   if (typeof worktreeRoot === "string") {
     config.worktreeRoot = worktreeRoot;
+  }
+
+  if ("reviewers" in raw) {
+    try {
+      config.reviewers = parseReviewersConfig(raw["reviewers"]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`dagrun: invalid config at "${configPath}": ${message}\n`);
+      process.exit(1);
+    }
   }
 
   return config;

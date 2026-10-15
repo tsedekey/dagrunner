@@ -564,7 +564,7 @@ Actions map onto existing machinery only: `approve` (existing approve), `amend` 
 via feedback-N.md, or a workflow-declared `gate.amendTargets` ancestor — bugfix `pr` → `fix` — which
 archives and resets every downstream node so no stale evidence is reused), `hold` (record, stay
 paused). Legacy `resume --approve/--reject` is refused on companion runs. Independently, nothing here
-authorizes merge, reviewer requests, marking ready, or backport labels; the draft PR is pushed/created
+authorizes merge, reviewer requests (the pr node only SUGGESTS reviewers — §3h), marking ready, or backport labels; the draft PR is pushed/created
 only after the pre-PR gate is approved (`runPrPostProcess`). **That step fails loud**: if the pr node's
 `body.md` / `pr-meta.json` are missing or `pr-meta.json` is not valid JSON, the pr node is marked `failed`
 (state.json `error` names the expected paths, hints at a stray `<worktree>/.dagrun-pr-output/`, and says
@@ -838,6 +838,51 @@ port already in use fails loud with the exact retry command — it never silentl
   taken from a URL is validated against `^[A-Za-z0-9._-]+$` and the resolved real path must stay inside the
   run directory (symlinks pointing out are refused). The diff shown is the engine-written `changes.diff`
   (v0.1.62); the UI never computes one.
+
+## 3h. Reviewer suggestion — pr node, report-only (v0.1.76)
+
+After the pr node's backstop commit it runs ONE command, `dagrun reviewers --run-dir <runDir>`, which
+suggests two reviewers from the Core Features Alpha GitHub team and writes `pr/reviewers.json` +
+`pr/reviewers.md` (the node repeats the two lines in its final output). **Report-only**: nothing is ever
+posted — no `--add-reviewer`, no comment, and reviewer names never enter `body.md`, which `gh pr create`
+posts verbatim. (There is no PR yet while pr runs — `runPrPostProcess` creates it after the pre-PR gate —
+so "after the PR is created" in the original ask became "before it is published": the author is the
+`gh` login that will create it, the changed set is `merge-base..HEAD`, and Eddie sees the suggestion AT
+the gate.)
+
+- **Two slots, because one ranking can't serve both goals.** *Expert*: highest familiarity (distinct
+  changed files the candidate committed to in 12 months), minus load penalties; requires familiarity > 0.
+  *Stretch*: lowest familiarity among candidates strictly under the queue cap (3 pending review
+  requests), boosted for "has not reviewed in 30 days" — knowledge sharing (the learning-stretch idea of
+  the user's pr-review-companion, used conceptually only; nothing is read from that workspace). Always
+  different people; with <2 eligible candidates the missing slot is reported missing, never padded.
+- **Roster = GitHub team, BE/FE by changed files.** `orgs/<org>/teams/<slug>/members`: backend-only diff →
+  `-be`, frontend-only → `-fe`, mixed or nothing matched → whole team. Neutral files (docs, CI yaml) are
+  ignored when one side matched. The path→side mapping, org/team slugs, `away`/`exclude` handle lists and
+  the numeric windows live in `config.json` under `reviewers` (`src/config/reviewers-config.ts`; absent =
+  documented defaults, present-but-malformed = load error from `resolveConfig`). Hard filters: PR author,
+  `away`, `exclude`.
+- **Fail loud, no fallback roster.** A 404/auth/empty roster, a rate-limited search, an empty diff — any
+  lookup failure exits 1, persists `status:"error"` in `reviewers.json`, and shows as a ✗ advisory at the
+  pre-PR gate (as does an ABSENT file: a pr node that skipped the step must not look like one that ran
+  it). It does not fail the PR: the suggestion is advisory and is deliberately not in `produces`.
+- **Where the code lives and why.** Pure scoring/selection/rendering in `src/core/reviewers.ts`; the
+  gh/git I/O behind an injected `Exec` in `src/runtime/reviewers-cli.ts` (fixture-tested offline); the
+  node invokes the compiled `dagrun` binary through a narrow `Bash(dagrun reviewers *)` allow entry —
+  `payload/` is copied raw into worktrees and is never typechecked or tested, and the CLI's own gh/git
+  child processes are not subject to the tool allowlist. Because it needs the installed binary, a source
+  change is only visible to nodes after `npm run build` (dist) — like every other dagrun subcommand.
+- **Signals are batched.** Per-candidate `gh search prs` calls would trip the 30 req/min search limit on a
+  ~15-person roster, so pending queue, recent reviews and pair history (both directions) come from one
+  GraphQL request of aliased `search` fields per ≤12 candidates; commit email → GitHub login parses the
+  `ID+login@users.noreply.github.com` form locally and resolves other emails with one batched
+  `object(oid) { author { user { login } } }` request. An unmappable email counts as zero and the reason
+  says so. Windows are "PRs *updated* in the window that the user reviewed" — an approximation of "review
+  done in the window" that over-counts old reviews on recently-touched PRs.
+- **No DX integration in v1** — GitHub gives the same signals with no new integration; revisit if DX
+  exposes an API.
+
+---
 
 ## 3b. Validation — smoke:mock (per-plan gate) and smoke:live (occasional)
 
