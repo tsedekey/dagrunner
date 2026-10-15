@@ -873,7 +873,7 @@ the gate.)
   child processes are not subject to the tool allowlist. Because it needs the installed binary, a source
   change is only visible to nodes after `npm run build` (dist) — like every other dagrun subcommand.
 - **Signals are batched.** Per-candidate `gh search prs` calls would trip the 30 req/min search limit on a
-  ~15-person roster, so pending queue, recent reviews and pair history (both directions) come from one
+  ~15-person roster, so pending queue (DIRECT requests only — `user-review-requested:`; plain `review-requested:` also counts team-addressed requests and inflated every queue 1.5-2x in a live check), recent reviews and pair history (both directions) come from one
   GraphQL request of aliased `search` fields per ≤12 candidates; commit email → GitHub login parses the
   `ID+login@users.noreply.github.com` form locally and resolves other emails with one batched
   `object(oid) { author { user { login } } }` request. An unmappable email counts as zero and the reason

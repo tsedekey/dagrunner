@@ -17,8 +17,10 @@
  *                 GitHub login: `ID+login@users.noreply.github.com` parsed locally, any other email
  *                 resolved with ONE batched GraphQL call (commit author.user.login). Unresolved
  *                 emails count as zero and the reason says so.
- *   load/fairness one batched GraphQL call of search aliases per ≤12 candidates (pending review
- *                 requests, reviews in the window, pair history both directions) — a per-candidate
+ *   load/fairness one batched GraphQL call of search aliases per ≤12 candidates (pending DIRECT
+ *                 review requests — `user-review-requested:`, because plain `review-requested:`
+ *                 also counts requests addressed to a team the user belongs to, which would put
+ *                 every team-requested PR in everyone's queue — reviews in the window, pair history both directions) — a per-candidate
  *                 `gh search prs` loop would trip the 30 req/min search limit on a 15-person roster.
  * Any lookup failure — auth, 404, empty roster, rate limit — FAILS LOUD: exit 1,
  * `status: "error"` persisted, no fallback roster.
@@ -210,7 +212,7 @@ function gatherLoad(
       if (!LOGIN.test(login)) throw new Error(`refusing to query an invalid GitHub login "${login}"`);
       const k = String(j);
       parts.push(
-        q(`is:pr is:open review-requested:${login} org:${org}`, `p${k}`),
+        q(`is:pr is:open user-review-requested:${login} org:${org}`, `p${k}`),
         q(`is:pr reviewed-by:${login} -author:${login} org:${org} updated:>=${since}`, `r${k}`),
         q(`is:pr reviewed-by:${login} author:${author} org:${org} updated:>=${since}`, `a${k}`),
         q(`is:pr reviewed-by:${author} author:${login} org:${org} updated:>=${since}`, `b${k}`),

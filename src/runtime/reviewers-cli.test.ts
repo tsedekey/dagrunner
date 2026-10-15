@@ -150,6 +150,10 @@ test("happy path: BE diff selects the -be subteam; Expert + Stretch written with
     assert.doesNotMatch(c, /add-reviewer|pr edit|pr comment|--method|-X |POST|PATCH/);
   }
   assert.ok(calls.some((c) => c.includes("orgs/camunda/teams/core-features-alpha-be/members")));
+  // queue = DIRECT requests only; plain `review-requested:` also matches team-addressed requests.
+  const signalQuery = calls.find((c) => c.includes("search(query:")) ?? "";
+  assert.match(signalQuery, /is:open user-review-requested:alice/);
+  assert.doesNotMatch(signalQuery, /is:open review-requested:/);
   assert.ok(calls.some((c) => /log .*--since=12 months ago/.test(c)));
 });
 
