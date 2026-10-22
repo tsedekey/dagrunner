@@ -133,8 +133,25 @@ export function parseTranscriptLine(line: string): { ts: string | null; drafts: 
     };
   }
   if (typeof msg !== "object" || msg === null) return { ts: null, drafts: [] };
-  const m = msg as { type?: unknown; timestamp?: unknown; message?: { content?: unknown } };
+  const m = msg as { type?: unknown; timestamp?: unknown; message?: { content?: unknown }; data?: unknown };
   const ts = typeof m.timestamp === "string" ? m.timestamp : null;
+  // Copilot runtime (copilot-runner.ts) writes SDK session events, not Claude messages:
+  // `assistant.message` carries `data.content` (text) and `data.toolRequests`. Everything
+  // else it logs (hooks, usage, subagent lifecycle, dagrun.permission) is ignored.
+  if (m.type === "assistant.message") {
+    const d = (typeof m.data === "object" && m.data !== null ? m.data : {}) as {
+      content?: unknown;
+      toolRequests?: unknown;
+    };
+    const blocks: Block[] = [];
+    if (typeof d.content === "string" && d.content !== "") blocks.push({ type: "text", text: d.content });
+    if (Array.isArray(d.toolRequests)) {
+      for (const r of d.toolRequests as Array<{ name?: unknown; arguments?: unknown }>) {
+        blocks.push({ type: "tool_use", name: r?.name, input: r?.arguments });
+      }
+    }
+    return { ts, drafts: draftsFromBlocks(blocks) };
+  }
   if (m.type !== "assistant") return { ts, drafts: [] };
   const content = m.message?.content;
   return { ts, drafts: Array.isArray(content) ? draftsFromBlocks(content) : [] };

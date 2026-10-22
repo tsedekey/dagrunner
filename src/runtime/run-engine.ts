@@ -60,13 +60,7 @@ import type {
 } from "../core/state.js";
 import type { ExecutionCtx, NodeExecutor } from "./mock-executor.js";
 
-type ExecutorFactory = (
-  config: DagrunnerConfig,
-  runId: string,
-  runDir: string,
-  worktreePath: string,
-  storeDir: string,
-) => NodeExecutor;
+import type { ExecutorFactory } from "./runtime-router.js";
 
 /**
  * Parse the content of a `gate-decision.md` file written by the /gate-conclude
@@ -621,6 +615,31 @@ export function seedWorktreeSiblings(
 }
 
 /**
+ * Seed dagrunner-owned SKILLS (payload/skills/<name>/SKILL.md) into the
+ * worktree's .claude/skills/. A skill invoked as `/<name>` works on BOTH
+ * runtimes (Claude Code and Copilot); Copilot does not load .claude/commands at
+ * all, which is why `review` ships as a skill. Any same-named seeded command
+ * left by an older dagrunner is removed so the skill is the only `/<name>`.
+ * Fail-loud on a broken install. Exported for unit testing.
+ */
+export function seedWorktreeSkills(
+  dagrunnerRoot: string,
+  destClaude: string,
+): void {
+  const srcSkills = join(dagrunnerRoot, "payload", "skills");
+  if (!existsSync(srcSkills)) {
+    throw new Error(
+      `dagrun: payload/skills not found at ${srcSkills} — package installation may be broken`,
+    );
+  }
+  mkdirSync(join(destClaude, "skills"), { recursive: true });
+  cpSync(srcSkills, join(destClaude, "skills"), { recursive: true });
+  for (const name of readdirSync(srcSkills)) {
+    rmSync(join(destClaude, "commands", `${name}.md`), { force: true });
+  }
+}
+
+/**
  * Wrap an executor so that immediately before the `pr` node fires, the worktree
  * is scanned for leaked artifacts. Advisory only — never blocks the pr node.
  * Note: rerunNode does not use this wrapper (debug tool; intentional omission
@@ -680,7 +699,7 @@ import {
   checkNoPlaceholders,
 } from "../core/dag.js";
 import { acquireLock, assertNoLiveDriver, releaseLock } from "../core/lock.js";
-import { makeSDKRunner } from "./sdk-runner.js";
+import { makeDefaultExecutorFactory } from "./runtime-router.js";
 import { featureWorkflow } from "../workflow/feature-workflow.js";
 import { bugfixWorkflow } from "../workflow/bugfix-workflow.js";
 import { loadWorkflow } from "../workflow/workflow.js";
@@ -1014,6 +1033,7 @@ export async function startRun(opts: {
   // Must run AFTER pipeline commands so siblings land last and always win over
   // any DEVHARNESS_SRC rsync that session-start.sh may have applied.
   seedWorktreeSiblings(dagrunnerRoot, destClaude);
+  seedWorktreeSkills(dagrunnerRoot, destClaude);
 
   // Runtime settings.json: full permission model (Phase 2a D1).
   // DISTINCT from the build-harness settings.json (bypassPermissions).
@@ -1076,10 +1096,10 @@ export async function startRun(opts: {
   // to enforce Conventional Commits format: "{type}: {description}".
   process.env["DAGRUN_PR_TITLE_PREFIX"] = makePrTitlePrefix(workflow.name);
 
-  // When no custom factory is provided, use makeSDKRunner with the night flag
-  // so the correct permissionMode is selected per the two-posture rule.
-  const defaultFactory: ExecutorFactory = (c, rid, rdir, wt, sd) =>
-    makeSDKRunner(c, rid, rdir, wt, sd, opts.nightMode);
+  // When no custom factory is provided, use the runtime router: makeSDKRunner
+  // (with the night flag, so the correct permissionMode is selected per the
+  // two-posture rule) for claude nodes, makeCopilotRunner for copilot nodes.
+  const defaultFactory = makeDefaultExecutorFactory(workflow, opts.nightMode);
   const executor = wrapWithPrScan(
     wrapWithChangesDiff(
       (opts.executorFactory ?? defaultFactory)(
@@ -1907,6 +1927,7 @@ export async function resumeRun(opts: {
     const dagrunnerRoot = new URL("../../", import.meta.url).pathname;
     const destClaude = join(state.worktreePath, ".claude");
     seedWorktreeSiblings(dagrunnerRoot, destClaude);
+    seedWorktreeSkills(dagrunnerRoot, destClaude);
     // resumeRun does not re-seed settings.json, so a worktree seeded before the
     // Java-LSP denylist existed would keep `jdtls: true` — flip just those keys.
     const flipped = denyPluginsInSeededSettings(join(destClaude, "settings.json"));
@@ -1921,7 +1942,7 @@ export async function resumeRun(opts: {
   // Re-run the DAG engine with the (possibly updated) state.
   const executor = wrapWithPrScan(
     wrapWithChangesDiff(
-      (opts.executorFactory ?? makeSDKRunner)(
+      (opts.executorFactory ?? makeDefaultExecutorFactory(workflow))(
         config,
         runId,
         runDir,
@@ -2307,6 +2328,7 @@ export async function rerunNode(opts: {
 
   // Re-seed siblings and export DAGRUNNER_ROOT (rerunNode is a fresh process).
   seedWorktreeSiblings(dagrunnerRoot, destClaude);
+  seedWorktreeSkills(dagrunnerRoot, destClaude);
 
   const seededSettings = buildSeededSettings({
     runDir,
@@ -2347,7 +2369,7 @@ export async function rerunNode(opts: {
   // Export PR title prefix before executor/SDK query() so the pr node session inherits it.
   process.env["DAGRUN_PR_TITLE_PREFIX"] = makePrTitlePrefix(state.workflow);
 
-  const executor = (opts.executorFactory ?? makeSDKRunner)(
+  const executor = (opts.executorFactory ?? makeDefaultExecutorFactory(workflow))(
     config,
     runId,
     runDir,
@@ -2547,6 +2569,7 @@ export async function scaffoldRun(opts: {
     cpSync(srcAgents, join(destClaude, "agents"), { recursive: true });
 
   seedWorktreeSiblings(dagrunnerRoot, destClaude);
+  seedWorktreeSkills(dagrunnerRoot, destClaude);
 
   const seededSettings = buildSeededSettings({
     runDir,

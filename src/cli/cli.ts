@@ -31,13 +31,14 @@ import {
 } from "node:fs";
 import { appendReflection } from "./reflect-append.js";
 import { generateReport } from "./report.js";
-import type { BurnDoc } from "../runtime/burn.js";
+import type { BurnDocAny } from "../runtime/burn.js";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { assertAuth } from "../runtime/launcher.js";
 import { featureWorkflow } from "../workflow/feature-workflow.js";
 import { bugfixWorkflow } from "../workflow/bugfix-workflow.js";
+import { workflowRuntimes } from "../core/runtime-select.js";
 import {
   startRun,
   makeRunId,
@@ -74,7 +75,9 @@ import {
 } from "../runtime/mock-executor.js";
 import {
   runPreflight,
+  checkCopilotRuntime,
   printPreflightResult,
+  type PreflightResult,
   getAgentContext,
   formatAgentContext,
   writeAgentContextFile,
@@ -156,9 +159,27 @@ async function cmdPreflight(argv: string[]): Promise<void> {
   const homeDir = resolveHome();
   const config = resolveConfig(homeDir, configFlag);
 
-  const result = runPreflight(config, homeDir, {
+  // Optional --workflow <feature|bugfix>: check only the prerequisites of the
+  // runtimes that workflow's nodes resolve to (default: the Claude checks).
+  const wfFlag = flagValue(argv, "--workflow");
+  const wf =
+    wfFlag === "bugfix" ? bugfixWorkflow : wfFlag === "feature" ? featureWorkflow : undefined;
+  if (wfFlag !== undefined && wf === undefined) {
+    process.stderr.write(
+      `dagrun preflight: unknown workflow "${wfFlag}". Available: feature, bugfix\n`,
+    );
+    process.exit(1);
+  }
+  const runtimes = wf !== undefined ? workflowRuntimes(wf) : undefined;
+  const claudePart = runPreflight(config, homeDir, {
     ...(baseBranch !== undefined ? { baseBranch } : {}),
+    ...(runtimes !== undefined ? { runtimes } : {}),
   });
+  const copilotFailures = runtimes?.has("copilot") ? await checkCopilotRuntime() : [];
+  const result: PreflightResult =
+    claudePart.ok && copilotFailures.length === 0
+      ? { ok: true }
+      : { ok: false, failures: [...(claudePart.ok ? [] : claudePart.failures), ...copilotFailures] };
   printPreflightResult(result);
 
   // Always show agent context so the user can verify what nodes will have access to.
@@ -216,13 +237,28 @@ async function cmdStart(argv: string[]): Promise<void> {
   // Load config — fails loud if DEVHARNESS_SRC is blank.
   const config = resolveConfig(homeDir, configFlag);
 
-  // Auth check — scoped to the configured Claude profile.
-  assertAuth(config.claudeConfigDir);
+  // Which runtimes will this workflow's nodes actually use? (node > workflow > claude)
+  // An unknown workflow name is rejected further down; until then keep the
+  // default (Claude) checks.
+  const earlyWorkflow =
+    workflowName === "bugfix" ? bugfixWorkflow : workflowName === "feature" ? featureWorkflow : undefined;
+  const runtimes = earlyWorkflow !== undefined ? workflowRuntimes(earlyWorkflow) : undefined;
+  const needsClaude = runtimes === undefined || runtimes.has("claude");
+  const needsCopilot = runtimes?.has("copilot") === true && mockExecutorFactoryFromEnv() === undefined;
+
+  // Auth check — scoped to the configured Claude profile (only if a node uses Claude).
+  if (needsClaude) assertAuth(config.claudeConfigDir);
 
   // Preflight checks — must pass before creating any worktrees.
-  const preflight = runPreflight(config, homeDir);
-  if (!preflight.ok) {
-    printPreflightResult(preflight);
+  const preflight = runPreflight(config, homeDir, {
+    ...(runtimes !== undefined ? { runtimes } : {}),
+  });
+  const copilotFailures = needsCopilot ? await checkCopilotRuntime() : [];
+  if (!preflight.ok || copilotFailures.length > 0) {
+    printPreflightResult({
+      ok: false,
+      failures: [...(preflight.ok ? [] : preflight.failures), ...copilotFailures],
+    });
     process.exit(1);
   }
 
@@ -850,14 +886,14 @@ function cmdReport(argv: string[]): void {
   // DECISIONS.md § burn-monitor-d1-capture) — a node may have no burn.json
   // (never ran, or predates this feature) or an unparseable one. Both
   // degrade to "no burn data" for that node; the report must never throw.
-  const burnByNode: Record<string, BurnDoc | undefined> = {};
+  const burnByNode: Record<string, BurnDocAny | undefined> = {};
   for (const nodeId of Object.keys(state.nodes)) {
     const burnFile = join(runDir, nodeId, "burn.json");
     if (!existsSync(burnFile)) continue;
     try {
       burnByNode[nodeId] = JSON.parse(
         readFileSync(burnFile, "utf8"),
-      ) as BurnDoc;
+      ) as BurnDocAny;
     } catch {
       // Malformed burn.json — treat as absent, never crash the report.
     }
@@ -1085,7 +1121,7 @@ function printHelp(): void {
       "",
       "Commands:",
       "  dagrun init [--home <path>]",
-      "  dagrun preflight [--base-branch <branch>] [--config <file>]",
+      "  dagrun preflight [--base-branch <branch>] [--config <file>] [--workflow feature|bugfix]",
       "  dagrun start <workflow> --plan <file> [--max-budget-usd <n>] [--force] [--night] [--companion-session <id> | --no-companion] [--detach]",
       '  dagrun resume <run-id> [--approve [--run-next yes|no]] [--reject "<comment>"] [--detach]   (continue a run; --approve/--reject = direct-decision flags, same engine as gate decide)',
       "  dagrun gate show <run-id>                                    (companion flow: show, then propose-and-confirm decide)",

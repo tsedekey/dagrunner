@@ -12,6 +12,18 @@
 export type ModelTier = "haiku" | "sonnet" | "opus";
 
 // ---------------------------------------------------------------------------
+// Agent runtime (validated at load time)
+// ---------------------------------------------------------------------------
+
+/**
+ * Which agent runtime executes a node. "claude" = Claude Agent SDK
+ * (`makeSDKRunner`, the default); "copilot" = GitHub Copilot SDK
+ * (`makeCopilotRunner`). Resolved node > workflow > "claude" by
+ * `resolveRuntime` (core/runtime-select.ts); DECISIONS.md § copilot-runtime.
+ */
+export type Runtime = "claude" | "copilot";
+
+// ---------------------------------------------------------------------------
 // Effort levels (validated at load time)
 // ---------------------------------------------------------------------------
 
@@ -135,6 +147,12 @@ export type Node = {
   /** Model tier. Omit = unpinned (opusplan chooses). */
   model?: ModelTier;
   /**
+   * Agent runtime for this node. Omit = the workflow's `runtime`, else
+   * "claude". "copilot" is rejected at load on nodes using features only the
+   * Claude runner implements (see COPILOT_UNSUPPORTED_NODE_FIELDS).
+   */
+  runtime?: Runtime;
+  /**
    * Reasoning-effort level passed through to `Options.effort`. Omit = SDK
    * default (model-specific; e.g. `"high"` on Sonnet 5 with adaptive
    * thinking on — see EffortLevel's doc comment).
@@ -208,6 +226,8 @@ export type Workflow = {
   nodes: Node[];
   /** Max concurrent SDK sessions. Default 6. */
   maxParallel?: number;
+  /** Default agent runtime for every node that does not set its own. Default "claude". */
+  runtime?: Runtime;
   /**
    * When true, every gate returns to the originating planning companion
    * (`dagrun gate show|decide`, see core/gate.ts) instead of spawning a fresh

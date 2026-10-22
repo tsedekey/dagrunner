@@ -32,13 +32,15 @@
 
 import type { RunState, NodeState, GateHistoryEntry } from "../core/state.js";
 import {
-  type BurnDoc,
+  type BurnDocAny,
   type BurnDocOk,
   type BurnModelEntry,
   type HotspotFlag,
   type Tier,
   type TierMix,
   cacheColdRatio,
+  isBurnDocCopilot,
+  isBurnDocOk,
   computeFatPrefixFlaggedNodes,
   computeNodeHotspots,
   declaredTierFromModel,
@@ -121,7 +123,10 @@ function renderRunSummary(state: RunState): string {
     </section>`;
 }
 
-function renderNodeTable(nodes: Record<string, NodeState>): string {
+function renderNodeTable(
+  nodes: Record<string, NodeState>,
+  burnByNode: Record<string, BurnDocAny | undefined> = {},
+): string {
   const rows = Object.entries(nodes).map(([id, ns]: [string, NodeState]) => {
     const error = ns.error ? esc(ns.error) : "&mdash;";
     const model = ns.model ? esc(ns.model) : "&mdash;";
@@ -136,7 +141,11 @@ function renderNodeTable(nodes: Record<string, NodeState>): string {
           <td>${badge(ns.status)}</td>
           <td style="font-size:0.85em;">${model}</td>
           <td style="text-align:center;">${ns.iteration}</td>
-          <td style="text-align:right;">$${ns.cost.toFixed(4)}</td>
+          <td style="text-align:right;">${
+            burnByNode[id] !== undefined && isBurnDocCopilot(burnByNode[id]!)
+              ? "n/a (AI credits)"
+              : `$${ns.cost.toFixed(4)}`
+          }</td>
           <td>${artifactCell}</td>
           <td style="font-size:0.85em;color:#c62828;">${error}</td>
         </tr>`;
@@ -164,7 +173,13 @@ function renderNodeTable(nodes: Record<string, NodeState>): string {
     </section>`;
 }
 
-function renderCostTotals(nodes: Record<string, NodeState>): string {
+function renderCostTotals(
+  nodes: Record<string, NodeState>,
+  burnByNode: Record<string, BurnDocAny | undefined> = {},
+): string {
+  const hasCopilot = Object.values(burnByNode).some(
+    (d) => d !== undefined && isBurnDocCopilot(d),
+  );
   const total = Object.values(nodes).reduce(
     (sum: number, ns: NodeState) => sum + ns.cost,
     0,
@@ -173,7 +188,7 @@ function renderCostTotals(nodes: Record<string, NodeState>): string {
     <section>
       <h2>Cost Totals</h2>
       <table>
-        <tr><th>Total Cost</th><td><strong>$${total.toFixed(4)}</strong></td></tr>
+        <tr><th>Total Cost${hasCopilot ? " (USD, claude nodes only &mdash; copilot nodes are billed in AI credits)" : ""}</th><td><strong>$${total.toFixed(4)}</strong></td></tr>
       </table>
     </section>`;
 }
@@ -256,11 +271,11 @@ function renderModelBreakdown(models: BurnModelEntry[]): string {
 
 function renderBurnSection(
   nodes: Record<string, NodeState>,
-  burnByNode: Record<string, BurnDoc | undefined>,
+  burnByNode: Record<string, BurnDocAny | undefined>,
 ): string {
   const okDocsByNode: Record<string, BurnDocOk> = {};
   for (const [id, doc] of Object.entries(burnByNode)) {
-    if (doc !== undefined && !("error" in doc)) okDocsByNode[id] = doc;
+    if (doc !== undefined && isBurnDocOk(doc)) okDocsByNode[id] = doc;
   }
   const fatPrefixFlagged = computeFatPrefixFlaggedNodes(okDocsByNode);
 
@@ -272,6 +287,22 @@ function renderBurnSection(
         <tr>
           <td><code>${esc(id)}</code></td>
           <td colspan="6" style="color:#757575;font-style:italic;">no burn data</td>
+        </tr>`;
+    }
+
+    if (isBurnDocCopilot(doc)) {
+      // Copilot bills in AI credits, not USD, and has no cache/tier model —
+      // render the unit explicitly instead of the Claude columns.
+      const perModel = doc.models
+        .map(
+          (m) =>
+            `${m.model}: ${formatInt(m.nanoAiu)} nano-AIU (${formatInt(m.inputTokens + m.outputTokens + m.cacheReadTokens + m.cacheWriteTokens)} tok, ${m.calls} calls)`,
+        )
+        .join(" | ");
+      return `
+        <tr>
+          <td><code>${esc(id)}</code></td>
+          <td colspan="6" style="font-size:0.85em;">copilot runtime &mdash; ${formatInt(doc.totalNanoAiu)} nano-AIU (AI credits, not USD); ${formatInt(doc.subagentStarts)} subagent start(s)<br>${esc(perModel)}</td>
         </tr>`;
     }
 
@@ -475,13 +506,13 @@ function renderReconciliation(
  * (whole section omitted) when no node in the run has transcript-phase
  * data — mirrors renderGateHistory's empty-return convention. */
 function renderIntraNodeSection(
-  burnByNode: Record<string, BurnDoc | undefined>,
+  burnByNode: Record<string, BurnDocAny | undefined>,
 ): string {
   const transcriptNodes: Array<{ id: string; intraNode: IntraNodeData }> = [];
   for (const [id, doc] of Object.entries(burnByNode)) {
     if (
       doc !== undefined &&
-      !("error" in doc) &&
+      isBurnDocOk(doc) &&
       doc.phase === "transcript" &&
       doc.intraNode !== null
     ) {
@@ -512,10 +543,10 @@ function renderIntraNodeSection(
 }
 
 function renderBurnRollup(
-  burnByNode: Record<string, BurnDoc | undefined>,
+  burnByNode: Record<string, BurnDocAny | undefined>,
 ): string {
   const okDocs = Object.values(burnByNode).filter(
-    (d): d is BurnDocOk => d !== undefined && !("error" in d),
+    (d): d is BurnDocOk => d !== undefined && isBurnDocOk(d),
   );
   if (okDocs.length === 0) return "";
 
@@ -606,11 +637,11 @@ function renderFriction(frictionLines: string[]): string {
 export function generateReport(
   state: RunState,
   frictionLines: string[],
-  burnByNode: Record<string, BurnDoc | undefined> = {},
+  burnByNode: Record<string, BurnDocAny | undefined> = {},
 ): string {
   const summary = renderRunSummary(state);
-  const nodeTable = renderNodeTable(state.nodes);
-  const costTotals = renderCostTotals(state.nodes);
+  const nodeTable = renderNodeTable(state.nodes, burnByNode);
+  const costTotals = renderCostTotals(state.nodes, burnByNode);
   const burnSection = renderBurnSection(state.nodes, burnByNode);
   const intraNodeSection = renderIntraNodeSection(burnByNode);
   const burnRollup = renderBurnRollup(burnByNode);

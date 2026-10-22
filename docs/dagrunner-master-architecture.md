@@ -1,14 +1,14 @@
 # dagrunner — Master Architecture (Source of Truth)
 
 Status: Canonical, reconciled with the built code through Phase 5 (bugfix workflow shipped; siblings run on any branch). Each sibling build also gets its own implementation plan.
-Last updated: 2026-07-03 (docs consolidation: retired the v1-build scaffold, docs/archive/, the chat-architect handoff apparatus, and the file-based plan/status-tracking workflow — docs/changes/, docs/STATUS.md, docs/dagrunner-architect-charter.md, and the build-queue/bundle scripts are gone; self-changes are now agreed in conversation and history lives in git log. See CLAUDE.md § "How self-changes happen".)
+Last updated: 2026-10-22 (selectable runtime claude|copilot, §3i, v0.1.78). Previously 2026-07-03 (docs consolidation: retired the v1-build scaffold, docs/archive/, the chat-architect handoff apparatus, and the file-based plan/status-tracking workflow — docs/changes/, docs/STATUS.md, docs/dagrunner-architect-charter.md, and the build-queue/bundle scripts are gone; self-changes are now agreed in conversation and history lives in git log. See CLAUDE.md § "How self-changes happen".)
 Owner: Eddie Tsedeke
 
 ---
 
 ## 1. What dagrunner is
 
-A thin, static TypeScript orchestrator that walks a feature change through a fixed, gated pipeline — expand -> implement -> review -> fix -> verify -> pr — pausing at defined human gates and checkpointing to disk so it survives process exit. Each node is a Claude Code session spawned via the Agent SDK in an isolated git worktree. dagrunner owns only what Claude Code cannot do across separate sessions: the dependency graph, checkpoint-and-resume, worktree isolation, artifact hand-off, gates, and cost discipline.
+A thin, static TypeScript orchestrator that walks a feature change through a fixed, gated pipeline — expand -> implement -> review -> fix -> verify -> pr — pausing at defined human gates and checkpointing to disk so it survives process exit. Each node is a Claude Code session spawned via the Agent SDK in an isolated git worktree (opt-in per node or per workflow, a node can instead run on the GitHub Copilot SDK — §3i). dagrunner owns only what Claude Code cannot do across separate sessions: the dependency graph, checkpoint-and-resume, worktree isolation, artifact hand-off, gates, and cost discipline.
 
 Core principle: **code coordinates, model judges.** TS orchestration is free; node sessions cost. Reuse Claude Code primitives; build only cross-process/worktree gaps.
 
@@ -884,6 +884,79 @@ the gate.)
 
 ---
 
+## 3i. Selectable runtime — `claude` | `copilot` (v0.1.78)
+
+Why: spread usage between the Claude Code enterprise subscription and the Copilot subscription. The
+spike that proved feasibility is `docs/copilot-runtime-spike/` (SPIKE-REPORT.md + re-runnable probes);
+the judgment calls are `DECISIONS.md § copilot-runtime`. First (opt-in) user: the read-only `review` node.
+
+- **Selection.** `Node.runtime` and `Workflow.runtime`, each `"claude" | "copilot"`; precedence node >
+  workflow > default `"claude"` (`resolveRuntime`, `src/core/runtime-select.ts`, shared by validation,
+  dispatch and preflight so they cannot disagree). No machine-config default, no `--runtime` flag.
+  `loadWorkflow` rejects an unknown value, AND rejects a copilot-resolved node that uses a feature only the
+  Claude runner implements (`gate`, `loop`, `hooks`, `formatCommand`, `allowedTools`, `maxBudget`,
+  `effort` — they would be silently ignored, and gate reopen is `claude --resume`). So today a whole
+  workflow cannot be flipped to copilot (both have gated nodes); individual read-only nodes can.
+- **Router.** The engine's `ExecutorFactory` seam is unchanged. Only the DEFAULT factory changed:
+  `makeDefaultExecutorFactory(workflow, nightMode)` (`src/runtime/runtime-router.ts`) returns an executor
+  that dispatches per node to `makeSDKRunner` or `makeCopilotRunner` (built lazily). An injected
+  `executorFactory` (mock runs, smoke) still replaces everything; wired at `startRun`, `resumeRun` and
+  `rerunNode`.
+- **Copilot runner** (`src/runtime/copilot-runner.ts`). One `CopilotClient` per node execution, with the
+  `DAGRUN_*` env applied before `start()` AND passed explicitly as a same-turn snapshot (`process.env`
+  is shared by parallel nodes and we await before the runtime spawns). `skillDirectories` points at the
+  seeded `.claude/skills`; `agentDirectories` at a model-adapted temp copy of `.claude/agents` (below).
+  `@github/copilot-sdk` is an **optional dependency** (exact-pinned 1.0.25), dynamic-imported only here —
+  no file may import it statically (a test enforces it), so a Claude-only user never loads it. Timeout
+  90 min per turn (SDK default is 60 s); on timeout: `abort()`, fail, not retried.
+- **`/review` is a skill, shared by both runtimes.** Copilot does not load `.claude/commands`, so
+  `payload/commands/review.md` moved to `payload/skills/review/SKILL.md` (seeded to `.claude/skills/` by
+  `seedWorktreeSkills` at startRun/resumeRun/rerunNode/scaffold; a stale seeded `commands/review.md` is
+  removed). Verified on Claude: a project skill named `review` overrides the built-in `/review` and
+  `$ARGUMENTS` is substituted (canary run), so the node prompt `/review <run-environment>` is unchanged.
+  Subagent wording is runtime-neutral (Agent tool / `task` tool).
+- **Structured output; the runner owns `findings.json`.** The read-only policy forbids the model writing it
+  into the artifact dir via arbitrary paths, and prose-only schemas drift, so the schema now lives in code
+  (`src/core/findings-schema.ts`: strict JSON schema + `validateFindings`). On Copilot the node is sent
+  `responseSchema`, the reply is validated and written by the runner. Keyed by the node's primary
+  `produces` file (not a `Node.outputSchema`) so the Claude path — where the command writes the file —
+  is byte-for-byte unchanged. Schema-valid is not proof the review fanned out (observed: a schema-valid
+  doc with 0 subagents started), so `reviewers_run` is cross-checked against the observed subagent count
+  and a mismatch fails the node (retryable).
+- **Read-only permission policy** (`makeReadOnlyPermissionHandler`): `read` approved; `write` only inside
+  the node's own artifactsDir; `shell` only when every command segment is on a small read-only allowlist
+  and nothing redirects to a file; everything else rejected, each decision logged to `transcript.log`.
+  Two facts shaped it (both observed live): the runtime's `commands[].readOnly` is false even for `ls`,
+  `cat`, `git status` (so it cannot gate), and its `hasWriteFileRedirection` was false for
+  `echo hi > f` while the file was created (so redirection is checked on the text). The night-mode /
+  bypass equivalent is NOT built. Allowlisted names that can still execute programs are closed explicitly
+  (`VAR=… cmd` prefixes, `git -c`/`--config-env`/`--exec-path`, `grep -O`, `sort --compress-program`,
+  `rg --pre`, `find -exec`, command substitution) — under Copilot this policy is the only fence.
+- **Agents.** The seeded reviewer agents pin Claude ids (`model: claude-sonnet-4-6`), which Copilot
+  rejects ("model not available" — an always-run lens was skipped). The runner copies the agents to a temp
+  dir with `model:` mapped by tier (`claude-sonnet-5.5`, …) and points `agentDirectories` there; the
+  seeded `.claude/agents` are untouched for Claude. Tier map: opus→`claude-opus-5.5`,
+  sonnet→`claude-sonnet-5.5`, haiku→`claude-haiku-5.5`; checked against `listModels()` at run time
+  (unavailable ⇒ fail loud).
+- **Usage = AI credits, never dollars.** `assistant.usage` events are summed into a distinct
+  `BurnDocCopilot` burn.json (`runtime:"copilot"`, `unit:"nano-aiu"`, `totalNanoAiu`, per-model tokens,
+  `subagentStarts`); `cost` (USD) is 0 and there is no `costUsd`. The live feed (`src/ui/transcript.ts`) maps the Copilot `assistant.message` event; other Copilot events are ignored. The report renders the unit explicitly,
+  shows "n/a (AI credits)" in the node table, and labels the run total "claude nodes only".
+  `maxBudget` (USD) cannot apply to a copilot node (rejected at load). Session id is returned and stored
+  in state like Claude's; `copilot --resume <id>` reopens it (verified in the spike) but the gate UX is
+  still `claude --resume`, hence no gated copilot nodes yet.
+- **Preflight is runtime-aware.** `runPreflight(..., { runtimes })` runs the Claude checks (auth, bundled
+  binary, claudeConfigDir) only when a node resolves to claude; `checkCopilotRuntime` (async: SDK resolves
+  + `getAuthStatus().isAuthenticated`) runs only when one resolves to copilot. `dagrun preflight
+  --workflow feature|bugfix` checks a workflow's runtimes; `dagrun start` does so automatically.
+- **Known gaps (not hidden).** The seeded `.claude/settings.json` hooks (deny-guard, session-start
+  sync, session-end reflection capture) and its allow/deny list do not run under Copilot — the read-only
+  policy above is the only fence. No allowance/limit signal is exposed by `assistant.usage`, so behaviour
+  at a Copilot limit is unknown. Resume/gate/rerun CLI paths still `assertAuth` for Claude (a workflow with
+  no claude node cannot exist yet — see the load rejection above).
+
+---
+
 ## 3b. Validation — smoke:mock (per-plan gate) and smoke:live (occasional)
 
 `npm run verify-baseline` = `npm ci && typecheck && unit tests && smoke:mock`. The standing gate: run on every plan change.
@@ -915,7 +988,7 @@ the gate.)
 - `produces` contract: a node is `done` only if it wrote its declared artifact(s); missing => failed.
 - XDG home: `~/.local/share/dagrunner/` (runs, worktrees, inbox, store, config.json), `~/.cache/dagrunner/`, `~/.local/bin/dagrun`, override DAGRUNNER_HOME, fail-loud no-cwd-fallback.
 - Hooks: SessionStart sync (private files), PostToolUse format (**TS/JS/CSS/HTML only** — Java/YAML excluded after a YAML-coercion incident), Stop friction/gates, SessionEnd cost.
-- `dagrun rerun` re-seeds the worktree `.claude/` from `payload/` (runtime-only: 10 pipeline commands + 7 reviewer agents). Hooks always come from `.claude/hooks/` (genuinely shared). `.claude/{commands,agents}` are build-harness-only and are never seeded into worktrees — this is the split that prevents build tools from polluting Camunda worktrees.
+- `dagrun rerun` re-seeds the worktree `.claude/` from `payload/` (runtime-only: pipeline commands + reviewer agents + `payload/skills` — the `/review` skill, shared with the Copilot runtime, §3i). Hooks always come from `.claude/hooks/` (genuinely shared). `.claude/{commands,agents}` are build-harness-only and are never seeded into worktrees — this is the split that prevents build tools from polluting Camunda worktrees.
 - `dagrun scaffold <node-id> --branch <feature-branch>` creates a scaffold run: worktree from the given branch, state.json with all transitive deps pre-marked done and the target node pending. Lets a developer run a single node in isolation via `dagrun rerun` without executing the full pipeline. No lock acquired; no agent launched by scaffold itself.
 - Failure: 4-class taxonomy (transient->retry, contract->fail, convergence-exhaustion->gate, budget->checkpoint-exit). Node failure != run failure; isolate-and-continue.
 - **CLI exit codes:** `dagrun start`/`resume` exit 0 on `done`/`paused`; exit 1 when the run ends `failed`. Callers (night queue, CI) must treat non-zero as a genuine failure — do not swallow it. The run engine owns the final status; the CLI layer propagates it.
@@ -955,7 +1028,7 @@ Goal: free inside the worktree, read anywhere, mutation outside hard-blocked, no
 
 ## 7. Preflight ("Prepare") — not a node
 
-`dagrun preflight` runs before the graph: on expected base branch; git tree clean; DEVHARNESS_SRC resolves+is a repo; seeded settings present; ANTHROPIC_API_KEY unset; CLAUDE_CONFIG_DIR=~/.claude-work; enterprise policy doesn't block; artifact path in additionalDirectories. (No sandbox/network-allowlist check — there is no sandbox to check; see §6.)
+`dagrun preflight` runs before the graph (runtime-aware: the Claude checks below run only if some node resolves to `claude`; a `copilot` node adds an SDK-resolves + Copilot-authenticated check — §3i): on expected base branch; git tree clean; DEVHARNESS_SRC resolves+is a repo; seeded settings present; ANTHROPIC_API_KEY unset; CLAUDE_CONFIG_DIR=~/.claude-work; enterprise policy doesn't block; artifact path in additionalDirectories. (No sandbox/network-allowlist check — there is no sandbox to check; see §6.)
 
 **Version banner (implemented):** `dagrun preflight` and a passing `dagrun start` both print dagrunner's own package version + build date/time before any node runs — `src/config/version.ts` (`getVersionInfo`), surfaced via `formatAgentContext` (preflight) and `formatVersionBanner` (start). Compiled binaries read the compile-instant timestamp from `dist/build-meta.json` (regenerated every `npm run build` by `scripts/write-build-meta.mjs`) and fail loud if it's missing; dev mode (`tsx`) prints `(dev, unbuilt)`. This makes drift between a rebuild and the running `~/.local/bin/dagrun` binary visible instead of assumed. Every dagrunner self-change bumps this version (enforced by `dr-build`, see `.claude/agents/dr-build.md`).
 

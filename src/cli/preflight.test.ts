@@ -35,6 +35,7 @@ import {
   checkNodeVersion,
   checkStaleLock,
   checkDevharnessNotInWorktreeRoot,
+  checkCopilotRuntime,
   type AgentContext,
 } from "./preflight.js";
 import type { DagrunnerConfig } from "../config/xdg.js";
@@ -500,3 +501,47 @@ test("checkDevharnessNotInWorktreeRoot: respects custom worktreeRoot from config
   const result = checkDevharnessNotInWorktreeRoot(config, homeDir);
   assert.equal(result.length, 1);
 });
+
+// ---------------------------------------------------------------------------
+// runtime-aware preflight
+// ---------------------------------------------------------------------------
+
+function pfHome(): { homeDir: string; config: DagrunnerConfig } {
+  const homeDir = mkdtempSync(join(tmpdir(), "dr-pf-rt-"));
+  for (const sub of ["runs", "worktrees", "inbox", "store"]) {
+    mkdirSync(join(homeDir, sub), { recursive: true });
+  }
+  return { homeDir, config: { DEVHARNESS_SRC: mkdtempSync(join(tmpdir(), "dr-pf-rt-src-")), claudeConfigDir: "/nonexistent/claude-cfg-dir" } };
+}
+
+test("runPreflight: Claude checks run when a claude node exists (default) and are skipped for a copilot-only workflow", () => {
+  const { homeDir, config } = pfHome();
+  const claudeText = (r: ReturnType<typeof runPreflight>) => (r.ok ? "" : r.failures.join("\n"));
+  // claudeConfigDir points at a nonexistent dir => the Claude config check fires by default…
+  assert.match(claudeText(runPreflight(config, homeDir)), /claudeConfigDir/);
+  assert.match(claudeText(runPreflight(config, homeDir, { runtimes: new Set(["claude", "copilot"]) })), /claudeConfigDir/);
+  // …and is not evaluated when every node is copilot.
+  const copilotOnly = claudeText(runPreflight(config, homeDir, { runtimes: new Set(["copilot"]) }));
+  assert.ok(!/claudeConfigDir|Anthropic auth|bundled Claude binary/.test(copilotOnly), copilotOnly);
+});
+
+test("checkCopilotRuntime: ok when the SDK resolves and the login is authenticated", async () => {
+  let stopped = 0;
+  const sdk = { CopilotClient: class { async start() {} async stop() { stopped++; } async getAuthStatus() { return { isAuthenticated: true }; } async listModels() { return []; } async createSession(): Promise<never> { throw new Error("n/a"); } } };
+  assert.deepEqual(await checkCopilotRuntime(async () => sdk as never), []);
+  assert.equal(stopped, 1);
+});
+
+test("checkCopilotRuntime: SDK missing or unauthenticated are loud failures", async () => {
+  const missing = await checkCopilotRuntime(async () => { throw new Error("Cannot find package"); });
+  assert.match(missing.join(), /@github\/copilot-sdk does not resolve/);
+  const unauth = { CopilotClient: class { async start() {} async stop() {} async getAuthStatus() { return { isAuthenticated: false, statusMessage: "no login" }; } async listModels() { return []; } async createSession(): Promise<never> { throw new Error("n/a"); } } };
+  assert.match((await checkCopilotRuntime(async () => unauth as never)).join(), /not authenticated \(no login\)/);
+});
+
+test("getAgentContext: lists dagrunner-owned skills (review) from payload/skills", () => {
+  const ctx = getAgentContext(new URL("../../", import.meta.url).pathname, { DEVHARNESS_SRC: mkdtempSync(join(tmpdir(), "dr-pf-sk-")) });
+  assert.ok(ctx.skills.some((s) => s.name === "review" && s.source === "dagrunner"));
+  assert.ok(!ctx.commands.some((c) => c.name === "review"));
+});
+

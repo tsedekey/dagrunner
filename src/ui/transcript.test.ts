@@ -95,3 +95,27 @@ test("text with HTML is passed through untouched (escaping is the renderer's job
   const r = parseTranscriptLine(asst([{ type: "text", text: '<img src=x onerror=alert(1)>' }]));
   assert.equal(r.drafts[0]?.text, "<img src=x onerror=alert(1)>");
 });
+
+test("copilot transcript lines: assistant.message becomes text + tool drafts; every other event type is ignored, never throws", () => {
+  const msg = JSON.stringify({
+    type: "assistant.message",
+    timestamp: "2026-10-22T14:00:00.000Z",
+    data: {
+      content: "Reviewing the diff now.",
+      toolRequests: [{ toolCallId: "t1", name: "bash", arguments: { command: "git --no-pager diff --cached", description: "diff" } }],
+    },
+  });
+  const r = parseTranscriptLine(msg);
+  assert.equal(r.ts, "2026-10-22T14:00:00.000Z");
+  assert.deepEqual(r.drafts, [
+    { kind: "text", text: "Reviewing the diff now." },
+    { kind: "tool", tool: "bash", text: "git --no-pager diff --cached" },
+  ]);
+  for (const t of ["assistant.usage", "hook.start", "subagent.started", "session.start", "dagrun.permission", "assistant.turn_start"]) {
+    assert.deepEqual(parseTranscriptLine(JSON.stringify({ type: t, data: { x: 1 } })).drafts, [], t);
+  }
+  // a cut (non-JSON) copilot line must not be mistaken for a cut Claude assistant line
+  assert.deepEqual(parseTranscriptLine('{"type":"assistant.message","data":{"content":"abc').drafts, []);
+  assert.deepEqual(parseTranscriptLine(JSON.stringify({ type: "assistant.message" })).drafts, []);
+});
+

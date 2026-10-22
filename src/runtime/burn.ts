@@ -79,14 +79,112 @@ export type BurnDocError = {
   error: string;
 };
 
+/**
+ * burn.json for a node run on the Copilot runtime. Distinct from BurnDocOk on
+ * purpose: Copilot bills in AI credits (`assistant.usage.copilotUsage.
+ * totalNanoAiu`), not USD, and has no cache-creation/tier-mix model. The unit
+ * is explicit (`unit: "nano-aiu"`) and there is deliberately NO `costUsd`
+ * field — dollars are never faked (DECISIONS.md § copilot-runtime).
+ */
+export type BurnCopilotModelEntry = {
+  model: string;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+  nanoAiu: number;
+};
+
+export type BurnDocCopilot = {
+  node: string;
+  sessionId: string;
+  schemaVersion: 1;
+  runtime: "copilot";
+  unit: "nano-aiu";
+  totalNanoAiu: number;
+  /** Subagents (reviewer lenses etc.) started inside the node session. */
+  subagentStarts: number;
+  /** Usage events that carried no `copilotUsage.totalNanoAiu` (counted as 0 AIU, never silently dropped). */
+  eventsWithoutAiu: number;
+  models: BurnCopilotModelEntry[];
+};
+
+/** What `buildBurn` (the Claude runner) returns. */
 export type BurnDoc = BurnDocOk | BurnDocError;
+
+/** Anything a burn.json on disk may hold — readers (report, cli) use this. */
+export type BurnDocAny = BurnDoc | BurnDocCopilot;
 
 /** Type guard narrowing BurnDoc -> BurnDocOk. Reused by sdk-runner.ts's
  * D4a enrichment step to decide whether a just-built doc is eligible for
- * intra-node enrichment (an error-marker doc never is). Matches the same
- * `!("error" in d)` narrowing report.ts already uses inline. */
-export function isBurnDocOk(doc: BurnDoc): doc is BurnDocOk {
-  return !("error" in doc);
+ * intra-node enrichment (an error-marker doc never is). Also excludes the
+ * Copilot variant, which has no `derived`/`tierMix`. */
+export function isBurnDocOk(doc: BurnDocAny): doc is BurnDocOk {
+  return !("error" in doc) && !("runtime" in doc);
+}
+
+export function isBurnDocCopilot(doc: BurnDocAny): doc is BurnDocCopilot {
+  return "runtime" in doc && doc.runtime === "copilot";
+}
+
+/** The subset of the Copilot SDK's `assistant.usage` event data we read. */
+export type CopilotUsageData = {
+  model: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+  copilotUsage?: { totalNanoAiu: number };
+};
+
+/** Pure: aggregate `assistant.usage` events into a BurnDocCopilot. */
+export function buildCopilotBurn(params: {
+  node: string;
+  sessionId: string;
+  subagentStarts: number;
+  usage: CopilotUsageData[];
+}): BurnDocCopilot {
+  const byModel = new Map<string, BurnCopilotModelEntry>();
+  let eventsWithoutAiu = 0;
+  for (const u of params.usage) {
+    const e = byModel.get(u.model) ?? {
+      model: u.model,
+      calls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: 0,
+      nanoAiu: 0,
+    };
+    e.calls += 1;
+    e.inputTokens += u.inputTokens ?? 0;
+    e.outputTokens += u.outputTokens ?? 0;
+    e.cacheReadTokens += u.cacheReadTokens ?? 0;
+    e.cacheWriteTokens += u.cacheWriteTokens ?? 0;
+    e.reasoningTokens += u.reasoningTokens ?? 0;
+    if (typeof u.copilotUsage?.totalNanoAiu === "number") {
+      e.nanoAiu += u.copilotUsage.totalNanoAiu;
+    } else {
+      eventsWithoutAiu += 1;
+    }
+    byModel.set(u.model, e);
+  }
+  const models = [...byModel.values()];
+  return {
+    node: params.node,
+    sessionId: params.sessionId,
+    schemaVersion: 1,
+    runtime: "copilot",
+    unit: "nano-aiu",
+    totalNanoAiu: models.reduce((a, m) => a + m.nanoAiu, 0),
+    subagentStarts: params.subagentStarts,
+    eventsWithoutAiu,
+    models,
+  };
 }
 
 // ---------------------------------------------------------------------------

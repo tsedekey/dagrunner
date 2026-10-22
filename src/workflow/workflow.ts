@@ -9,6 +9,8 @@
  *   2. All dependsOn references point to known node IDs
  *   3. All model values are in {'haiku','sonnet','opus'} or undefined
  *   3b. All effort values are in {'low','medium','high','xhigh','max'} or undefined
+ *   3c. runtime values (node + workflow) are 'claude' | 'copilot' or undefined;
+ *       a copilot-resolved node may not use Claude-only features
  *   4. All gate.onReject of form `rerun:<id>` reference known node IDs
  *   5. No cycles (Kahn's algorithm)
  *
@@ -17,6 +19,11 @@
 
 import type { Workflow } from "../core/types.js";
 import { ancestorsOf } from "../core/gate.js";
+import {
+  RUNTIMES,
+  copilotUnsupportedFields,
+  resolveRuntime,
+} from "../core/runtime-select.js";
 
 // ---------------------------------------------------------------------------
 // loadWorkflow
@@ -78,6 +85,34 @@ export function loadWorkflow(def: Workflow): Workflow {
     if (e !== undefined && (typeof e !== "string" || !validEfforts.has(e))) {
       throw new Error(
         `loadWorkflow: node "${node.id}" has invalid effort value "${String(e)}" — must be 'low' | 'medium' | 'high' | 'xhigh' | 'max' or omitted`,
+      );
+    }
+  }
+
+  // 3c. Runtime strings (workflow + node) must be 'claude' | 'copilot' | undefined.
+  //     A copilot-resolved node may not use features only the Claude runner
+  //     implements — they would be silently ignored (CLAUDE.md "fail loud").
+  const validRuntimes: ReadonlySet<string> = new Set(RUNTIMES);
+  const wr: unknown = def.runtime;
+  if (wr !== undefined && (typeof wr !== "string" || !validRuntimes.has(wr))) {
+    throw new Error(
+      `loadWorkflow: workflow "${def.name}" has invalid runtime value "${String(wr)}" — must be 'claude' | 'copilot' or omitted`,
+    );
+  }
+  for (const node of def.nodes) {
+    const r: unknown = node.runtime;
+    if (r !== undefined && (typeof r !== "string" || !validRuntimes.has(r))) {
+      throw new Error(
+        `loadWorkflow: node "${node.id}" has invalid runtime value "${String(r)}" — must be 'claude' | 'copilot' or omitted`,
+      );
+    }
+  }
+  for (const node of def.nodes) {
+    if (resolveRuntime(node, def) !== "copilot") continue;
+    const bad = copilotUnsupportedFields(node);
+    if (bad.length > 0) {
+      throw new Error(
+        `loadWorkflow: node "${node.id}" resolves to runtime "copilot" but uses ${bad.join(", ")} — implemented only by the claude runner; set runtime: "claude" on this node or drop the field`,
       );
     }
   }

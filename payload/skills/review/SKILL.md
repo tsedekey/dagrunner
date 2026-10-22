@@ -1,9 +1,19 @@
+---
+name: review
+description: Dagrunner review node. Orchestrates a read-only multi-reviewer analysis of the staged diff and produces a schema-valid findings.json. Invoked only by the dagrunner engine as /review.
+disable-model-invocation: true
+---
+
 You are running the **review node** of a dagrunner pipeline. Your job is to orchestrate a read-only multi-reviewer analysis of the changes in this worktree and produce a single schema-valid `findings.json` artifact.
 
 **CRITICAL: Do NOT modify any files in the worktree. This node is read-only.**
 
 ---
 
+> **Runtime.** This skill is run by both dagrunner runtimes (Claude Code and GitHub Copilot) and is
+> the single source for the `/review` node. "Dispatch a subagent" means the Agent tool in Claude Code
+> and the `task` tool in Copilot; the reviewer agent files are the same for both.
+>
 > **Run environment.** The block directly below gives the **literal absolute** `artifactsDir`,
 > `runDir`, `worktree` and `runId` for this session. Wherever this document writes `<artifactsDir>`,
 > `<runDir>`, `<worktree>` or `<runId>`, substitute those literal values — type the real path, never a
@@ -96,9 +106,20 @@ Save all five triage booleans in memory — you will write them into findings.js
 
 ## Step 2 — Dispatch reviewers as subagents
 
-Use the **Agent tool** to dispatch each selected reviewer. Run them in parallel where possible (multiple Agent tool calls in a single turn).
+Dispatch each selected reviewer as a **subagent** (the Agent tool in Claude Code, the `task` tool in Copilot), naming the agent exactly (e.g. `reviewer-correctness`). Run them in parallel where possible (multiple subagent calls in a single turn).
 
 Each reviewer returns a JSON array of finding objects. If a **non-correctness** reviewer fails (errors out or returns invalid JSON), degrade it: record it in `reviewers_skipped` with `{ "name": "<reviewer>", "reason": "<error>" }` and continue. If the **correctness** reviewer fails, fail the entire node by writing an error to stderr and exiting.
+
+**Do not review the diff yourself — dispatching the subagents IS the job.** Your own reading of the diff
+is only for the triage booleans; every finding must come from a reviewer subagent, even for a tiny diff.
+Every reviewer you list in `reviewers_run` must have been dispatched as a subagent in this session.
+On Copilot the engine counts the subagents it observed and FAILS the node (it will be re-run) when
+`reviewers_run` lists more reviewers than subagents that started.
+
+- Claude Code: the Agent tool, `subagent_type` = the reviewer name.
+- Copilot: the `task` tool, `agent_type` = the reviewer name (e.g. `reviewer-correctness`), and put the
+  diff (or the exact command to obtain it) plus the acceptance criteria in `prompt`. Issue all the
+  reviewer `task` calls in one turn so they run in parallel.
 
 Collect all findings arrays from successful reviewers. Flatten them into a single array.
 
@@ -110,7 +131,7 @@ Count the total number of findings in the merged array.
 
 **If `findings.length > 3`:**
 
-- Use the **Agent tool** to dispatch `reviewer-adversarial-verifier`
+- Dispatch `reviewer-adversarial-verifier` as a subagent
 - Pass it the merged findings array (all findings from Step 2) as JSON in the prompt: `"Here are the findings to verify:\n\n<findings JSON>"`
 - The verifier returns the same array with `grounded: boolean` added to each item
 - Replace the findings array with the verifier's output
@@ -125,11 +146,13 @@ Count the total number of findings in the merged array.
 
 ## Step 4 — Write findings.json
 
-Write the following JSON object to `<artifactsDir>/findings.json`:
+Write the following JSON object to `<artifactsDir>/findings.json`. **Exception:** if the prompt ends with a
+`<runtime-note>` saying your final reply is the findings document, do NOT write the file — make your
+final reply exactly that JSON object (the engine writes the file from it):
 
 ```json
 {
-  "run_id": "<value of <runId> env var>",
+  "run_id": "<the runId from the run environment block>",
   "timestamp": "<ISO 8601 timestamp>",
   "triage": {
     "touches_public_api": true/false,

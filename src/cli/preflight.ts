@@ -20,6 +20,12 @@ import {
   readWorkProfileMcpServers,
 } from "../config/settings-seed.js";
 import { readLock } from "../core/lock.js";
+import type { Runtime } from "../core/types.js";
+import {
+  COPILOT_SDK_PACKAGE,
+  loadCopilotSdk,
+  type CopilotSdkModule,
+} from "../runtime/copilot-runner.js";
 import type { VersionInfo } from "../config/version.js";
 
 const _require = createRequire(import.meta.url);
@@ -137,6 +143,44 @@ export function checkDevharnessNotInWorktreeRoot(
   return [];
 }
 
+/**
+ * Check F: the Copilot runtime prerequisites — only called when some node
+ * resolves to runtime "copilot". The SDK must resolve (optional dependency) and
+ * the Copilot login must be authenticated. Async because auth status needs a
+ * started client; `loadSdk` is injectable so tests never import the real package.
+ */
+export async function checkCopilotRuntime(
+  loadSdk: () => Promise<CopilotSdkModule> = loadCopilotSdk,
+): Promise<string[]> {
+  let sdk: CopilotSdkModule;
+  try {
+    sdk = await loadSdk();
+  } catch (e) {
+    return [
+      `${COPILOT_SDK_PACKAGE} does not resolve (optional dependency, needed because a node uses runtime "copilot"). ` +
+        `Run: npm install  (do not use --omit=optional). Cause: ${e instanceof Error ? e.message : String(e)}`,
+    ];
+  }
+  const client = new sdk.CopilotClient();
+  try {
+    await client.start();
+    const auth = await client.getAuthStatus();
+    if (!auth.isAuthenticated) {
+      return [
+        `Copilot is not authenticated${auth.statusMessage ? ` (${auth.statusMessage})` : ""}. ` +
+          `Log in with the Copilot CLI (\`copilot\`, then /login) or set a GitHub token.`,
+      ];
+    }
+    return [];
+  } catch (e) {
+    return [
+      `Copilot runtime check failed: ${e instanceof Error ? e.message : String(e)}`,
+    ];
+  } finally {
+    await client.stop().catch(() => undefined);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // runPreflight
 // ---------------------------------------------------------------------------
@@ -156,10 +200,18 @@ export function runPreflight(
     baseBranch?: string;
     /** When true, ANTHROPIC_API_KEY must be absent (enterprise managed-auth). */
     requireManagedAuth?: boolean;
+    /**
+     * Runtimes the workflow's nodes resolve to (workflowRuntimes). The Claude
+     * checks (auth, bundled binary, claudeConfigDir) run only when "claude" is
+     * present; default = claude only (unchanged behaviour). The Copilot check
+     * is async and separate: checkCopilotRuntime.
+     */
+    runtimes?: ReadonlySet<Runtime>;
   } = {},
 ): PreflightResult {
   const failures: string[] = [];
   const baseBranch = opts.baseBranch ?? "main";
+  const needsClaude = opts.runtimes === undefined || opts.runtimes.has("claude");
 
   // ------------------------------------------------------------------
   // 1. DEVHARNESS_SRC resolves and is a git repo
@@ -236,82 +288,86 @@ export function runPreflight(
   // D. No stale or active lock
   failures.push(...checkStaleLock(homeDir));
 
-  // ------------------------------------------------------------------
-  // 5. At least one auth credential is present
-  // ------------------------------------------------------------------
-  const hasApiKey =
-    typeof process.env["ANTHROPIC_API_KEY"] === "string" &&
-    process.env["ANTHROPIC_API_KEY"] !== "";
-  const hasAuthToken =
-    typeof process.env["ANTHROPIC_AUTH_TOKEN"] === "string" &&
-    process.env["ANTHROPIC_AUTH_TOKEN"] !== "";
+  if (needsClaude) {
+    // ------------------------------------------------------------------
+    // 5. At least one auth credential is present
+    // ------------------------------------------------------------------
+    const hasApiKey =
+      typeof process.env["ANTHROPIC_API_KEY"] === "string" &&
+      process.env["ANTHROPIC_API_KEY"] !== "";
+    const hasAuthToken =
+      typeof process.env["ANTHROPIC_AUTH_TOKEN"] === "string" &&
+      process.env["ANTHROPIC_AUTH_TOKEN"] !== "";
 
-  // Check subscription auth scoped to the configured Claude profile directory
-  // (same env-scoping as assertAuth in launcher.ts — must match to avoid
-  // preflight passing on a different profile than the one actually used).
-  const claudeAuthResult = (() => {
-    try {
-      const env: NodeJS.ProcessEnv = { ...process.env };
-      if (
-        config.claudeConfigDir !== undefined &&
-        config.claudeConfigDir !== ""
-      ) {
-        env["CLAUDE_CONFIG_DIR"] = config.claudeConfigDir;
+    // Check subscription auth scoped to the configured Claude profile directory
+    // (same env-scoping as assertAuth in launcher.ts — must match to avoid
+    // preflight passing on a different profile than the one actually used).
+    const claudeAuthResult = (() => {
+      try {
+        const env: NodeJS.ProcessEnv = { ...process.env };
+        if (
+          config.claudeConfigDir !== undefined &&
+          config.claudeConfigDir !== ""
+        ) {
+          env["CLAUDE_CONFIG_DIR"] = config.claudeConfigDir;
+        }
+        const out = execSync("claude auth status 2>/dev/null", {
+          encoding: "utf8",
+          timeout: 5000,
+          stdio: "pipe",
+          env,
+        });
+        const loggedIn =
+          out.includes('"loggedIn": true') || out.includes('"loggedIn":true');
+        const subMatch = /"subscriptionType":\s*"([^"]+)"/.exec(out);
+        const subscriptionType = subMatch?.[1];
+        return { loggedIn, subscriptionType };
+      } catch {
+        return { loggedIn: false, subscriptionType: undefined };
       }
-      const out = execSync("claude auth status 2>/dev/null", {
-        encoding: "utf8",
-        timeout: 5000,
-        stdio: "pipe",
-        env,
-      });
-      const loggedIn =
-        out.includes('"loggedIn": true') || out.includes('"loggedIn":true');
-      const subMatch = /"subscriptionType":\s*"([^"]+)"/.exec(out);
-      const subscriptionType = subMatch?.[1];
-      return { loggedIn, subscriptionType };
-    } catch {
-      return { loggedIn: false, subscriptionType: undefined };
-    }
-  })();
+    })();
 
-  if (!hasApiKey && !hasAuthToken && !claudeAuthResult.loggedIn) {
-    const profileNote =
-      config.claudeConfigDir !== undefined
-        ? ` (profile: ${config.claudeConfigDir})`
-        : "";
-    failures.push(
-      `No Anthropic auth found${profileNote}. Set ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or run \`claude login\`.`,
-    );
-  }
-
-  // When enterprise managed-auth is expected, ANTHROPIC_API_KEY must NOT be set.
-  if (opts.requireManagedAuth === true && hasApiKey) {
-    failures.push(
-      `Enterprise managed-auth required but ANTHROPIC_API_KEY is set. Unset it and use managed credentials.`,
-    );
-  }
-
-  // Surface subscription type so the operator can confirm the right account is active.
-  if (
-    claudeAuthResult.loggedIn &&
-    claudeAuthResult.subscriptionType !== undefined
-  ) {
-    if (claudeAuthResult.subscriptionType !== "enterprise") {
+    if (!hasApiKey && !hasAuthToken && !claudeAuthResult.loggedIn) {
+      const profileNote =
+        config.claudeConfigDir !== undefined
+          ? ` (profile: ${config.claudeConfigDir})`
+          : "";
       failures.push(
-        `Claude profile at "${config.claudeConfigDir ?? "~/.claude"}" has subscriptionType "${claudeAuthResult.subscriptionType}" (expected "enterprise"). ` +
-          `Check that claudeConfigDir in config.json points to your work profile.`,
+        `No Anthropic auth found${profileNote}. Set ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or run \`claude login\`.`,
       );
+    }
+
+    // When enterprise managed-auth is expected, ANTHROPIC_API_KEY must NOT be set.
+    if (opts.requireManagedAuth === true && hasApiKey) {
+      failures.push(
+        `Enterprise managed-auth required but ANTHROPIC_API_KEY is set. Unset it and use managed credentials.`,
+      );
+    }
+
+    // Surface subscription type so the operator can confirm the right account is active.
+    if (
+      claudeAuthResult.loggedIn &&
+      claudeAuthResult.subscriptionType !== undefined
+    ) {
+      if (claudeAuthResult.subscriptionType !== "enterprise") {
+        failures.push(
+          `Claude profile at "${config.claudeConfigDir ?? "~/.claude"}" has subscriptionType "${claudeAuthResult.subscriptionType}" (expected "enterprise"). ` +
+            `Check that claudeConfigDir in config.json points to your work profile.`,
+        );
+      }
     }
   }
 
   // C. Node.js version
   failures.push(...checkNodeVersion());
 
-  // A. SDK bundled Claude binary
-  failures.push(...checkSdkBinary());
+  if (needsClaude) {
+    // A. SDK bundled Claude binary
+    failures.push(...checkSdkBinary());
 
-  // B. claudeConfigDir exists when configured
-  failures.push(...checkClaudeConfigDir(config.claudeConfigDir));
+    // B. claudeConfigDir exists when configured
+    failures.push(...checkClaudeConfigDir(config.claudeConfigDir));
+  }
 
   if (failures.length === 0) return { ok: true };
   return { ok: false, failures };
@@ -386,6 +442,13 @@ function listItems(
   return items;
 }
 
+function skillSources(skills: AgentContextItem[]): string {
+  const own = skills.filter((s) => s.source === "dagrunner").length;
+  return own === 0
+    ? "all from DEVHARNESS_SRC"
+    : `dagrunner: ${own}, DEVHARNESS_SRC: ${skills.length - own}`;
+}
+
 /**
  * Derive the merged agent context that a node session will see.
  * Uses buildSeededSettings (same as run-engine) so the display is always accurate.
@@ -408,12 +471,13 @@ export function getAgentContext(
     join(config.DEVHARNESS_SRC, ".claude", "agents"),
     "DEVHARNESS_SRC",
   );
-  // Skills: dagrunner has none; DEVHARNESS_SRC's survive the git checkout
+  // Skills: dagrunner-owned (payload/skills, e.g. the cross-runtime `review`)
+  // plus DEVHARNESS_SRC's, which survive the git checkout.
   const skills = listItems(
+    join(dagrunnerRoot, "payload", "skills"),
+    "dagrunner",
     join(config.DEVHARNESS_SRC, ".claude", "skills"),
     "DEVHARNESS_SRC",
-    "",
-    "dagrunner",
   ).filter((s) => s.name !== "README");
 
   // MCP servers: merge DEVHARNESS_SRC passthrough + work-profile servers.
@@ -495,7 +559,7 @@ export function writeAgentContextFile(
   lines.push(
     `| Agents | ${ctx.agents.length} | dagrunner: ${dagrunnerAgents.length}, DEVHARNESS_SRC: ${srcAgents.length} |`,
   );
-  lines.push(`| Skills | ${ctx.skills.length} | all from DEVHARNESS_SRC |`);
+  lines.push(`| Skills | ${ctx.skills.length} | ${skillSources(ctx.skills)} |`);
   lines.push(
     `| MCP servers | ${ctx.mcpServers.length} | ${ctx.mcpServers.length === 0 ? "none" : ctx.mcpServers.join(", ")} |`,
   );
@@ -673,7 +737,7 @@ export function formatAgentContext(
   lines.push(
     `${lbl(`Agents (${ctx.agents.length})`)}dagrunner: ${bySource(ctx.agents, "dagrunner").length}  DEVHARNESS_SRC: ${bySource(ctx.agents, "DEVHARNESS_SRC").length}`,
   );
-  lines.push(`${lbl(`Skills (${ctx.skills.length})`)}all from DEVHARNESS_SRC`);
+  lines.push(`${lbl(`Skills (${ctx.skills.length})`)}${skillSources(ctx.skills)}`);
   lines.push(`\n  Full detail: ${contextFile}\n`);
 
   return lines.join("\n");

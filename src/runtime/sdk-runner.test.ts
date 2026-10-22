@@ -281,3 +281,20 @@ test("payload/commands no longer tell nodes a literal path is unobtainable or to
     }
   }
 });
+
+test("payload/skills/review (the /review node) carries the same prompt-delivery contract as the commands", () => {
+  const text = readFileSync(
+    new URL("../../payload/skills/review/SKILL.md", import.meta.url),
+    "utf8",
+  );
+  assert.ok(text.includes("$ARGUMENTS"), "review skill must interpolate $ARGUMENTS (the run-environment block)");
+  assert.ok(
+    !/\$\{?DAGRUN_(ARTIFACTS|RUN_DIR|WORKTREE|RUN_ID)\b/.test(text),
+    "review skill still uses a $DAGRUN_* path variable in its snippets",
+  );
+  // Same frontmatter name as the node command ("/review"), so the engine prompt resolves on both runtimes.
+  assert.match(text, /^---\nname: review\n/);
+  // Runtime-neutral subagent wording: no Claude-only "Agent tool" instruction left bare.
+  assert.ok(/`task` tool in Copilot/.test(text));
+});
+
