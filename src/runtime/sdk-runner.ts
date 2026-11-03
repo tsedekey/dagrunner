@@ -139,7 +139,7 @@ export function buildBaseQueryOptions(
  */
 export function applyNodeOptions(options: Options, node: Node): Options {
   if (node.model === "haiku") {
-    options.model = "claude-haiku-4-5-20251001";
+    options.model = "claude-haiku-5-5";
   } else if (node.model === "sonnet") {
     options.model = "claude-sonnet-5";
   } else if (node.model === "opus") {
