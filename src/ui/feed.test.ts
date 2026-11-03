@@ -58,7 +58,7 @@ test("eventToItem: each engine event type maps to a readable item with a stable 
   const gate = ev("node.finished", { node: "fix", detail: { status: "awaiting-gate", cost: 0.25 } });
   assert.match(gate.text, /awaiting gate/);
   assert.equal(ev("node.finished", { node: "fix", detail: { status: "failed", error: "boom" } }).kind, "fail");
-  assert.equal(ev("node.finished", { node: "verify", detail: { status: "skipped" } }).kind, "skip");
+  assert.equal(ev("node.finished", { node: "implement", detail: { status: "skipped" } }).kind, "skip");
   assert.match(ev("gate.opened", { node: "fix", detail: { revision: "r.1" } }).text, /Paused at fix gate \(revision r\.1\)/);
   const dec = ev("gate.decision", { node: "fix", detail: { action: "approve", decisionId: "abc" } });
   assert.equal(dec.kind, "decision");

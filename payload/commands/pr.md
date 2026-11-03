@@ -35,18 +35,9 @@ cat "<runDir>/reproduce/guide.md" 2>/dev/null
 cat "<runDir>/implement/summary.md" 2>/dev/null
 cat "<runDir>/review/findings.json" 2>/dev/null
 cat "<runDir>/fix/summary.md" 2>/dev/null
-cat "<runDir>/verify/verify-report.json" 2>/dev/null
-cat "<runDir>/verify/manual-test.md" 2>/dev/null
 ```
 
 - Guide: use `define/guide.md` if it printed something; otherwise use `reproduce/guide.md` (bugfix workflow).
-- `verify/manual-test.md` is optional — absent is fine, skip it.
-- `verify/` exists only when Eddie chose the optional runtime hand-off at the fix gate. verify only
-  PROVISIONS a local environment for Eddie's manual testing and renders no verdict; his verdict is
-  given at the pre-PR gate, AFTER this body is composed. If `verify/verify-report.json` is present
-  with `outcome` `PROVISIONED`, do NOT claim anything was demonstrated or passed — at most note
-  "manual verification pending / by Eddie" (the gate carries the verdict). If absent, say nothing
-  about verify. Never claim CI-level acceptance-test coverage from it.
 
 ## Step 2 — Compose the PR body
 
@@ -59,7 +50,7 @@ cat > "<artifactsDir>/body.md" << 'BODY'
 
 <2–4 sentences. What this PR does and why — goal and purpose only.
 Draw from guide.md and implement/summary.md. No bullet lists, no sub-headers,
-no review/fix recap. Do not describe verify results — Eddie's manual verification verdict comes at the gate, after this is written.>
+no review/fix recap.>
 
 ## Checklist
 
@@ -101,7 +92,7 @@ cd "<worktree>" && git rev-parse --abbrev-ref HEAD
 ```
 
 Then write the file with the branch name, the literal paths and the other computed values (`title`,
-`verifyRan`, `createdAt`) all substituted in as literal text (Write tool, or this heredoc):
+`createdAt`) all substituted in as literal text (Write tool, or this heredoc):
 
 ```bash
 cat > "<artifactsDir>/pr-meta.json" << 'META'
@@ -111,7 +102,6 @@ cat > "<artifactsDir>/pr-meta.json" << 'META'
   "worktreePath": "<worktree>",
   "bodyPath": "<artifactsDir>/body.md",
   "title": "<type>: <short description>",
-  "verifyRan": <true|false>,
   "createdAt": "<ISO timestamp>"
 }
 META

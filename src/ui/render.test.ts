@@ -112,7 +112,7 @@ test("renderDiff escapes HTML-significant characters inside lines", () => {
 
 test("artifactKindFor dispatches by extension", () => {
   assert.equal(artifactKindFor("summary.md"), "markdown");
-  assert.equal(artifactKindFor("verify-report.json"), "json");
+  assert.equal(artifactKindFor("findings.json"), "json");
   assert.equal(artifactKindFor("changes.diff"), "diff");
   assert.equal(artifactKindFor("transcript.log"), "text");
 });

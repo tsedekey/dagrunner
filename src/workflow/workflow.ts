@@ -148,24 +148,7 @@ export function loadWorkflow(def: Workflow): Workflow {
     }
   }
 
-  // 4c2. gate.decidesNode must name a known node that runs after the gate node.
-  for (const node of def.nodes) {
-    const d: unknown = node.gate?.decidesNode;
-    if (d === undefined) continue;
-    const target = typeof d === "string" ? def.nodes.find((n) => n.id === d) : undefined;
-    if (target === undefined) {
-      throw new Error(
-        `loadWorkflow: node "${node.id}" gate.decidesNode references unknown node "${String(d)}"`,
-      );
-    }
-    if (target.when === undefined) {
-      throw new Error(
-        `loadWorkflow: node "${node.id}" gate.decidesNode "${target.id}" must declare a 'when' predicate that reads the decision`,
-      );
-    }
-  }
-
-  // 4c3. gate.amendTargets must be gated ancestors of the gate node.
+  // 4c2. gate.amendTargets must be gated ancestors of the gate node.
   for (const node of def.nodes) {
     const at: unknown = node.gate?.amendTargets;
     if (at === undefined) continue;
@@ -189,15 +172,7 @@ export function loadWorkflow(def: Workflow): Workflow {
     }
   }
 
-  // 4d. evidenceCheck / companionGates shape — typed at load.
-  for (const node of def.nodes) {
-    const ec: unknown = node.evidenceCheck;
-    if (ec !== undefined && ec !== "verify-runtime") {
-      throw new Error(
-        `loadWorkflow: node "${node.id}" has invalid evidenceCheck "${String(ec)}" — must be 'verify-runtime' or omitted`,
-      );
-    }
-  }
+  // 4d. companionGates shape — typed at load.
   const cg: unknown = def.companionGates;
   if (cg !== undefined && typeof cg !== "boolean") {
     throw new Error(

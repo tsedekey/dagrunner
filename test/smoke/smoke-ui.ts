@@ -63,7 +63,6 @@ const bugfixMockFactory = () =>
     implement: "success",
     review: "success",
     fix: "gate-pause",
-    verify: "success",
     pr: "success",
   });
 

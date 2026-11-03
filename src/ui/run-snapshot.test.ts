@@ -173,25 +173,22 @@ test("gate card: shown ONLY when run status is paused AND a node is awaiting-gat
     upstreamArtifacts: [{ nodeId: "review", files: [] }],
     validation: [{ nodeId: "reproduce", check: "noPlaceholders", ok: true }],
     companion: { sessionId: "sess-1", reconstructed: false, status: "ok", resume: { sessionId: "sess-1", configDir: "/c", cwd: "/home/u/proj", prompt: "p" } },
-    pendingDecision: { actions: ["approve", "amend", "hold"], amendTargets: ["fix"], decidesNode: "verify", approveContinuesTo: ["verify", "pr"] },
+    pendingDecision: { actions: ["approve", "amend", "hold"], amendTargets: ["fix"], approveContinuesTo: ["pr"] },
   };
   // paused + awaiting -> card
   const paused = setup("bugfix");
   mkdirSync(join(paused.runDir, "fix"), { recursive: true });
   writeFileSync(join(paused.runDir, "fix", "gate.json"), JSON.stringify(brief));
-  writeFileSync(join(paused.runDir, "fix", "summary.md"), "# S\n\n## Verify recommendation\n\nSkip. Nothing new.\n\n## Other\n");
-  const card = buildRunSnapshot(paused.home, "9-1").gate;
+    const card = buildRunSnapshot(paused.home, "9-1").gate;
   assert.ok(card !== null);
   assert.equal(card.nodeId, "fix");
   assert.equal(card.revision, "r.1");
   assert.equal(card.round, 1);
   assert.equal(card.maxIterations, 5);
   assert.deepEqual(card.actions, ["approve", "amend", "hold"]);
-  assert.deepEqual(card.approveContinuesTo, ["verify", "pr"]);
+  assert.deepEqual(card.approveContinuesTo, ["pr"]);
   assert.deepEqual(card.evidence, [{ name: "summary.md", sha: "d28f372f55cd" }]);
   assert.deepEqual(card.upstream, ["review"]);
-  assert.equal(card.decidesNode, "verify");
-  assert.equal(card.advice, "Skip. Nothing new.");
   assert.equal(card.companion?.cwd, "/home/u/proj");
 
   // run status running (gate.json left behind after an approval) -> no card even though gate.json exists
@@ -222,39 +219,22 @@ test("gate card without a persisted brief is still shown (lighter), and a brief 
   assert.equal(buildRunSnapshot(b.home, "9-1").gate?.revision, null);
 });
 
-test("skipped reason: a gate decision (next-node-decision.json run:false) vs optional vs plain `when`", () => {
-  const mk = (nodes: RunState["nodes"], decision?: unknown, workflow = "bugfix") => {
-    const s = setup(workflow as "bugfix", { nodes, status: "running" });
-    if (decision !== undefined) {
-      mkdirSync(join(s.runDir, "fix"), { recursive: true });
-      writeFileSync(join(s.runDir, "fix", "next-node-decision.json"), JSON.stringify(decision));
-    }
-    return buildRunSnapshot(s.home, "9-1");
-  };
+test("skipped reason: a workflow-defined skipped node is explained by its `when`/optional; a node the workflow no longer defines has none", () => {
   const base = (over: Record<string, unknown> = {}) =>
     ({ status: "skipped", artifacts: [], iteration: 0, cost: 0, gateHistory: [], ...over }) as RunState["nodes"][string];
-  const done = base({ status: "done" });
-  const viaDecision = mk({ fix: done, verify: base() }, { node: "verify", run: false });
-  assert.equal(viaDecision.nodes["verify"]?.skipReason, "decision");
-  // no decision file: verify has a `when` and is not optional -> "when"
-  const viaWhen = mk({ fix: done, verify: base() });
-  assert.equal(viaWhen.nodes["verify"]?.skipReason, "when");
-  // a decision file that says run:true does not explain a skip -> falls through
-  const runTrue = mk({ fix: done, verify: base() }, { node: "verify", run: true });
-  assert.equal(runTrue.nodes["verify"]?.skipReason, "when");
-  // non-skipped nodes have no reason
-  assert.equal(viaDecision.nodes["fix"]?.skipReason, null);
+  const s = setup("bugfix", { status: "running", nodes: { implement: base(), verify: base() } });
+  const snap = buildRunSnapshot(s.home, "9-1");
+  assert.equal(snap.nodes["implement"]?.skipReason, "when");
+  assert.equal(snap.nodes["verify"]?.skipReason, null, "legacy verify node: no definition, no reason, no throw");
+  assert.equal(snap.nodes["reproduce"]?.skipReason, null);
 });
 
 test("workflow node definitions are exposed serializably (no `when` function), with gate.maxIterations defaulting to 10", () => {
   const { home } = setup("bugfix");
   const snap = buildRunSnapshot(home, "9-1");
-  const verify = snap.defs["verify"];
-  assert.equal(verify?.hasWhen, true);
-  assert.equal(verify?.model, "sonnet");
-  assert.deepEqual(verify?.produces, ["verify-report.json", "demo.md"]);
+  assert.equal(snap.defs["verify"], undefined, "the verify node no longer exists");
+  assert.deepEqual(snap.defs["pr"]?.dependsOn, ["fix"]);
   assert.equal(snap.defs["fix"]?.gate?.maxIterations, 5);
-  assert.equal(snap.defs["fix"]?.gate?.decidesNode, "verify");
   assert.equal(snap.defs["reproduce"]?.gate?.maxIterations, 10);
   assert.equal(snap.defs["implement"]?.gate, null);
   assert.doesNotThrow(() => JSON.stringify(snap));
@@ -289,4 +269,30 @@ test("per-node files: registered + extra from disk, plus bookkeeping files (gate
   assert.equal(byName["burn.json"]?.bookkeeping, true);
   assert.equal(byName["transcript.log"], undefined);
   assert.equal(byName["summary.md"]?.registered, false);
+});
+
+test("OLD RUN (pre-removal state.json with a done verify node, a fix gate decision and a verify/ dir) snapshots without throwing and keeps the legacy node visible", () => {
+  const { home, runDir } = setup("bugfix", {
+    status: "done",
+    nodes: {
+      reproduce: { status: "done", artifacts: [], iteration: 1, cost: 0.1, gateHistory: [] },
+      implement: { status: "done", artifacts: [], iteration: 0, cost: 0.2, gateHistory: [] },
+      review: { status: "done", artifacts: [], iteration: 0, cost: 0.05, gateHistory: [] },
+      fix: {
+        status: "done", artifacts: [], iteration: 0, cost: 0.3,
+        gateHistory: [{ decision: "approve", timestamp: "t", runNext: true } as never],
+      },
+      verify: { status: "done", artifacts: [join("/x", "verify", "verify-report.json")], iteration: 0, cost: 0.4, gateHistory: [] },
+      pr: { status: "done", artifacts: [], iteration: 0, cost: 0.1, gateHistory: [] },
+    },
+  });
+  mkdirSync(join(runDir, "fix"), { recursive: true });
+  mkdirSync(join(runDir, "verify"), { recursive: true });
+  writeFileSync(join(runDir, "fix", "next-node-decision.json"), JSON.stringify({ node: "verify", run: true }));
+  writeFileSync(join(runDir, "verify", "verify-report.json"), JSON.stringify({ outcome: "PROVISIONED" }));
+  const snap = buildRunSnapshot(home, "9-1");
+  assert.equal(snap.nodeOrder.at(-1), "verify");
+  assert.equal(snap.nodes["verify"]?.status, "done");
+  assert.equal(snap.defs["verify"], undefined);
+  assert.doesNotThrow(() => JSON.stringify(snap));
 });

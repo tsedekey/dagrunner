@@ -261,7 +261,7 @@ test("payload/commands no longer tell nodes a literal path is unobtainable or to
     /Do not try to print or discover the literal value/i,
     /a literal path you don't have/i,
   ];
-  const nodeCommands = ["define", "reproduce", "implement", "review", "fix", "verify", "pr"];
+  const nodeCommands = ["define", "reproduce", "implement", "review", "fix", "pr"];
   for (const name of readdirSync(dir)) {
     const text = readFileSync(join(dir, name), "utf8");
     for (const re of banned) {

@@ -9,12 +9,8 @@ argument-hint: [run-id]
 
 Produces a human-readable `manual-test.md` (plus `seeding-spec.json`, only when the chosen
 verification method actually needs a seeded cluster) from a run's existing artifacts (diff,
-`guide.md`, `summary.md`, review findings, OpenAPI grounding). `verify` is now a fully autonomous
-acceptance-test author/runner/judge/gate and no longer produces these human-facing documents (see
-`docs/dagrunner-master-architecture.md` §3 and DECISIONS.md § verify-autonomy-remove-election) —
-this sibling exists so a human can still get that value, on demand, for any run. **It is NOT part
-of the autonomous pipeline and gates nothing** — invoke it whenever you want a manual-smoke-test
-walkthrough for a run, regardless of that run's `verify` outcome.
+`guide.md`, `summary.md`, review findings, OpenAPI grounding). **It is NOT part of the autonomous
+pipeline and gates nothing** — invoke it whenever you want a manual-smoke-test walkthrough for a run.
 
 **Do not assume REST API + Postman is always the right verification surface.** Some diffs never
 touch the REST gateway or any secondary-storage export path at all (e.g. a change confined to a
@@ -71,7 +67,6 @@ cat "<guide_path>" 2>/dev/null   # define/guide.md or reproduce/guide.md, per Ph
 cat "<run_dir>/implement/reflections.md" 2>/dev/null
 cat "<run_dir>/review/findings.json" 2>/dev/null
 cat "<run_dir>/fix/summary.md" 2>/dev/null
-cat "<run_dir>/verify/verify-plan.md" 2>/dev/null    # optional — verify's own acceptance-test plan, if present
 
 # 2. Recent commits on this branch
 cd "<worktree>" && git log origin/main..HEAD --oneline

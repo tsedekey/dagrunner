@@ -16,8 +16,6 @@
  *     and only from a brief whose `gateNodeId` matches the awaiting node.
  *   - `issueUrl` is stored with literal surrounding quotes -> stripped; anything
  *     not http(s) is dropped (it ends up in an href).
- *   - two different ways a node becomes `skipped` -> the gate's
- *     `next-node-decision.json` (`run:false`) is read to tell "decision" apart.
  *   - a node's files can exist on disk before state registers them -> listing
  *     comes from disk (`status --json` artifacts), plus the engine bookkeeping
  *     files (gate.json, burn.json, gate-context.md) the CLI listing hides.
@@ -47,13 +45,11 @@ export type NodeDef = {
   effort: string | null;
   dependsOn: string[];
   produces: string[];
-  joinRule: string | null;
   optional: boolean;
   /** `when` is a function and cannot be serialized — the viewer only needs to know one exists. */
   hasWhen: boolean;
   gate: {
     maxIterations: number;
-    decidesNode: string | null;
     amendTargets: string[];
   } | null;
 };
@@ -68,7 +64,7 @@ export type NodeFileView = {
   mtime: string | null;
 };
 
-export type SkipReason = "decision" | "optional" | "when";
+export type SkipReason = "optional" | "when";
 
 export type GateCard = {
   nodeId: string;
@@ -83,7 +79,6 @@ export type GateCard = {
   maxIterations: number;
   actions: string[];
   amendTargets: string[];
-  decidesNode: string | null;
   approveContinuesTo: string[];
   evidence: { name: string; sha: string }[];
   validation: { nodeId: string; check: string; ok: boolean }[];
@@ -94,8 +89,6 @@ export type GateCard = {
     reconstructed: boolean;
     cwd: string | null;
   } | null;
-  /** The agent's own advice for the decided node, from `<gate>/summary.md` "## Verify recommendation". */
-  advice: string | null;
   decisions: number;
 };
 
@@ -150,14 +143,12 @@ function defOf(n: Node): NodeDef {
     effort: n.effort ?? null,
     dependsOn: n.dependsOn ?? [],
     produces: n.produces ?? [],
-    joinRule: n.joinRule ?? null,
     optional: n.optional === true,
     hasWhen: n.when !== undefined,
     gate:
       n.gate !== undefined
         ? {
             maxIterations: n.gate.maxIterations ?? 10,
-            decidesNode: n.gate.decidesNode ?? null,
             amendTargets: n.gate.amendTargets ?? [],
           }
         : null,
@@ -223,40 +214,12 @@ function nodeFiles(
 }
 
 function skipReasonFor(
-  runDir: string,
   id: string,
   defs: Record<string, NodeDef>,
 ): SkipReason | null {
-  const gateNode = Object.entries(defs).find(
-    ([, d]) => d.gate?.decidesNode === id,
-  )?.[0];
-  if (gateNode !== undefined) {
-    try {
-      const d = JSON.parse(
-        readFileSync(join(runDir, gateNode, "next-node-decision.json"), "utf8"),
-      ) as {
-        node?: unknown;
-        run?: unknown;
-      };
-      if (d.node === id && d.run === false) return "decision";
-    } catch {
-      // no / unreadable decision file — fall through
-    }
-  }
   const def = defs[id];
   if (def === undefined) return null;
   return def.optional ? "optional" : "when";
-}
-
-function readAdvice(runDir: string, gateNode: string): string | null {
-  try {
-    const md = readFileSync(join(runDir, gateNode, "summary.md"), "utf8");
-    const m = /## Verify recommendation\s+([\s\S]*?)(\n## |$)/.exec(md);
-    const t = m?.[1]?.trim();
-    return t !== undefined && t !== "" ? t : null;
-  } catch {
-    return null;
-  }
 }
 
 /** Build the full run-detail snapshot the UI serves at `/api/runs/:id`. Throws exactly as `buildStatusJson` does for a missing/invalid run. */
@@ -310,7 +273,7 @@ export function buildRunSnapshot(homeDir: string, runId: string): RunSnapshot {
       sessionId: ns.sessionId ?? null,
       error: ns.error ?? null,
       skipReason:
-        ns.status === "skipped" ? skipReasonFor(runDir, id, defs) : null,
+        ns.status === "skipped" ? skipReasonFor(id, defs) : null,
       files: nodeFiles(runDir, id, entry.artifacts),
     };
   }
@@ -332,7 +295,6 @@ export function buildRunSnapshot(homeDir: string, runId: string): RunSnapshot {
     }
     const def = defs[ag.nodeId];
     const pd = gateBrief?.pendingDecision;
-    const decides = pd?.decidesNode ?? def?.gate?.decidesNode ?? null;
     const comp = gateBrief?.companion;
     const sessionId = comp?.sessionId ?? state.companion?.sessionId ?? null;
     gate = {
@@ -347,7 +309,6 @@ export function buildRunSnapshot(homeDir: string, runId: string): RunSnapshot {
       maxIterations: def?.gate?.maxIterations ?? 10,
       actions: pd?.actions ?? ["approve", "amend", "hold"],
       amendTargets: pd?.amendTargets ?? def?.gate?.amendTargets ?? [],
-      decidesNode: decides,
       approveContinuesTo: pd?.approveContinuesTo ?? [],
       evidence: (gateBrief?.gateArtifacts ?? []).map((a) => ({
         name: basename(a.path),
@@ -369,7 +330,6 @@ export function buildRunSnapshot(homeDir: string, runId: string): RunSnapshot {
               cwd: comp?.resume?.cwd ?? null,
             }
           : null,
-      advice: decides !== null ? readAdvice(runDir, ag.nodeId) : null,
       decisions: Object.values(state.nodes).reduce(
         (n, ns) => n + ns.gateHistory.length,
         0,

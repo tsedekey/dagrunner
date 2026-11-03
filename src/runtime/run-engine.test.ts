@@ -258,18 +258,11 @@ test("findWorktreeScratch: existing basename tests still pass after signature ch
 
 test("worktreeArtifactPatterns: includes all featureWorkflow produces filenames", () => {
   const patterns = worktreeArtifactPatterns();
-  // All declared produces across featureWorkflow nodes, plus verify-plan.md —
-  // which is no longer in verify's `produces` (run 56962-1 forensics,
-  // DECISIONS.md § verify-run-56962-1-forensics: it's conditional, written on
-  // the normal path but explicitly skipped on verify.md's documented
-  // short-circuit paths) but is still expected here via the SECONDARY scratch
-  // pattern list, since it can still legitimately land in the worktree.
+  // All declared produces across featureWorkflow nodes.
   const expected = [
     "guide.md",
     "summary.md",
     "findings.json",
-    "verify-plan.md",
-    "verify-report.json",
     "body.md",
   ];
   for (const name of expected) {
@@ -277,6 +270,13 @@ test("worktreeArtifactPatterns: includes all featureWorkflow produces filenames"
       patterns.includes(name),
       `expected pattern "${name}" in worktreeArtifactPatterns()`,
     );
+  }
+});
+
+test("worktreeArtifactPatterns: no verify-node artifacts remain (the node was removed)", () => {
+  const patterns = worktreeArtifactPatterns();
+  for (const gone of ["verify-plan.md", "verify-report.json", "demo.md"]) {
+    assert.ok(!patterns.includes(gone), `"${gone}" must not be a scratch pattern any more`);
   }
 });
 
@@ -316,8 +316,9 @@ test("agentDecidable: fix is agent-decidable (Gate 2)", () => {
   assert.equal(agentDecidable("fix"), true);
 });
 
-test("agentDecidable: verify is NOT agent-decidable", () => {
+test("agentDecidable: unknown / non-gate node ids are human-only", () => {
   assert.equal(agentDecidable("verify"), false);
+  assert.equal(agentDecidable("implement"), false);
 });
 
 test("agentDecidable: pr (pre-PR gate, both feature and bugfix workflows) is night-decidable — preserves prior unattended behavior", () => {
@@ -442,6 +443,13 @@ test("seedWorktreeSiblings: throws if payload/siblings/commands/ is missing", ()
 // ---------------------------------------------------------------------------
 // parseGateDecision
 // ---------------------------------------------------------------------------
+
+test("parseGateDecision: a stray legacy `run-next:` line is ignored (the field no longer exists)", () => {
+  assert.deepEqual(parseGateDecision("decision: approve\nrun-next: yes\n"), {
+    decision: "approve",
+    body: "",
+  });
+});
 
 test("parseGateDecision: approve with no body → {decision:'approve', body:''}", () => {
   const result = parseGateDecision("decision: approve\n");
@@ -630,34 +638,34 @@ test("makePrTitlePrefix: bugfix → 'fix:'", () => {
 
 test("archivePriorAttempt: no-op when artifactsDir does not exist", () => {
   const runDir = mkdtempSync(join(tmpdir(), "dr-archive-"));
-  const artifactsDir = join(runDir, "verify");
+  const artifactsDir = join(runDir, "fix");
 
-  archivePriorAttempt(runDir, "verify", artifactsDir);
+  archivePriorAttempt(runDir, "fix", artifactsDir);
 
-  assert.equal(existsSync(join(runDir, "verify-attempts")), false);
+  assert.equal(existsSync(join(runDir, "fix-attempts")), false);
 });
 
 test("archivePriorAttempt: no-op when artifactsDir exists but is empty", () => {
   const runDir = mkdtempSync(join(tmpdir(), "dr-archive-"));
-  const artifactsDir = join(runDir, "verify");
+  const artifactsDir = join(runDir, "fix");
   mkdirSync(artifactsDir);
 
-  archivePriorAttempt(runDir, "verify", artifactsDir);
+  archivePriorAttempt(runDir, "fix", artifactsDir);
 
-  assert.equal(existsSync(join(runDir, "verify-attempts")), false);
+  assert.equal(existsSync(join(runDir, "fix-attempts")), false);
   assert.equal(existsSync(artifactsDir), true); // left untouched, not renamed away
 });
 
 test("archivePriorAttempt: first archive lands at attempt-1 with content preserved", () => {
   const runDir = mkdtempSync(join(tmpdir(), "dr-archive-"));
-  const artifactsDir = join(runDir, "verify");
+  const artifactsDir = join(runDir, "fix");
   mkdirSync(artifactsDir);
   writeFileSync(join(artifactsDir, "transcript.log"), "attempt one log");
   writeFileSync(join(artifactsDir, "reflections.md"), "ERROR_INFRA: no docker");
 
-  archivePriorAttempt(runDir, "verify", artifactsDir);
+  archivePriorAttempt(runDir, "fix", artifactsDir);
 
-  const dest = join(runDir, "verify-attempts", "attempt-1");
+  const dest = join(runDir, "fix-attempts", "attempt-1");
   assert.equal(
     readFileSync(join(dest, "transcript.log"), "utf8"),
     "attempt one log",
@@ -670,9 +678,9 @@ test("archivePriorAttempt: first archive lands at attempt-1 with content preserv
   assert.equal(existsSync(artifactsDir), false);
 });
 
-test("archivePriorAttempt: sequential numbering across repeated reruns (mirrors run 54177-1's 7 verify attempts)", () => {
+test("archivePriorAttempt: sequential numbering across repeated reruns (a node retried several times)", () => {
   const runDir = mkdtempSync(join(tmpdir(), "dr-archive-"));
-  const nodeId = "verify";
+  const nodeId = "fix";
   const artifactsDir = join(runDir, nodeId);
 
   // Simulate 3 prior attempts, each archived then a fresh artifactsDir recreated
@@ -695,17 +703,17 @@ test("archivePriorAttempt: sequential numbering across repeated reruns (mirrors 
 test("archivePriorAttempt: different node ids get independent attempt sequences", () => {
   const runDir = mkdtempSync(join(tmpdir(), "dr-archive-"));
 
-  const verifyDir = join(runDir, "verify");
-  mkdirSync(verifyDir);
-  writeFileSync(join(verifyDir, "burn.json"), "verify attempt");
-  archivePriorAttempt(runDir, "verify", verifyDir);
+  const fixDir = join(runDir, "fix");
+  mkdirSync(fixDir);
+  writeFileSync(join(fixDir, "burn.json"), "fix attempt");
+  archivePriorAttempt(runDir, "fix", fixDir);
 
   const reviewDir = join(runDir, "review");
   mkdirSync(reviewDir);
   writeFileSync(join(reviewDir, "burn.json"), "review attempt");
   archivePriorAttempt(runDir, "review", reviewDir);
 
-  assert.equal(existsSync(join(runDir, "verify-attempts", "attempt-1")), true);
+  assert.equal(existsSync(join(runDir, "fix-attempts", "attempt-1")), true);
   assert.equal(existsSync(join(runDir, "review-attempts", "attempt-1")), true);
 });
 

@@ -7,18 +7,23 @@
  *
  * Run: node --import tsx ./test/smoke/smoke-mock.ts
  *
- * Runs exercised (verify-autonomy change — no more verify-election; verify is
- * a required, autonomous, outcomeGate-gated node on BOTH workflows):
- *   Run A — feature workflow, full happy path through verify (PASS) -> pr -> done.
- *   Run B — bugfix workflow, full happy path through verify (PASS) -> pr -> done.
- *   Run C — night-mode, clean plan: Gate 1 + Gate 2 auto-approved, verify runs
- *           autonomously (no park — the old verify-election park is gone),
+ * Runs exercised (pipeline: define|reproduce -> implement -> review -> fix -> pr;
+ * there is no verify node — DECISIONS.md § verify-node-removed):
+ *   Run A — feature workflow, full happy path (fix gate -> pr) -> done; no verify
+ *           node in state and no next-node-decision.json written.
+ *   Run B — bugfix workflow, same happy path and the same absences.
+ *   Run C — night-mode, clean plan: Gate 1 + Gate 2 auto-approved, pr runs,
  *           run completes fully unattended (done).
  *   Run D — night-mode, seeded concern: parked at Gate 1 (unchanged by this change).
- *   Run E — stale gate from a prior workflow version auto-skipped on resume.
- *   Run F — verify's outcomeGate: a non-PASS verify-report.json outcome fails
- *           verify and blocks pr (run ends failed) — the D6 engine mechanism,
- *           end-to-end through the real startRun/resumeRun/runDag path.
+ *   Run E — stale gate from a prior workflow version auto-skipped on resume;
+ *           the stale run also carries a legacy DONE `verify` node, which a
+ *           resume must leave untouched (old-run tolerance).
+ *   Run F — outcomeGate engine mechanism (no shipped node uses it any more, so a
+ *           tiny custom workflow does): a non-PASS outcome fails the node and
+ *           blocks its dependent (run ends failed), through the real
+ *           startRun/runDag path.
+ *   Run I — rerunNode on a failed required node (review) archives the failed
+ *           attempt before wiping, then lands a fresh success.
  *   Run J — resumeRun's resetInterruptedNodes path archives an interrupted
  *           node's partial artifacts before the retry re-executes, instead of
  *           silently overwriting them in place.
@@ -45,6 +50,7 @@ import { rerunNode } from "../../src/runtime/run-engine.js";
 import { createMockExecutor } from "../../src/runtime/mock-executor.js";
 import { featureWorkflow } from "../../src/workflow/feature-workflow.js";
 import { bugfixWorkflow } from "../../src/workflow/bugfix-workflow.js";
+import type { Workflow } from "../../src/core/types.js";
 import type { DagrunnerConfig } from "../../src/config/xdg.js";
 
 // ---------------------------------------------------------------------------
@@ -88,9 +94,7 @@ if (!existsSync(join(TOY_REPO_PATH, ".git"))) {
 // Mock executor factories — shared by all steps of the runs that use them
 // ---------------------------------------------------------------------------
 
-// Feature workflow: define -> implement -> review -> fix -> verify -> pr.
-// verify now runs autonomously (no election) and writes a PASS outcome via
-// mock-executor's producesFileContent special-case for outcomeGate.file.
+// Feature workflow: define -> implement -> review -> fix -> pr.
 const mockFactory = (
   _config: DagrunnerConfig,
   _runId: string,
@@ -103,12 +107,10 @@ const mockFactory = (
     implement: "success", // writes summary.md
     review: "success", // writes findings.json
     fix: "gate-pause", // writes summary.md + returns awaiting-gate
-    verify: "success", // writes verify-report.json (outcome: PASS) — verify-plan.md is prompt-conditional, not in produces
     pr: "success", // writes body.md
   });
 
-// Bugfix workflow: reproduce -> implement -> review -> fix -> verify -> pr.
-// Same verify contract as feature — see bugfix-workflow.ts's module doc.
+// Bugfix workflow: reproduce -> implement -> review -> fix -> pr.
 const bugfixMockFactory = (
   _config: DagrunnerConfig,
   _runId: string,
@@ -121,7 +123,6 @@ const bugfixMockFactory = (
     implement: "success",
     review: "success",
     fix: "gate-pause",
-    verify: "success",
     pr: "success",
   });
 
@@ -151,7 +152,7 @@ const BASE_TS = Date.now();
 const config: DagrunnerConfig = { DEVHARNESS_SRC: TOY_REPO_PATH };
 
 // ---------------------------------------------------------------------------
-// RUN A — feature workflow, full happy path (no election — verify autonomous)
+// RUN A — feature workflow, full happy path
 // ---------------------------------------------------------------------------
 
 const HOME_A = `/tmp/dagrun-smoke-mock-a-${BASE_TS}`;
@@ -301,7 +302,7 @@ console.log(
 );
 
 // ---------------------------------------------------------------------------
-// Step A4 — resumeRun(approve Gate 2) -> verify runs autonomously (PASS) -> pr -> done
+// Step A4 — resumeRun(approve Gate 2) -> pr -> done
 // ---------------------------------------------------------------------------
 
 await resumeRun({
@@ -319,32 +320,22 @@ await resumeRun({
     "done",
     `A4: fix must be done after approval, got ${String(state.nodes["fix"]?.status)}`,
   );
+  // The verify node was removed: no state entry, no artifact dir, and the fix
+  // gate no longer writes a next-node decision.
   assert.strictEqual(
-    state.nodes["verify"]?.status,
-    "done",
-    `A4: verify must run autonomously and be done (no election, no gate), got ${String(state.nodes["verify"]?.status)}`,
+    state.nodes["verify"],
+    undefined,
+    "A4: there must be no verify node in a fresh run's state",
   );
-  // verify-plan.md is intentionally NOT part of verify's produces contract
-  // (run 56962-1 forensics, DECISIONS.md § verify-run-56962-1-forensics) —
-  // payload/commands/verify.md's legitimate short-circuit paths (Docker
-  // unreachable, unrecoverable stall) explicitly skip writing it, so the
-  // mock (which only writes declared `produces` files) correctly does not
-  // write it either. verify-report.json remains the sole load-bearing,
-  // mechanically-enforced artifact — asserted below.
-  const reportPath = join(runDirA, "verify", "verify-report.json");
-  assert.ok(existsSync(reportPath), "A4: verify/verify-report.json must exist");
-  const report = JSON.parse(readFileSync(reportPath, "utf8")) as {
-    outcome?: string;
-  };
-  assert.strictEqual(
-    report.outcome,
-    "PROVISIONED",
-    `A4: verify-report.json outcome must be PROVISIONED, got ${String(report.outcome)}`,
+  assert.ok(!existsSync(join(runDirA, "verify")), "A4: no verify/ dir");
+  assert.ok(
+    !existsSync(join(runDirA, "fix", "next-node-decision.json")),
+    "A4: the fix gate must not write next-node-decision.json",
   );
   assert.strictEqual(
     state.nodes["pr"]?.status,
     "done",
-    `A4: pr must be done (verify's outcomeGate passed), got ${String(state.nodes["pr"]?.status)}`,
+    `A4: pr must be done straight after fix, got ${String(state.nodes["pr"]?.status)}`,
   );
   assert.ok(
     existsSync(join(runDirA, "pr", "body.md")),
@@ -357,14 +348,11 @@ await resumeRun({
   );
 }
 console.log(
-  "step A4 passed: approve Gate 2 -> verify runs autonomously (PASS) -> pr done -> run done. Run A complete (feature workflow)",
+  "step A4 passed: approve Gate 2 -> pr done -> run done, no verify node. Run A complete (feature workflow)",
 );
 
 // ---------------------------------------------------------------------------
-// RUN B — bugfix workflow, full happy path (verify is conditional-but-required
-//          per the verify-autonomy amendment; mock executor models the "PASS"
-//          branch regardless of whether an AT was authored or reused — that
-//          branch is model judgment inside verify.md, not engine-visible).
+// RUN B — bugfix workflow, full happy path
 // ---------------------------------------------------------------------------
 
 const HOME_B = `/tmp/dagrun-smoke-mock-b-${BASE_TS + 1}`;
@@ -432,15 +420,15 @@ await resumeRun({
 {
   const state = readState(runDirB);
   assert.strictEqual(
-    state.nodes["verify"]?.status,
-    "done",
-    `B3: verify must run autonomously and be done, got ${String(state.nodes["verify"]?.status)}`,
+    state.nodes["verify"],
+    undefined,
+    "B3: there must be no verify node in a fresh run's state",
   );
-  const reportPath = join(runDirB, "verify", "verify-report.json");
-  const report = JSON.parse(readFileSync(reportPath, "utf8")) as {
-    outcome?: string;
-  };
-  assert.strictEqual(report.outcome, "PROVISIONED");
+  assert.ok(!existsSync(join(runDirB, "verify")), "B3: no verify/ dir");
+  assert.ok(
+    !existsSync(join(runDirB, "fix", "next-node-decision.json")),
+    "B3: the fix gate must not write next-node-decision.json",
+  );
   assert.strictEqual(
     state.nodes["pr"]?.status,
     "done",
@@ -453,12 +441,11 @@ await resumeRun({
   );
 }
 console.log(
-  "step B3 passed: approve Gate 2 (fix) -> verify runs autonomously (PASS) -> pr done -> run done. Run B complete (bugfix workflow)",
+  "step B3 passed: approve Gate 2 (fix) -> pr done -> run done, no verify node. Run B complete (bugfix workflow)",
 );
 
 // ---------------------------------------------------------------------------
-// RUN C — night-mode, clean plan: auto-approve Gate 1 + Gate 2, verify runs
-//          autonomously (no park — the old verify-election park is gone),
+// RUN C — night-mode, clean plan: auto-approve Gate 1 + Gate 2, pr runs,
 //          run completes fully unattended.
 // ---------------------------------------------------------------------------
 
@@ -489,7 +476,7 @@ const runDirC = join(HOME_C, "runs", RUN_ID_C);
   assert.strictEqual(
     state.status,
     "done",
-    `C: night-mode clean plan must complete fully unattended (no more verify-election park), got ${state.status}`,
+    `C: night-mode clean plan must complete fully unattended got ${state.status}`,
   );
   assert.strictEqual(
     state.nodes["define"]?.status,
@@ -524,9 +511,13 @@ const runDirC = join(HOME_C, "runs", RUN_ID_C);
     `C: fix gateHistory last entry must have correct basis`,
   );
   assert.strictEqual(
-    state.nodes["verify"]?.status,
-    "done",
-    `C: verify must run autonomously to done (no human election in night-mode either), got ${String(state.nodes["verify"]?.status)}`,
+    state.nodes["verify"],
+    undefined,
+    "C: there must be no verify node in a night-mode run's state",
+  );
+  assert.ok(
+    !existsSync(join(runDirC, "fix", "next-node-decision.json")),
+    "C: night-mode must not write a next-node decision at the fix gate",
   );
   assert.strictEqual(
     state.nodes["pr"]?.status,
@@ -535,7 +526,7 @@ const runDirC = join(HOME_C, "runs", RUN_ID_C);
   );
 }
 console.log(
-  "step C passed: night-mode clean plan -> Gate 1 + Gate 2 auto-approved -> verify autonomous -> pr done -> run done (fully unattended)",
+  "step C passed: night-mode clean plan -> Gate 1 + Gate 2 auto-approved -> pr done -> run done (fully unattended)",
 );
 
 // ---------------------------------------------------------------------------
@@ -560,7 +551,6 @@ const concernsFactory = (
     implement: "success",
     review: "success",
     fix: "gate-pause",
-    verify: "success",
     pr: "success",
   });
 
@@ -668,6 +658,8 @@ const staleState = {
       cost: 0,
       gateHistory: [],
     },
+    // Legacy node: the verify node was removed from the workflow, but a run
+    // created before that still carries it. Resume must leave it untouched.
     verify: {
       status: "done",
       artifacts: [],
@@ -739,7 +731,7 @@ await resumeRun({
     "skipped",
     `E: stale apply-reflection must be skipped, got ${String(state.nodes["apply-reflection"]?.status)}`,
   );
-  // All current workflow nodes must remain done.
+  // All current workflow nodes — and the legacy verify node — must remain done.
   for (const id of ["expand", "implement", "review", "fix", "verify", "pr"]) {
     assert.strictEqual(
       state.nodes[id]?.status,
@@ -753,14 +745,33 @@ console.log(
 );
 
 // ---------------------------------------------------------------------------
-// RUN F — verify's outcomeGate: a non-PASS outcome fails verify and blocks pr
-//          (D6 engine mechanism, end-to-end through startRun/resumeRun/runDag).
+// RUN F — outcomeGate engine mechanism, end-to-end through startRun/runDag.
+//          No shipped workflow node declares an outcomeGate any more (verify
+//          was the last one), so a tiny non-gated custom workflow does: a
+//          non-PASS outcome fails the node and blocks its dependent.
 // ---------------------------------------------------------------------------
 
 const HOME_F = `/tmp/dagrun-smoke-mock-f-${BASE_TS + 5}`;
 mkdirSync(join(HOME_F, "runs"), { recursive: true });
 mkdirSync(join(HOME_F, "worktrees"), { recursive: true });
 const PLAN_F = makePlanPath(HOME_F, BASE_TS + 5);
+
+const outcomeWorkflow: Workflow = {
+  name: "bugfix", // reuse a known workflow name; branch/PR naming keys off it
+  nodes: [
+    {
+      id: "check",
+      command: "/check",
+      produces: ["check-report.json"],
+      outcomeGate: {
+        file: "check-report.json",
+        field: "outcome",
+        passValues: ["PASS"],
+      },
+    },
+    { id: "after", dependsOn: ["check"], command: "/after", produces: ["after.md"] },
+  ],
+};
 
 const outcomeFailFactory = (
   _config: DagrunnerConfig,
@@ -770,12 +781,8 @@ const outcomeFailFactory = (
   _storeDir: string,
 ) =>
   createMockExecutor({
-    define: "gate-pause",
-    implement: "success",
-    review: "success",
-    fix: "gate-pause",
-    verify: "outcome-gate-fail", // writes verify-report.json with outcome: FAIL_ASSERTION
-    pr: "success",
+    check: "outcome-gate-fail", // writes check-report.json with outcome: FAIL_ASSERTION
+    after: "success",
   });
 
 /**
@@ -820,9 +827,9 @@ async function startRunCapturingExit(
   }
 }
 
-await startRun({
-  workflow: featureWorkflow,
-  noCompanion: true, // legacy fresh-session gates; companion gates are covered by smoke-gates-feature.ts
+await startRunCapturingExit({
+  workflow: outcomeWorkflow,
+  noCompanion: true,
   planPath: PLAN_F,
   homeDir: HOME_F,
   config,
@@ -836,41 +843,26 @@ assert.ok(runsF.length > 0, "F: at least one run must exist");
 const RUN_ID_F = runsF[0] as string;
 const runDirF = join(HOME_F, "runs", RUN_ID_F);
 
-await resumeRun({
-  runId: RUN_ID_F,
-  homeDir: HOME_F,
-  config,
-  approve: true, // Gate 1 (define)
-  executorFactory: outcomeFailFactory,
-});
-await resumeRunCapturingExit({
-  runId: RUN_ID_F,
-  homeDir: HOME_F,
-  config,
-  approve: true, // Gate 2 (fix) -> verify runs, outcome FAIL_ASSERTION -> run ends failed
-  executorFactory: outcomeFailFactory,
-});
-
 {
   const state = readState(runDirF);
-  const reportPath = join(runDirF, "verify", "verify-report.json");
+  const reportPath = join(runDirF, "check", "check-report.json");
   assert.ok(
     existsSync(reportPath),
-    "F: verify-report.json must exist even on a non-PASS outcome",
+    "F: check-report.json must exist even on a non-PASS outcome",
   );
   const report = JSON.parse(readFileSync(reportPath, "utf8")) as {
     outcome?: string;
   };
   assert.strictEqual(report.outcome, "FAIL_ASSERTION");
   assert.strictEqual(
-    state.nodes["verify"]?.status,
+    state.nodes["check"]?.status,
     "failed",
-    `F: verify must be failed (outcomeGate rejected FAIL_ASSERTION), got ${String(state.nodes["verify"]?.status)}`,
+    `F: check must be failed (outcomeGate rejected FAIL_ASSERTION), got ${String(state.nodes["check"]?.status)}`,
   );
-  assert.strictEqual(
-    state.nodes["pr"]?.status,
-    "skipped",
-    `F: pr must never run — its required dep (verify) failed, got ${String(state.nodes["pr"]?.status)}`,
+  assert.notStrictEqual(
+    state.nodes["after"]?.status,
+    "done",
+    `F: the dependent must never complete — its required dep failed, got ${String(state.nodes["after"]?.status)}`,
   );
   assert.strictEqual(
     state.status,
@@ -879,25 +871,69 @@ await resumeRunCapturingExit({
   );
 }
 console.log(
-  "step F passed: verify outcomeGate rejects FAIL_ASSERTION -> verify failed -> pr blocked -> run failed",
+  "step F passed: outcomeGate rejects FAIL_ASSERTION -> node failed -> dependent blocked -> run failed",
 );
 
 // ---------------------------------------------------------------------------
 // RUN I — rerunNode archives the failed attempt's artifacts (transcript.log/
-//          reflections.md/burn.json/verify-report.json/etc) to
-//          <runDir>/<nodeId>-attempts/attempt-1/ BEFORE wiping the live dir,
-//          instead of deleting them outright. Reuses Run F's already-failed
-//          run (verify/verify-report.json holds a FAIL_ASSERTION outcome) —
-//          this is exactly the manual-recovery path a human takes after a
-//          verify failure (`dagrun rerun <run-id> verify`), and the ONLY
-//          place a node's artifactsDir is ever wiped between separate CLI
-//          invocations. See DECISIONS.md § rerun-artifact-archiving.
+//          reflections.md/burn.json/etc) to <runDir>/<nodeId>-attempts/attempt-1/
+//          BEFORE wiping the live dir, instead of deleting them outright.
+//          Uses a real bugfix run whose required `review` node fails (mock
+//          loop-exhaust) — exactly the manual-recovery path a human takes
+//          (`dagrun rerun <run-id> review`), and the ONLY place a node's
+//          artifactsDir is ever wiped between separate CLI invocations.
+//          See DECISIONS.md § rerun-artifact-archiving.
 // ---------------------------------------------------------------------------
 
-const verifyReportBeforeRerun = readFileSync(
-  join(runDirF, "verify", "verify-report.json"),
-  "utf8",
+const HOME_I = `/tmp/dagrun-smoke-mock-i-${BASE_TS + 8}`;
+mkdirSync(join(HOME_I, "runs"), { recursive: true });
+mkdirSync(join(HOME_I, "worktrees"), { recursive: true });
+const PLAN_I = makePlanPath(HOME_I, BASE_TS + 8);
+
+const reviewFailsFactory = (
+  _config: DagrunnerConfig,
+  _runId: string,
+  _runDir: string,
+  _worktreePath: string,
+  _storeDir: string,
+) =>
+  createMockExecutor({
+    reproduce: "gate-pause",
+    implement: "success",
+    review: "loop-exhaust", // required node fails (non-retryable)
+    fix: "gate-pause",
+    pr: "success",
+  });
+
+await startRun({
+  workflow: bugfixWorkflow,
+  noCompanion: true,
+  planPath: PLAN_I,
+  homeDir: HOME_I,
+  config,
+  executorFactory: reviewFailsFactory,
+});
+const RUN_ID_I = readdirSync(join(HOME_I, "runs")).find((d) =>
+  existsSync(join(HOME_I, "runs", d, "state.json")),
+) as string;
+const runDirI = join(HOME_I, "runs", RUN_ID_I);
+await resumeRunCapturingExit({
+  runId: RUN_ID_I,
+  homeDir: HOME_I,
+  config,
+  approve: true, // Gate 1 (reproduce) -> implement ok -> review fails -> run ends failed
+  executorFactory: reviewFailsFactory,
+});
+assert.strictEqual(
+  readState(runDirI).nodes["review"]?.status,
+  "failed",
+  "I: setup — review must be failed before the rerun",
 );
+// A real failed session leaves its transcript behind; the mock writes nothing
+// on loop-exhaust, so seed the evidence the archive must preserve.
+mkdirSync(join(runDirI, "review"), { recursive: true });
+const failedTranscript = "transcript of the failed review attempt\n";
+writeFileSync(join(runDirI, "review", "transcript.log"), failedTranscript, "utf8");
 
 const rerunSuccessFactory = (
   _config: DagrunnerConfig,
@@ -907,46 +943,43 @@ const rerunSuccessFactory = (
   _storeDir: string,
 ) =>
   createMockExecutor({
-    verify: "success", // writes a fresh verify-report.json with outcome: PASS
+    review: "success", // writes a fresh findings.json
   });
 
 await rerunNode({
-  runId: RUN_ID_F,
-  nodeId: "verify",
-  homeDir: HOME_F,
+  runId: RUN_ID_I,
+  nodeId: "review",
+  homeDir: HOME_I,
   config,
   executorFactory: rerunSuccessFactory,
 });
 
 {
-  const archivedReport = readFileSync(
-    join(runDirF, "verify-attempts", "attempt-1", "verify-report.json"),
-    "utf8",
-  );
   assert.strictEqual(
-    archivedReport,
-    verifyReportBeforeRerun,
-    "I: verify-attempts/attempt-1/verify-report.json must match Run F's original FAIL_ASSERTION content, not be lost",
+    readFileSync(
+      join(runDirI, "review-attempts", "attempt-1", "transcript.log"),
+      "utf8",
+    ),
+    failedTranscript,
+    "I: review-attempts/attempt-1/transcript.log must hold the failed attempt's evidence, not lose it",
   );
-
-  const newReport = JSON.parse(
-    readFileSync(join(runDirF, "verify", "verify-report.json"), "utf8"),
-  ) as { outcome?: string };
-  assert.strictEqual(
-    newReport.outcome,
-    "PROVISIONED",
-    `I: rerun must land a fresh, passing verify-report.json in the live dir, got ${String(newReport.outcome)}`,
+  assert.ok(
+    existsSync(join(runDirI, "review", "findings.json")),
+    "I: rerun must land a fresh findings.json in the live dir",
   );
-
-  const state = readState(runDirF);
+  assert.ok(
+    !existsSync(join(runDirI, "review", "transcript.log")),
+    "I: the live dir must be wiped of the failed attempt's transcript",
+  );
+  const state = readState(runDirI);
   assert.strictEqual(
-    state.nodes["verify"]?.status,
+    state.nodes["review"]?.status,
     "done",
-    `I: state.json must reflect the rerun's outcome, got ${String(state.nodes["verify"]?.status)}`,
+    `I: state.json must reflect the rerun's outcome, got ${String(state.nodes["review"]?.status)}`,
   );
 }
 console.log(
-  "step I passed: rerunNode archives the FAIL_ASSERTION attempt to verify-attempts/attempt-1/ before wiping, rerun writes a fresh PASS",
+  "step I passed: rerunNode archives the failed review attempt to review-attempts/attempt-1/ before wiping, rerun writes a fresh success",
 );
 
 // ---------------------------------------------------------------------------
@@ -1002,13 +1035,6 @@ const stateJ = {
       gateHistory: [],
     },
     fix: {
-      status: "pending",
-      artifacts: [],
-      iteration: 0,
-      cost: 0,
-      gateHistory: [],
-    },
-    verify: {
       status: "pending",
       artifacts: [],
       iteration: 0,
@@ -1124,7 +1150,6 @@ const placeholderFactory = (
     implement: "success",
     review: "success",
     fix: "gate-pause",
-    verify: "success",
     pr: "success",
   });
 
@@ -1273,7 +1298,7 @@ console.log(
 console.log(
   "\nall smoke-mock steps passed (Run A: feature happy path, Run B: bugfix happy path, " +
     "Run C: night clean unattended, Run D: night flagged, Run E: stale gate auto-skip, " +
-    "Run F: outcomeGate blocks pr on non-PASS, Run G: noPlaceholders blocks a manually-approved " +
+    "Run F: outcomeGate blocks the dependent on non-PASS, Run G: noPlaceholders blocks a manually-approved " +
     "gate, Run H: noPlaceholders blocks a night-mode auto-approved gate, Run I: rerunNode archives " +
     "the prior failed attempt before wiping, Run J: resumeRun archives an interrupted node's " +
     "partial artifacts before the retry re-executes)",

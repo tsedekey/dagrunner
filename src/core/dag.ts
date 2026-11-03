@@ -13,7 +13,6 @@ import type { Node, Workflow, Ctx } from "./types.js";
 import type { NodeStatus, RunState } from "./state.js";
 import { accrueSessionCost, writeState } from "./state.js";
 import type { NodeExecutor } from "../runtime/mock-executor.js";
-import { checkEvidence, gitDirtyPaths, gitHead } from "./verify-evidence.js";
 
 // ---------------------------------------------------------------------------
 // computeReadyNodes
@@ -25,10 +24,7 @@ import { checkEvidence, gitDirtyPaths, gitHead } from "./verify-evidence.js";
  * A node is ready when:
  *   (a) status === 'pending'
  *   (b) when predicate (if present and ctx provided) returns true
- *   (c) all deps are terminal (done|skipped|failed|awaiting-gate)
- *   (d) no required dep is failed or skipped (skipped = not-done, blocks non-optional)
- *
- * joinRule 'none-failed-min-one-success': all deps terminal, ≥1 done, no required dep failed.
+ *   (c) every dep is done (an optional dep that is skipped/failed is non-blocking)
  */
 export function computeReadyNodes(
   nodes: Node[],
@@ -37,13 +33,6 @@ export function computeReadyNodes(
 ): string[] {
   // Build a quick id → node map for optional lookups.
   const nodeMap = new Map<string, Node>(nodes.map((n) => [n.id, n]));
-  const terminal: ReadonlySet<NodeStatus> = new Set([
-    "done",
-    "skipped",
-    "failed",
-    "awaiting-gate",
-  ]);
-
   const ready: string[] = [];
 
   for (const node of nodes) {
@@ -52,41 +41,24 @@ export function computeReadyNodes(
 
     const deps = node.dependsOn ?? [];
 
-    if (node.joinRule === "none-failed-min-one-success") {
-      // All deps must be terminal; ≥1 must be done; no required dep may be failed.
-      const allTerminal = deps.every((d) =>
-        terminal.has(statuses[d] ?? "pending"),
-      );
-      if (!allTerminal) continue;
-      const atLeastOneDone = deps.some((d) => statuses[d] === "done");
-      if (!atLeastOneDone) continue;
-      const requiredFailed = deps.some((d) => {
-        const depStatus = statuses[d];
-        const depNode = nodeMap.get(d);
-        return depStatus === "failed" && depNode?.optional !== true;
-      });
-      if (requiredFailed) continue;
-    } else {
-      // Default rule: every dep must be done; skipped/failed deps on non-optional block.
-      let blocked = false;
-      for (const depId of deps) {
-        const depStatus = statuses[depId] ?? "pending";
-        const depNode = nodeMap.get(depId);
-        const isOptional = depNode?.optional === true;
+    // Every dep must be done; skipped/failed deps on non-optional block.
+    let blocked = false;
+    for (const depId of deps) {
+      const depStatus = statuses[depId] ?? "pending";
+      const depNode = nodeMap.get(depId);
+      const isOptional = depNode?.optional === true;
 
-        if (depStatus === "done") continue;
-        if (depStatus === "failed" && isOptional) continue; // optional fail → treat as skipped, non-blocking for deps check
-        if (depStatus === "skipped" && isOptional) continue; // optional skipped dep is terminal and non-blocking
-        // Any other non-done status (pending, running, awaiting-gate, skipped, failed-required) blocks.
-        blocked = true;
-        break;
-      }
-      if (blocked) continue;
+      if (depStatus === "done") continue;
+      if (depStatus === "failed" && isOptional) continue; // optional fail → treat as skipped, non-blocking for deps check
+      if (depStatus === "skipped" && isOptional) continue; // optional skipped dep is terminal and non-blocking
+      // Any other non-done status (pending, running, awaiting-gate, skipped, failed-required) blocks.
+      blocked = true;
+      break;
     }
+    if (blocked) continue;
 
     // Evaluate `when` only AFTER dependencies are satisfied: a predicate may read
-    // an upstream artifact (e.g. the fix gate's next-node decision) that does not
-    // exist yet. Same outcome as before for every predicate that never threw.
+    // an upstream artifact that does not exist yet.
     if (node.when !== undefined && ctx !== undefined && !node.when(ctx))
       continue;
 
@@ -94,25 +66,6 @@ export function computeReadyNodes(
   }
 
   return ready;
-}
-
-/**
- * outcomeGate + evidenceCheck in one call — the report contract every call
- * site (runDag, rerunNode) must apply identically.
- */
-export function checkNodeReport(
-  runDir: string,
-  nodeId: string,
-  node: Node,
-  worktreePath: string,
-): { ok: true } | { ok: false; error: string } {
-  const gate = checkOutcomeGate(runDir, nodeId, node);
-  if (!gate.ok) return gate;
-  if (node.evidenceCheck === undefined) return gate;
-  return checkEvidence(runDir, nodeId, node, {
-    head: gitHead(worktreePath),
-    dirty: gitDirtyPaths(worktreePath),
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -491,7 +444,7 @@ export async function runDag(
             endedAt: now,
           });
         } else {
-          const gateCheck = checkNodeReport(runDir, id, node, run.worktreePath);
+          const gateCheck = checkOutcomeGate(runDir, id, node);
           if (!gateCheck.ok) {
             updateNode(id, {
               status: "failed",

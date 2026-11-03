@@ -3,12 +3,9 @@
  * Block 9 — 7-step smoke test for dagrunner v1 (Phase 2a + 2b).
  *
  * Drives the real thin slice end-to-end using non-interactive flags.
- * Makes REAL SDK calls for steps 2-6 (verify — now autonomous, no election).
+ * Makes REAL SDK calls for steps 2-6 (step 6 approves Gate 2 and lets the pr
+ * node compose the PR body, then pauses at the pre-PR gate).
  * Step 7 uses a synthetic state (no API call) to test reconcile plumbing only.
- * verify-autonomy change: step 6 approves Gate 2 and lets verify run for
- * real; see the step-6 comment block for the toy-repo coverage gap this
- * leaves (verify's build/test/AT stages need a Maven+Docker-shaped worktree
- * that the toy repo fixture does not provide).
  *
  * Run: node --import tsx ./test/smoke/smoke.ts
  *
@@ -273,40 +270,29 @@ let RUN_ID = "";
 }
 
 // ---------------------------------------------------------------------------
-// Step 6 — dagrun resume --approve (Gate 2) -> verify runs autonomously
+// Step 6 — dagrun resume --approve (Gate 2) -> pr composes -> pre-PR gate pause
 //
-// verify-autonomy change: there is no more election/--verify flag. Gate 2
-// approval now runs verify directly (required, blocking, no human gate).
-//
-// KNOWN SMOKE:LIVE GAP (see DECISIONS.md § verify-autonomy-smoke-live-gap):
-// the toy repo fixture (test/smoke/fixtures/toy-repo) is a bare git init with
-// only README.md — no pom.xml, no Maven wrapper, no qa/acceptance-tests
-// module, no Docker/testcontainers scaffolding. verify's D4 (independent
-// build+test rerun) and D5 (run the authored @MultiDbTest) CANNOT pass
-// against this fixture — that is verify doing its job correctly (fail loud
-// on a broken/absent build), not a smoke-test bug. This step therefore does
-// NOT assert a PASS outcome or that pr ran; it asserts that verify's real SDK
-// session starts, completes (any terminal status), and that the SessionEnd
-// hook fires during that session — the same deterministic-hook-wiring proof
-// step 6 has always carried, just re-anchored to verify's session instead of
-// pr's now that pr no longer unconditionally runs. A full green verify run
-// requires smoke:live against a real Camunda-shaped worktree (Maven+Docker+
-// qa/acceptance-tests) — out of scope for this build; deferred to Eddie.
+// The pipeline is define/reproduce -> implement -> review -> fix -> pr: approving
+// Gate 2 runs pr directly, which composes body.md/pr-meta.json and then pauses
+// at the pre-PR gate (push + draft-PR creation only happen after that gate is
+// approved, so DAGRUN_NO_PR is belt-and-braces here). This step asserts that
+// pr's real SDK session starts and ends in a post-run status, and that the
+// SessionEnd hook fires during that session.
 //
 // Reflection wiring check (option b — deterministic):
-//   Seed a known reflections.md into the verify artifact dir BEFORE resume so
+//   Seed a known reflections.md into the pr artifact dir BEFORE resume so
 //   the SessionEnd hook has a file to capture regardless of what the model
-//   writes, and regardless of whether verify's own outcome is PASS or not.
+//   writes.
 // ---------------------------------------------------------------------------
 
 {
-  // Seed verify/reflections.md BEFORE the resume call so the SessionEnd hook
+  // Seed pr/reflections.md BEFORE the resume call so the SessionEnd hook
   // captures it deterministically. The sdk-runner uses mkdir -p (not rm+mkdir)
   // so the file survives into the session.
-  const verifyArtifactsDir = join(HOME, "runs", RUN_ID, "verify");
-  mkdirSync(verifyArtifactsDir, { recursive: true });
+  const prArtifactsDir = join(HOME, "runs", RUN_ID, "pr");
+  mkdirSync(prArtifactsDir, { recursive: true });
   writeFileSync(
-    join(verifyArtifactsDir, "reflections.md"),
+    join(prArtifactsDir, "reflections.md"),
     "smoke:live seeded reflection — deterministic hook wiring check",
     "utf8",
   );
@@ -315,7 +301,7 @@ let RUN_ID = "";
     ["resume", RUN_ID, "--approve"],
     // DAGRUN_NO_PR prevents real gh pr create if pr does end up running.
     { ...HOME_ENV, DAGRUN_NO_PR: "1" },
-    600_000, // 10 minutes: verify (build/test rerun + AT authoring/execution attempt)
+    600_000, // 10 minutes: pr composes the body (haiku) in a real session
   );
   assert.strictEqual(
     result.status,
@@ -331,16 +317,16 @@ let RUN_ID = "";
     nodes: Record<string, { status: string }>;
   };
 
-  // verify must have run (no longer "pending") — its own session decides the
-  // terminal status; a toy repo with no build tooling cannot legitimately PASS.
+  // pr must have run (no longer "pending"): it either composed the body and is
+  // now awaiting the pre-PR gate, or failed its own produces contract.
   assert.notStrictEqual(
-    stateRaw.nodes["verify"]?.status,
+    stateRaw.nodes["pr"]?.status,
     "pending",
-    `verify must have run, got: ${String(stateRaw.nodes["verify"]?.status)}`,
+    `pr must have run, got: ${String(stateRaw.nodes["pr"]?.status)}`,
   );
   assert.ok(
-    ["done", "failed"].includes(stateRaw.status),
-    `run must reach a terminal status after verify's session ends, got: ${stateRaw.status}`,
+    ["paused", "failed"].includes(stateRaw.status),
+    `run must be paused at the pre-PR gate (or failed) after pr's session ends, got: ${stateRaw.status}`,
   );
   // Assert the seeded reflections.md was captured by the SessionEnd hook.
   // Deterministic: this entry was pre-written by smoke, not by the model.
@@ -377,7 +363,7 @@ let RUN_ID = "";
     `  reflection-log has ${lines.length} entries — hook-driven capture verified (seeded entry found)`,
   );
   console.log(
-    "step 6 passed: Gate 2 approve -> verify ran autonomously (real SDK session, hook wiring proven)",
+    "step 6 passed: Gate 2 approve -> pr ran (real SDK session, hook wiring proven) -> pre-PR gate",
   );
 }
 
@@ -427,6 +413,31 @@ let RUN_ID = "";
     status: "running",
     nodes: {
       ...finalState.nodes,
+      // A run killed mid-implement has nothing downstream of implement done:
+      // review/fix/pr are pending again. (Leaving fix "done" from the real final
+      // state would make `pr` ready now that it depends on fix only, and the
+      // resume below would start a real SDK session instead of ending failed.)
+      review: {
+        status: "pending",
+        artifacts: [],
+        iteration: 0,
+        cost: 0,
+        gateHistory: [],
+      },
+      fix: {
+        status: "pending",
+        artifacts: [],
+        iteration: 0,
+        cost: 0,
+        gateHistory: [],
+      },
+      pr: {
+        status: "pending",
+        artifacts: [],
+        iteration: 0,
+        cost: 0,
+        gateHistory: [],
+      },
       implement: {
         ...implementNode,
         status: "running",

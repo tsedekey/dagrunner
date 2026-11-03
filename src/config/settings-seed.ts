@@ -213,11 +213,10 @@ export function buildSeededSettings(opts: {
         // pr node: report-only reviewer suggestion (runtime/reviewers-cli.ts). Its own
         // gh/git child processes are not subject to this list; only the one command is.
         "Bash(dagrun reviewers *)",
-        // Docker daemon reachability check + testcontainer inspection — verify's
-        // preflight (D2/D4 of the verify-autonomy change). Testcontainers itself
-        // talks to the daemon directly from the JVM, not via this Bash allowlist;
-        // this entry covers the `docker info`/`docker ps` preflight/diagnostic
-        // commands verify.md runs from the shell.
+        // Docker daemon reachability check — fix.md runs `docker info` before the
+        // first *IT.java execution (Testcontainers talks to the daemon directly from
+        // the JVM, not via this Bash allowlist; this entry covers only the shell
+        // preflight). Not verify-specific, so it survives the verify node's removal.
         "Bash(docker *)",
         // camunda-knowledge MCP — allowed tools (mirrors ~/.claude/settings.json)
         "mcp__camunda-knowledge__docs_lookup",

@@ -31,57 +31,17 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Node } from "../core/types.js";
-import { gitDirtyPaths, gitHead } from "../core/verify-evidence.js";
 
 /**
  * Content to write for a produces filename. Every produces file gets canned
  * markdown EXCEPT the node's declared outcomeGate.file, which must be valid
  * JSON with the gate's field set to its first passValue — otherwise a node
- * with an outcomeGate (e.g. verify) would fail smoke:mock's happy path when
+ * with an outcomeGate would fail smoke:mock's happy path when
  * checkOutcomeGate tries to JSON.parse a markdown string. A node under test
- * for a non-PASS outcome should write verify-report.json itself via a
- * dedicated executor rather than the generic 'success'/'gate-pause' scenarios.
+ * for a non-PASS outcome uses the 'outcome-gate-fail' scenario.
  */
-function producesFileContent(
-  node: Node,
-  filename: string,
-  worktreePath: string,
-): string {
+function producesFileContent(node: Node, filename: string): string {
   const gate = node.outcomeGate;
-  if (
-    gate !== undefined &&
-    gate.file === filename &&
-    node.evidenceCheck === "verify-runtime"
-  ) {
-    // A schema-3 source-only PROVISIONED report (no owned resources, so no teardown
-    // path is ever reached) that satisfies the evidence contract for the CURRENT
-    // worktree — plumbing fixture, not model output.
-    return JSON.stringify(
-      {
-        schemaVersion: 3,
-        outcome: gate.passValues[0],
-        capability: "source",
-        sourceRationale: "mock fixture",
-        target: {
-          kind: "local-disposable",
-          host: "localhost",
-          ownedResources: [],
-        },
-        candidate: {
-          sourceRevision: gitHead(worktreePath) ?? "mock",
-          dirtyFiles: gitDirtyPaths(worktreePath) ?? [],
-          builtFromWorktree: true,
-          buildCommand: "mock",
-          artifact: "mock",
-          artifactIdentity: "mock-sha256",
-        },
-        teardown: { status: "not-applicable" },
-        demoFile: "demo.md",
-      },
-      null,
-      2,
-    );
-  }
   if (gate !== undefined && gate.file === filename) {
     return JSON.stringify({ [gate.field]: gate.passValues[0] }, null, 2);
   }
@@ -225,7 +185,7 @@ function createScenarioExecutor(scenarios: ScenarioMap): NodeExecutor {
             const fullPath = join(ctx.artifactsDir, filename);
             writeFileSync(
               fullPath,
-              producesFileContent(node, filename, ctx.worktreePath),
+              producesFileContent(node, filename),
               "utf8",
             );
             artifacts.push(fullPath);
@@ -283,7 +243,7 @@ function createScenarioExecutor(scenarios: ScenarioMap): NodeExecutor {
             const fullPath = join(ctx.artifactsDir, filename);
             writeFileSync(
               fullPath,
-              producesFileContent(node, filename, ctx.worktreePath),
+              producesFileContent(node, filename),
               "utf8",
             );
           }
@@ -372,7 +332,7 @@ function createScenarioExecutor(scenarios: ScenarioMap): NodeExecutor {
       case "outcome-gate-fail": {
         // Write every produces file normally EXCEPT the node's declared
         // outcomeGate.file, which gets a deliberately non-passing value —
-        // models a real verify session that ran to completion but classified
+        // models a real session that ran to completion but classified
         // a non-PASS outcome (e.g. FAIL_ASSERTION). The engine's checkOutcomeGate
         // must fail this node even though the SDK session itself "succeeded".
         const artifacts: string[] = [];
@@ -383,7 +343,7 @@ function createScenarioExecutor(scenarios: ScenarioMap): NodeExecutor {
             const content =
               gate !== undefined && gate.file === filename
                 ? JSON.stringify({ [gate.field]: "FAIL_ASSERTION" })
-                : producesFileContent(node, filename, ctx.worktreePath);
+                : producesFileContent(node, filename);
             writeFileSync(fullPath, content, "utf8");
             artifacts.push(fullPath);
           }

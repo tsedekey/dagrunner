@@ -10,8 +10,7 @@
  * docker-teardown / detach / session-recovery mechanics it proves are workflow-
  * agnostic (already proven generic there — `ancestorsOf`/`node.gate` keyed, never
  * on workflow name). This file proves only what is NEW for feature: the full gate
- * path end to end (define -> implement -> review -> fix (decide verify) -> verify
- * -> pr -> done), the publication-timing behavior change (approving the fix gate no
+ * path end to end (define -> implement -> review -> fix -> pr -> done), the publication-timing behavior change (approving the fix gate no
  * longer auto-publishes — only the pr gate's approval does), and one
  * amend-at-pr-targets-fix case.
  */
@@ -272,7 +271,7 @@ function createBrief(h: { home: string; runId: string }): GateBrief {
 }
 
 // ===========================================================================
-// 2-6. Full companion-gate lifecycle: define -> fix (skip verify) -> pr -> done
+// 2-6. Full companion-gate lifecycle: define -> fix -> pr -> done
 // ===========================================================================
 const R = await newRun();
 {
@@ -286,7 +285,6 @@ const R = await newRun();
     "implement",
     "review",
     "fix",
-    "verify",
     "pr",
   ]);
   say(
@@ -308,16 +306,16 @@ const R = await newRun();
 
 {
   const b = briefOf(R.runDir, "fix");
-  assert.equal(b.pendingDecision.decidesNode, "verify");
+  assert.equal("decidesNode" in b.pendingDecision, false);
   assert.deepEqual(b.pendingDecision.amendTargets, ["fix"]);
-  assert.equal(await decide(R, b, {}), 1, "approve without --run-next refused");
-  const id = await propose(R, b, { runNext: false });
-  assert.equal(await decide(R, b, { runNext: false, confirm: id }), 0);
+  const id = await propose(R, b, {});
+  assert.equal(await decide(R, b, { confirm: id }), 0);
   const s = stateOf(R.runDir);
+  assert.equal(s.nodes["verify"], undefined, "there is no verify node");
   assert.equal(
-    s.nodes["verify"]?.status,
-    "skipped",
-    "verify skipped by decision",
+    existsSync(join(R.runDir, "fix", "next-node-decision.json")),
+    false,
+    "the fix gate writes no next-node decision",
   );
   // The publication-timing proof (DECISIONS.md § feature-companion-gates-parity):
   // approving fix does NOT auto-publish. pr only reaches awaiting-gate, composed
@@ -342,7 +340,7 @@ const R = await newRun();
     "runPrPostProcess must not have run yet — pr is still awaiting-gate",
   );
   say(
-    "4 passed: fix gate demands an explicit run/skip verify choice; skip -> verify skipped -> pr paused at its OWN gate (not auto-published)",
+    "4 passed: fix gate approve needs no run/skip choice -> pr paused at its OWN gate (not auto-published)",
   );
 }
 
@@ -365,31 +363,25 @@ const R = await newRun();
     "pr-gate approval must trigger runPrPostProcess (push attempted, fails loud on the remote-less toy repo)",
   );
   say(
-    "5 passed: pre-PR approval completes the run exactly once (verify skipped, joinRule tolerated it) and is what actually triggers publication (runPrPostProcess attempted the push only now)",
+    "5 passed: pre-PR approval completes the run exactly once and is what actually triggers publication (runPrPostProcess attempted the push only now)",
   );
 }
 
 // ===========================================================================
-// 6. Full gate path WITH verify chosen: fix gate decide yes -> verify runs
-//    (PROVISIONED) -> pr gate reached -> approve -> done.
+// 6. Fix-gate approve WITH a comment: the comment is kept in the audit trail
+//    (it used to ride into the verify decision file), then pr gate -> approve -> done.
 // ===========================================================================
 {
   const V = await newRun();
   const b1 = briefOf(V.runDir, "define");
   await decide(V, b1, { confirm: await propose(V, b1, {}) });
   const b2 = briefOf(V.runDir, "fix");
-  const id2 = await propose(V, b2, { runNext: true });
-  assert.equal(await decide(V, b2, { runNext: true, confirm: id2 }), 0);
+  const o2 = { comment: "looks right; ship it" };
+  const id2 = await propose(V, b2, o2);
+  assert.equal(await decide(V, b2, { ...o2, confirm: id2 }), 0);
   const s1 = stateOf(V.runDir);
-  assert.equal(
-    s1.nodes["verify"]?.status,
-    "done",
-    "verify must run when chosen at the fix gate",
-  );
-  const rep = JSON.parse(
-    readFileSync(join(V.runDir, "verify", "verify-report.json"), "utf8"),
-  ) as { outcome: string };
-  assert.equal(rep.outcome, "PROVISIONED");
+  assert.equal(s1.nodes["fix"]?.gateHistory.at(-1)?.comment, "looks right; ship it");
+  assert.equal(s1.nodes["verify"], undefined);
   assert.equal(
     s1.nodes["pr"]?.status,
     "awaiting-gate",
@@ -401,21 +393,21 @@ const R = await newRun();
   assert.equal(s2.status, "done");
   assert.equal(s2.nodes["pr"]?.status, "done");
   say(
-    "6 passed: fix gate decide yes -> verify runs to PROVISIONED -> pr gate -> approve -> done",
+    "6 passed: fix gate approve (with a comment kept in the audit trail) -> pr gate -> approve -> done",
   );
 }
 
 // ===========================================================================
 // 7. amend-at-pr-targets-fix: revise fix from the pre-PR gate, invalidate
-//    verify/pr, no publication — mirrors bugfix's smoke-gates.ts case 8.
+//    pr, no publication — mirrors bugfix's smoke-gates.ts case 8.
 // ===========================================================================
 {
   const A = await newRun();
   const b1 = briefOf(A.runDir, "define");
   await decide(A, b1, { confirm: await propose(A, b1, {}) });
   const b2 = briefOf(A.runDir, "fix");
-  const id2 = await propose(A, b2, { runNext: false });
-  await decide(A, b2, { runNext: false, confirm: id2 });
+  const id2 = await propose(A, b2, {});
+  await decide(A, b2, { confirm: id2 });
 
   const b3 = briefOf(A.runDir, "pr");
   assert.deepEqual(b3.pendingDecision.amendTargets, ["pr", "fix"]);
@@ -437,20 +429,18 @@ const R = await newRun();
     "awaiting-gate",
     "fix revised and paused again",
   );
-  for (const n of ["verify", "pr"]) {
-    assert.notEqual(
-      s.nodes[n]?.status,
-      "done",
-      `${n} must not keep stale results`,
-    );
-  }
+  assert.notEqual(
+    s.nodes["pr"]?.status,
+    "done",
+    "pr must not keep stale results",
+  );
   assert.equal(s.nodes["pr"]?.status, "pending");
   assert.ok(
     existsSync(join(A.runDir, "pr-attempts", "attempt-1")),
     "stale pr evidence archived, not reused",
   );
   const fixHist = s.nodes["fix"]!.gateHistory.at(-1)!;
-  assert.deepEqual([...(fixHist.invalidated ?? [])].sort(), ["pr", "verify"]);
+  assert.deepEqual([...(fixHist.invalidated ?? [])].sort(), ["pr"]);
   // pr was never approved (amended instead), so runPrPostProcess never ran —
   // no pr-error.txt (same real-teeth evidence as step 4/5: a real invocation
   // on the remote-less toy repo fails loud and writes one).
@@ -471,7 +461,7 @@ const R = await newRun();
     "stale pr-gate approval refused after amend",
   );
   say(
-    '7 passed: amend at the pre-PR gate re-runs fix, invalidates + archives verify/pr, no publication (featureWorkflow pr.gate.amendTargets: ["fix"])',
+    '7 passed: amend at the pre-PR gate re-runs fix, invalidates + archives pr, no publication (featureWorkflow pr.gate.amendTargets: ["fix"])',
   );
 }
 
@@ -506,8 +496,8 @@ const R = await newRun();
   const bd = briefOf(X.runDir, "define");
   await decide(X, bd, { confirm: await propose(X, bd, {}) }, {}, strayFactory);
   const bf = briefOf(X.runDir, "fix");
-  const idf = await propose(X, bf, { runNext: false });
-  await decide(X, bf, { runNext: false, confirm: idf }, {}, strayFactory);
+  const idf = await propose(X, bf, {});
+  await decide(X, bf, { confirm: idf }, {}, strayFactory);
   assert.equal(stateOf(X.runDir).nodes["pr"]?.status, "awaiting-gate");
   const bp = briefOf(X.runDir, "pr");
   const idp = await propose(X, bp, {});

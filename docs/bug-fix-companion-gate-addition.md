@@ -5,9 +5,17 @@ as of dagrunner v0.1.65.** That includes the `--detach`-driven handoff/driver be
 the run with `--detach`, polls `dagrun status --json` instead of returning to a terminal, never hands the
 `dagrun` CLI to Eddie in the normal path) and, new in v0.1.65, the digest-removal fold-in: the `fix`-gate
 bullet now names deferred/unresolved findings explicitly, the `pr`-gate bullet now names open reviewer
-questions and the verify-ran status, and a new "Lesson promotion" section wires the companion to `dagrun
+questions, and a new "Lesson promotion" section wires the companion to `dagrun
 reflect` (see `DECISIONS.md § digest-removed-folded-into-companion`). Nothing below is a pending,
-not-yet-applied increment — this mirror and the deployed file are in sync.
+not-yet-applied increment — this mirror and the deployed file were in sync as of v0.1.65.
+
+**v0.1.79 — the `verify` node was removed** (DECISIONS.md § verify-node-removed), so this mirror
+now describes the pipeline as reproduce -> implement -> review -> fix -> pr: no `--run-next`, no
+verify advice or evidence, no verify teardown. **The deployed
+`~/.claude/skills/bug-fix-companion/references/dagrunner-gates.md` still describes verify and must be
+updated separately** (it is outside this repo); until then it will tell the companion to pass a
+`--run-next` flag that no longer exists (ignored) and to look for `verify/` evidence that is never
+written.
 
 The commands below exist in dagrunner v0.1.65 and are exercised by `test/smoke/smoke-gates.ts` and
 `test/smoke/smoke-ui.ts` (mock executor). Real `claude --resume` re-entry and the runtime tools (docker /
@@ -46,13 +54,12 @@ dagrun start bugfix --plan <approved fix-plan file> --companion-session "$CLAUDE
 
 1. Confirm the run and gate: `dagrun gate show <run-id>` prints a JSON brief — run, gate, `revision`,
    gate artifacts and upstream artifact hashes, mechanical validation results, `pendingDecision`
-   (allowed actions, amend targets, what approving continues to, and whether approving also decides
-   `verify`), and `companion.status`. The `fix` and `pr` gate briefs list `changes.diff` (the engine-saved
+   (allowed actions, amend targets, and what approving continues to), and `companion.status`. The `fix` and `pr` gate briefs list `changes.diff` (the engine-saved
    `git diff` of the worktree vs the run's base branch, including new files) among the gate artifacts;
    read it, not just `summary.md`. Files not yet registered in state show `registered: false`.
 2. If `companion.status` is `blocked`, stop and explain why and the recovery choices (below). Do not
    decide anything.
-3. Read the actual artifacts (paths are in the brief) and the fix/review/verify evidence. Do not rely on
+3. Read the actual artifacts (paths are in the brief) and the fix/review evidence. Do not rely on
    node names or on a phase having "succeeded".
 4. Explain one meaningful finding at a time, with code-level examples and focused HTML where useful, as
    in the existing loop. Wait for Eddie's understanding before the next increment.
@@ -65,7 +72,7 @@ dagrun start bugfix --plan <approved fix-plan file> --companion-session "$CLAUDE
    ```
    dagrun gate decide <run-id> --gate <gate> --revision <revision-from-show> --action approve|amend|hold [...]
    ```
-   - `approve` — continue. At the `fix` gate add `--run-next yes|no` (see below).
+   - `approve` — continue.
    - `amend --target <node> --comment "<specific feedback>"` — revise the gate node (or, at the pre-PR gate,
      `--target fix`) with the feedback; downstream results are invalidated and re-run.
    - `hold --comment "<reason / evidence wanted>"` — record it, stay paused.
@@ -90,39 +97,14 @@ dagrun start bugfix --plan <approved fix-plan file> --companion-session "$CLAUDE
   and `fix/summary.md` one finding at a time as usual, and as part of that same walkthrough — not a
   separate pass — name every finding `fix/summary.md` explicitly DEFERRED or left unresolved, with its
   dimension/severity and the stated reason (this was the removed `digest` node's Section 1; nothing
-  downstream of this conversation ever reads it, so say it here or it's lost). This gate ALSO decides
-  whether the optional runtime demonstration (`verify`) runs:
-  - Read `fix/summary.md` § _Verify recommendation_ (the agent's advice) and give Eddie your own view.
-  - Ask explicitly: run verify, or skip? Then `--run-next yes|no`. Eddie may add a `--comment` naming
-    what he wants demonstrated; verify reads it as its focus.
-  - `verify` is not a CI duplicate: it builds the candidate from the worktree, starts it on a local
-    disposable target, produces `verify/demo.md` (manual steps) for Eddie, and leaves it running for
-    his hands-on testing (torn down after his verdict at the `pr` gate).
-- **`pr`** — pre-PR gate. Review the PR body, the diff, and (if it ran) `verify/verify-report.json` +
-  `demo.md`. Before Eddie decides, name the open questions a PR reviewer would likely ask — design
+  downstream of this conversation ever reads it, so say it here or it's lost). Approving `fix` is a
+  plain approve — it carries no further choice; it continues straight to the pre-PR gate. An approve
+  `--comment`, if given, is recorded in the gate history.
+- **`pr`** — pre-PR gate. Review the PR body and the diff. Before Eddie decides, name the open questions a PR reviewer would likely ask — design
   tradeoffs with a reasonable alternative, scope boundaries the guide drew (this was the removed
-  `digest` node's Section 2) — and give one line on verification: whether `verify` ran at all
-  (`verify/` absent = skipped by the fix-gate decision, a normal outcome) and, if it did, that
-  `PROVISIONED` means an environment was handed to Eddie for his manual testing, NOT a verdict that the
-  change works — his hands-on test is the verdict, same as "Verify evidence" below already says.
-  Approve = the branch is pushed and a DRAFT PR opens. Amend `--target fix` sends the code back;
+  `digest` node's Section 2). Approve = the branch is pushed and a DRAFT PR opens. Amend `--target fix` sends the code back;
   nothing has been published yet. Approval never implies merge, reviewers, ready-for-review, or
   backport labels.
-
-## Verify evidence — how to read it
-
-`verify` does not test the candidate and renders no verdict. It builds the candidate from this worktree,
-starts it on a loopback disposable target, writes `demo.md` (what to hit, what to expect) and STOPS, leaving
-the environment running. Outcomes: `PROVISIONED` (environment up and reachable; Eddie's manual testing is
-pending) or `BLOCKED_RUNTIME` (no environment obtained; fails the run — explain why). A source-only
-`PROVISIONED` (`capability: source`, with a `sourceRationale`) means there was no runtime surface and no
-environment exists. The engine checks consistency (revision, dirty files, readiness probe, owned resources),
-not truth: `PROVISIONED` says the environment is up, not that the change works.
-
-The verdict is Eddie's. Point him at `demo.md` and the host:port in the gate brief's `verifyEnvironment`
-block, let him test at his own pace, and take his verdict as the `pr` gate decision (approve / amend / hold).
-Any of those tears the environment down as a side effect (proposal text says so); tell him before he
-confirms. Never describe a skipped, blocked or still-pending verify as passed.
 
 ## Lesson promotion (rare — not every finding)
 
@@ -160,10 +142,6 @@ companion runs. Pick by run state:
 | No gate pending (`gate show` says "not paused at a gate"; `gate open`/`attach`/`decide` error `not-awaiting`)        | `dagrun resume <run>` (no flags) is the only command that works: it reconciles crashed nodes and runs whatever is still `pending`.                                                                                                                                             |
 | Top-level `failed` but the nodes are `done`, after a node was completed out-of-band with `dagrun rerun <run> <node>` | `dagrun resume <run>` (no flags). It makes no decision; it just continues from current state and recomputes the run status. `rerun` never updates the top-level status and never retries/unskips other nodes.                                                                  |
 | Crashed (status `running`, node stuck `running`, no process)                                                         | `dagrun resume <run>` (no flags): stuck nodes are reset to `pending` (up to a retry cap) and re-run.                                                                                                                                                                           |
-
-Teardown: only a `gate decide --confirm` at a gate downstream of `verify` tears down the provisioned verify
-environment. If a gate was bypassed with `rerun`, or the run was resumed without a decision, clean up with
-`dagrun verify cleanup <run>`; `dagrun rerun <run> verify` tears down a still-provisioned environment first.
 
 ## Running in the background (`--detach`)
 

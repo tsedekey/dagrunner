@@ -60,12 +60,6 @@ export type GateConfig = {
    */
   skippable?: boolean;
   /**
-   * Id of a downstream node whose execution THIS gate decides (e.g. fix → verify).
-   * Approving the gate then requires an explicit run/skip choice, persisted as
-   * `<gate>/next-node-decision.json`; the target's `when` reads that artifact.
-   */
-  decidesNode?: string;
-  /**
    * Gated ANCESTORS a companion amendment at this gate may send back for
    * revision (the gate node itself is always allowed). Explicit per workflow
    * because re-running an ancestor leaves its downstream worktree effects —
@@ -92,12 +86,6 @@ export type LoopConfig = {
 };
 
 // ---------------------------------------------------------------------------
-// Join rule
-// ---------------------------------------------------------------------------
-
-export type JoinRule = "none-failed-min-one-success";
-
-// ---------------------------------------------------------------------------
 // Outcome gate — content-level pass/fail check on a produced JSON artifact
 // ---------------------------------------------------------------------------
 
@@ -109,7 +97,7 @@ export type JoinRule = "none-failed-min-one-success";
  * produces-contract violation — see dag.ts `checkOutcomeGate`).
  */
 export type OutcomeGateConfig = {
-  /** Artifact filename (relative to the node's artifact dir), e.g. "verify-report.json". */
+  /** Artifact filename (relative to the node's artifact dir), e.g. "findings.json". */
   file: string;
   /** Top-level JSON field to read, e.g. "outcome". */
   field: string;
@@ -164,18 +152,10 @@ export type Node = {
   noPlaceholders?: string[];
   /** Human-review gate config. */
   gate?: GateConfig;
-  /**
-   * Extra content check on this node's report, run after outcomeGate passes.
-   * "verify-runtime" enforces the runtime-evidence contract in
-   * core/verify-evidence.ts (no false pass on missing/blocked runtime evidence).
-   */
-  evidenceCheck?: "verify-runtime";
   /** Autonomous loop config (stop-hook driven). */
   loop?: LoopConfig;
   /** When true, a failed run degrades this node to 'skipped' instead of 'failed'. */
   optional?: boolean;
-  /** How to proceed when joining from multiple parallel predecessors. */
-  joinRule?: JoinRule;
   /** Max infra/transient retries before marking the node failed. Default 2. */
   maxRetries?: number;
   /** Per-node spend ceiling in USD (for unpinned/Opus-eligible nodes). */

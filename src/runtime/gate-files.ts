@@ -15,7 +15,6 @@ import type { Workflow } from "../core/types.js";
 import type { RunState } from "../core/state.js";
 import {
   buildGateBrief,
-  NEXT_NODE_DECISION_FILE,
   type GateBrief,
 } from "../core/gate.js";
 
@@ -89,12 +88,6 @@ export function emitGateBrief(args: {
     `**Companion:** ${brief.companion.status}${brief.companion.blockedReason ? ` — ${brief.companion.blockedReason}` : ""}`,
     `**Approve continues to:** ${brief.pendingDecision.approveContinuesTo.join(", ") || "(end of run)"}`,
     `**Amend targets:** ${brief.pendingDecision.amendTargets.join(", ")}`,
-    ...(brief.pendingDecision.decidesNode !== undefined
-      ? [`**Approval also decides:** whether "${brief.pendingDecision.decidesNode}" runs (--run-next yes|no)`]
-      : []),
-    ...(brief.verifyEnvironment !== undefined
-      ? [``, `## Verify environment`, `- ${brief.verifyEnvironment.status}: ${brief.verifyEnvironment.note}`]
-      : []),
     ``,
     `## Evidence`,
     ...brief.gateArtifacts.map((f) => `- ${f.path} (${f.sha256.slice(0, 12)})`),
@@ -122,36 +115,4 @@ export function describeGatePause(brief: GateBrief): string {
     `dagrun: read: dagrun gate show ${brief.runId}   (nothing advances until \`dagrun gate decide … --confirm\`)`,
   ];
   return lines.join("\n") + "\n";
-}
-
-/** Persist a gate's decision about whether its `decidesNode` runs. */
-export function writeNextNodeDecision(args: {
-  runDir: string;
-  gateNodeId: string;
-  node: string;
-  run: boolean;
-  basis: string;
-  revision?: string;
-  decisionId?: string;
-  focus?: string;
-}): void {
-  const dir = join(args.runDir, args.gateNodeId);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    join(dir, NEXT_NODE_DECISION_FILE),
-    JSON.stringify(
-      {
-        node: args.node,
-        run: args.run,
-        basis: args.basis,
-        decidedAt: new Date().toISOString(),
-        ...(args.revision !== undefined ? { revision: args.revision } : {}),
-        ...(args.decisionId !== undefined ? { decisionId: args.decisionId } : {}),
-        ...(args.focus !== undefined && args.focus.trim() !== "" ? { focus: args.focus.trim() } : {}),
-      },
-      null,
-      2,
-    ),
-    "utf8",
-  );
 }

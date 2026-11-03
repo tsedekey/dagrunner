@@ -28,9 +28,7 @@
  *       (b) All required deps (optional:false / omitted) have status 'done'
  *       (c) No required dep has status 'failed' (blocks the node)
  *       (d) Optional deps that are 'failed' are treated as 'skipped' (non-blocking)
- *       (e) For joinRule 'none-failed-min-one-success': ≥1 dep is 'done',
- *           no required dep is 'failed'
- *       (f) A node whose own 'when' predicate returns false is 'skipped';
+ *       (e) A node whose own 'when' predicate returns false is 'skipped';
  *           its downstream dependents treat it as a blocking failure unless
  *           it is itself optional (the spec: skipped dep = not-done ≠ failed)
  *
@@ -388,7 +386,7 @@ test("[expected-fail until Block4] Test 3a — join: all three deps done → nod
     computeReadyNodes: (nodes: Node[], statuses: NodeStatusMap) => string[];
   };
 
-  // Join node 'synthesize' depends on three reviewers; uses none-failed-min-one-success.
+  // Join node 'synthesize' depends on three reviewers; (default join: every required dep done).
   const nodes: Node[] = [
     { id: "reviewer-a", command: "/review", optional: true },
     { id: "reviewer-b", command: "/review", optional: true },
@@ -397,7 +395,6 @@ test("[expected-fail until Block4] Test 3a — join: all three deps done → nod
       id: "synthesize",
       command: "/synthesize",
       dependsOn: ["reviewer-a", "reviewer-b", "reviewer-c"],
-      joinRule: "none-failed-min-one-success",
     },
   ];
 
@@ -428,7 +425,6 @@ test("[expected-fail until Block4] Test 3b — join: optional reviewer fails →
       id: "synthesize",
       command: "/synthesize",
       dependsOn: ["reviewer-a", "reviewer-b", "reviewer-c"],
-      joinRule: "none-failed-min-one-success",
     },
   ];
 
@@ -461,7 +457,6 @@ test("[expected-fail until Block4] Test 3c — join: required reviewer fails →
       id: "synthesize",
       command: "/synthesize",
       dependsOn: ["reviewer-a", "reviewer-b", "reviewer-c"],
-      joinRule: "none-failed-min-one-success",
     },
   ];
 
@@ -548,7 +543,7 @@ test("[expected-fail until Block4] Test 7 — optional dep skipped → downstrea
   };
 
   // 'a' is optional and has been degraded to 'skipped'.
-  // 'b' depends on 'a' (default join rule, no joinRule override).
+  // 'b' depends on 'a'.
   // Because 'a' is optional, its skipped status is non-blocking — 'b' must be ready.
   const nodes: Node[] = [
     { id: "a", command: "/a", optional: true },
@@ -854,7 +849,7 @@ function makeOutcomeGateState(tmpDir: string, runId: string): RunState {
     worktreePath: tmpDir,
     branch: `feature/${runId}`,
     sourcePlanPath: "/tmp/plan.md",
-    nodes: { verify: makeNodeState({ status: "pending" }) },
+    nodes: { checked: makeNodeState({ status: "pending" }) },
   };
 }
 
@@ -870,11 +865,11 @@ test("outcomeGate: PASS value passes the node through to done", async () => {
 
   const tmpDir = mkdtempSync(join(tmpdir(), "dr-outcome-gate-pass-"));
   const node: Node = {
-    id: "verify",
-    command: "/verify",
-    produces: ["verify-report.json"],
+    id: "checked",
+    command: "/checked",
+    produces: ["report.json"],
     outcomeGate: {
-      file: "verify-report.json",
+      file: "report.json",
       field: "outcome",
       passValues: ["PASS"],
     },
@@ -894,7 +889,7 @@ test("outcomeGate: PASS value passes the node through to done", async () => {
   const result = await runDag(workflow, executor, state, { ctx, stateFile });
 
   assert.equal(result.status, "done");
-  assert.equal(result.nodes["verify"]?.status, "done");
+  assert.equal(result.nodes["checked"]?.status, "done");
 });
 
 // verify-defer-to-ci-and-drop-diff-scoped-rerun change (2026-07-14, motivated by run 56954-1):
@@ -914,11 +909,11 @@ test("outcomeGate: DEFERRED_TO_CI passes the node through to done when passValue
 
   const tmpDir = mkdtempSync(join(tmpdir(), "dr-outcome-gate-deferred-"));
   const node: Node = {
-    id: "verify",
-    command: "/verify",
-    produces: ["verify-report.json"],
+    id: "checked",
+    command: "/checked",
+    produces: ["report.json"],
     outcomeGate: {
-      file: "verify-report.json",
+      file: "report.json",
       field: "outcome",
       passValues: ["PASS", "DEFERRED_TO_CI"],
     },
@@ -938,7 +933,7 @@ test("outcomeGate: DEFERRED_TO_CI passes the node through to done when passValue
   const result = await runDag(workflow, executor, state, { ctx, stateFile });
 
   assert.equal(result.status, "done");
-  assert.equal(result.nodes["verify"]?.status, "done");
+  assert.equal(result.nodes["checked"]?.status, "done");
 });
 
 test("outcomeGate: a non-pass value fails the node with the outcome value in the error", async () => {
@@ -953,11 +948,11 @@ test("outcomeGate: a non-pass value fails the node with the outcome value in the
 
   const tmpDir = mkdtempSync(join(tmpdir(), "dr-outcome-gate-fail-"));
   const node: Node = {
-    id: "verify",
-    command: "/verify",
-    produces: ["verify-report.json"],
+    id: "checked",
+    command: "/checked",
+    produces: ["report.json"],
     outcomeGate: {
-      file: "verify-report.json",
+      file: "report.json",
       field: "outcome",
       passValues: ["PASS"],
     },
@@ -977,8 +972,8 @@ test("outcomeGate: a non-pass value fails the node with the outcome value in the
   const result = await runDag(workflow, executor, state, { ctx, stateFile });
 
   assert.equal(result.status, "failed");
-  assert.equal(result.nodes["verify"]?.status, "failed");
-  const err = result.nodes["verify"]?.error ?? "";
+  assert.equal(result.nodes["checked"]?.status, "failed");
+  const err = result.nodes["checked"]?.error ?? "";
   assert.ok(
     err.includes("FAIL_ASSERTION"),
     `expected outcome value in error message, got: ${err}`,
@@ -1001,11 +996,11 @@ test("outcomeGate: missing field in an otherwise-valid JSON artifact fails loud 
 
   const tmpDir = mkdtempSync(join(tmpdir(), "dr-outcome-gate-missing-field-"));
   const node: Node = {
-    id: "verify",
-    command: "/verify",
-    produces: ["verify-report.json"],
+    id: "checked",
+    command: "/checked",
+    produces: ["report.json"],
     outcomeGate: {
-      file: "verify-report.json",
+      file: "report.json",
       field: "outcome",
       passValues: ["PASS"],
     },
@@ -1025,9 +1020,9 @@ test("outcomeGate: missing field in an otherwise-valid JSON artifact fails loud 
   const result = await runDag(workflow, executor, state, { ctx, stateFile });
 
   assert.equal(result.status, "failed");
-  assert.equal(result.nodes["verify"]?.status, "failed");
+  assert.equal(result.nodes["checked"]?.status, "failed");
   assert.ok(
-    (result.nodes["verify"]?.error ?? "").length > 0,
+    (result.nodes["checked"]?.error ?? "").length > 0,
     "missing outcomeGate field must produce a non-empty error, not a silent pass",
   );
 });
@@ -1047,11 +1042,11 @@ test("outcomeGate: missing declared file degrades to failed via the existing pro
   // produces-check never verifies it exists, so checkOutcomeGate must itself
   // fail loud when the file is absent (rather than crashing or passing).
   const node: Node = {
-    id: "verify",
-    command: "/verify",
+    id: "checked",
+    command: "/checked",
     produces: [],
     outcomeGate: {
-      file: "verify-report.json",
+      file: "report.json",
       field: "outcome",
       passValues: ["PASS"],
     },
@@ -1074,9 +1069,9 @@ test("outcomeGate: missing declared file degrades to failed via the existing pro
   const result = await runDag(workflow, executor, state, { ctx, stateFile });
 
   assert.equal(result.status, "failed");
-  assert.equal(result.nodes["verify"]?.status, "failed");
+  assert.equal(result.nodes["checked"]?.status, "failed");
   assert.ok(
-    (result.nodes["verify"]?.error ?? "").length > 0,
+    (result.nodes["checked"]?.error ?? "").length > 0,
     "missing outcomeGate file must produce a non-empty error, not a silent pass",
   );
 });
@@ -1276,7 +1271,7 @@ test("checkNoPlaceholders: wired end-to-end through runDag — a placeholder fai
     read: () => "",
     dir: (id) => join(tmpDir, id),
   };
-  // makeOutcomeGateState seeds a "verify" node id by default — override to "define".
+  // makeOutcomeGateState seeds a "checked" node id by default — override to "define".
   const stateWithDefine: RunState = {
     ...state,
     nodes: { define: makeNodeState({ status: "pending" }) },

@@ -16,7 +16,6 @@ import {
   gateResumePrompt,
   readSessionCwd,
   readSessionCwds,
-  readNextNodeDecision,
   runHash,
   validateGateRequest,
   type GateBrief,
@@ -75,14 +74,13 @@ function brief(state: RunState, gate = "fix", blocked = false): GateBrief {
 }
 
 type ReqOver = { [K in keyof GateRequest]?: GateRequest[K] | undefined };
-/** Build a request; an explicit `undefined` override REMOVES the key (e.g. runNext). */
+/** Build a request; an explicit `undefined` override REMOVES the key (e.g. comment). */
 const req = (b: GateBrief, over: ReqOver = {}): GateRequest => {
   const merged: Record<string, unknown> = {
     runId: b.runId,
     gate: b.gateNodeId,
     revision: b.revision,
     action: "approve",
-    runNext: true,
     ...over,
   };
   for (const k of Object.keys(merged))
@@ -125,34 +123,11 @@ test("valid approve at the fix gate passes and names its target", () => {
   assert.equal(r.ok, true);
 });
 
-test("approve at a gate that decides a node REQUIRES an explicit run/skip choice", () => {
-  const s = makeState();
-  const b = brief(s);
-  const r = v(s, b, req(b, { runNext: undefined }));
-  assert.equal(r.ok === false && r.code, "missing-run-next");
-});
-
-test("run-next is rejected where it does not apply (pr gate / amend)", () => {
-  const s = makeState({}, "pr");
-  const b = brief(s, "pr");
-  assert.equal(
-    (v(s, b, req(b, { runNext: true })) as { code?: string }).code,
-    "unexpected-run-next",
-  );
-  const s2 = makeState();
-  const b2 = brief(s2);
-  assert.equal(
-    (v(s2, b2, req(b2, { action: "amend", comment: "x" })) as { code?: string })
-      .code,
-    "unexpected-run-next",
-  );
-});
-
 test("amend/hold require a comment", () => {
   const s = makeState();
   const b = brief(s);
   for (const action of ["amend", "hold"]) {
-    const r = v(s, b, req(b, { action, runNext: undefined }));
+    const r = v(s, b, req(b, { action }));
     assert.equal(r.ok === false && r.code, "missing-comment", action);
   }
 });
@@ -204,7 +179,7 @@ test("wrong gate / not-awaiting refused", () => {
       v(
         s2,
         b2,
-        req(b2, { gate: "fix", revision: b2.revision, runNext: undefined }),
+        req(b2, { gate: "fix", revision: b2.revision }),
       ) as { code?: string }
     ).code,
     "wrong-gate",
@@ -299,7 +274,6 @@ test("decisionId is deterministic and bound to every field", () => {
     gate: "fix",
     revision: "x.y",
     action: "approve",
-    runNext: true,
   };
   assert.equal(decisionId(b), decisionId({ ...b }));
   for (const change of [
@@ -307,7 +281,6 @@ test("decisionId is deterministic and bound to every field", () => {
     { gate: "pr" },
     { revision: "x.z" },
     { action: "amend" },
-    { runNext: false },
     { comment: "c" },
     { target: "fix" },
   ]) {
@@ -351,7 +324,6 @@ test("amend targets: gate itself + declared gated ancestors only", () => {
           action: "amend",
           comment: "c",
           target: "reproduce",
-          runNext: undefined,
         }),
       ) as { code?: string }
     ).code,
@@ -365,23 +337,22 @@ test("amend targets: gate itself + declared gated ancestors only", () => {
         action: "amend",
         comment: "c",
         target: "fix",
-        runNext: undefined,
       }),
     ).ok,
     true,
   );
 });
 
-test("amending fix from the pre-PR gate invalidates verify and pr", () => {
+test("amending fix from the pre-PR gate invalidates pr", () => {
   const p = planAmend(bugfixWorkflow, "pr", "fix");
   assert.equal(p.revise, "fix");
-  assert.deepEqual([...p.reset].sort(), ["pr", "verify"]);
+  assert.deepEqual([...p.reset].sort(), ["pr"]);
   assert.deepEqual(planAmend(bugfixWorkflow, "pr", "pr"), {
     revise: "pr",
     reset: [],
   });
   assert.ok(downstreamOf(bugfixWorkflow, "reproduce").includes("pr"));
-  assert.deepEqual(approveContinuesTo(bugfixWorkflow, "fix"), ["verify", "pr"]);
+  assert.deepEqual(approveContinuesTo(bugfixWorkflow, "fix"), ["pr"]);
 });
 
 // --- featureWorkflow parity (DECISIONS.md § feature-companion-gates-parity) ---
@@ -395,52 +366,29 @@ test("featureWorkflow: amend targets: gate itself + declared gated ancestors onl
   assert.deepEqual(amendTargets(featureWorkflow, "define"), ["define"]);
 });
 
-test("featureWorkflow: amending fix from the pre-PR gate invalidates verify and pr", () => {
+test("featureWorkflow: amending fix from the pre-PR gate invalidates pr", () => {
   const p = planAmend(featureWorkflow, "pr", "fix");
   assert.equal(p.revise, "fix");
-  assert.deepEqual([...p.reset].sort(), ["pr", "verify"]);
+  assert.deepEqual([...p.reset].sort(), ["pr"]);
   assert.deepEqual(planAmend(featureWorkflow, "pr", "pr"), {
     revise: "pr",
     reset: [],
   });
   assert.ok(downstreamOf(featureWorkflow, "define").includes("pr"));
-  assert.deepEqual(approveContinuesTo(featureWorkflow, "fix"), [
-    "verify",
-    "pr",
-  ]);
+  assert.deepEqual(approveContinuesTo(featureWorkflow, "fix"), ["pr"]);
 });
 
-test("loadWorkflow: feature workflow (companion gates, decidesNode, amendTargets) is valid", () => {
+test("loadWorkflow: feature workflow (companion gates, amendTargets) is valid", () => {
   loadWorkflow(featureWorkflow);
 });
 
 // --- next-node decision + load-time validation -----------------------------
 
-test("readNextNodeDecision: parses, and fails loud on malformed content", () => {
-  assert.equal(
-    readNextNodeDecision('{"node":"verify","run":true}', "verify"),
-    true,
-  );
-  assert.equal(
-    readNextNodeDecision('{"node":"verify","run":false}', "verify"),
-    false,
-  );
-  assert.throws(
-    () => readNextNodeDecision('{"node":"other","run":true}', "verify"),
-    /malformed/,
-  );
-  assert.throws(
-    () => readNextNodeDecision('{"node":"verify","run":"yes"}', "verify"),
-    /malformed/,
-  );
-  assert.throws(() => readNextNodeDecision("not json", "verify"));
-});
-
-test("loadWorkflow: bugfix workflow (companion gates, decidesNode, amendTargets) is valid", () => {
+test("loadWorkflow: bugfix workflow (companion gates, amendTargets) is valid", () => {
   loadWorkflow(bugfixWorkflow);
 });
 
-test("loadWorkflow: rejects bad companionGates / decidesNode / amendTargets / evidenceCheck", () => {
+test("loadWorkflow: rejects bad companionGates / amendTargets", () => {
   const base = (): Workflow => ({
     name: "t",
     companionGates: true,
@@ -456,21 +404,9 @@ test("loadWorkflow: rejects bad companionGates / decidesNode / amendTargets / ev
     () => loadWorkflow(noGate),
     /companionGates is true but no node declares a gate/,
   );
-  const badDecides = base();
-  badDecides.nodes[0]!.gate = { decidesNode: "zzz" };
-  assert.throws(
-    () => loadWorkflow(badDecides),
-    /decidesNode references unknown node "zzz"/,
-  );
-  const noWhen = base();
-  noWhen.nodes[0]!.gate = { decidesNode: "b" };
-  assert.throws(() => loadWorkflow(noWhen), /must declare a 'when' predicate/);
   const badAmend = base();
   badAmend.nodes[1]!.gate = { amendTargets: ["b"] };
   assert.throws(() => loadWorkflow(badAmend), /not an ancestor/);
-  const badEv = base();
-  (badEv.nodes[1] as { evidenceCheck?: string }).evidenceCheck = "nope";
-  assert.throws(() => loadWorkflow(badEv), /invalid evidenceCheck/);
 });
 
 test("gate brief lists on-disk files not yet registered in state, without changing the revision", () => {

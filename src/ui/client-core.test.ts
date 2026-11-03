@@ -63,11 +63,11 @@ function hostileView(over: Record<string, unknown> = {}): Record<string, any> { 
     createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:10:00.000Z", branch: X, baseBranch: X,
     issueUrl: "javascript:alert(1)", planTitle: X, totalCost: 3, companion: { sessionId: X },
     nodeOrder: [X, "b"],
-    defs: { [X]: { command: X, model: X, effort: X, dependsOn: [], produces: [X, "p.md"], joinRule: X, optional: true, hasWhen: true, gate: { maxIterations: 5, decidesNode: X, amendTargets: [X] } },
-            b: { command: "/b", model: "sonnet", effort: null, dependsOn: [X], produces: [], joinRule: null, optional: false, hasWhen: false, gate: null } },
+    defs: { [X]: { command: X, model: X, effort: X, dependsOn: [], produces: [X, "p.md"], optional: true, hasWhen: true, gate: { maxIterations: 5, amendTargets: [X] } },
+            b: { command: "/b", model: "sonnet", effort: null, dependsOn: [X], produces: [], optional: false, hasWhen: false, gate: null } },
     nodes: { [X]: node("awaiting-gate", { gateHistory: [{ decision: "reject", action: X, target: X, timestamp: "2026-01-01T00:05:00.000Z", decisionId: X, revision: X, resumePoint: X, comment: X }], attempts: [{ iteration: 0, status: X, durationMs: 1, cost: 1 }, { iteration: 1, status: X, durationMs: 1, cost: 1 }] }),
              b: node("skipped", { skipReason: X }) },
-    gate: { nodeId: X, reason: X, since: null, revision: X, openedAt: null, round: 2, iteration: 1, maxIterations: 5, actions: [X], amendTargets: [X], decidesNode: X, approveContinuesTo: [X], evidence: [{ name: X, sha: X }], validation: [{ nodeId: X, check: X, ok: false }], upstream: [X], companion: { sessionId: X, status: X, reconstructed: true, cwd: X }, advice: X, decisions: 1 },
+    gate: { nodeId: X, reason: X, since: null, revision: X, openedAt: null, round: 2, iteration: 1, maxIterations: 5, actions: [X], amendTargets: [X], approveContinuesTo: [X], evidence: [{ name: X, sha: X }], validation: [{ nodeId: X, check: X, ok: false }], upstream: [X], companion: { sessionId: X, status: X, reconstructed: true, cwd: X }, decisions: 1 },
     ...over,
   };
 }
@@ -142,30 +142,28 @@ test("mergeItems: chronological insert, id de-dupe across a reconnect, returns o
 test("gate card: absent when the view has no gate (run not paused / nothing awaiting); present with facts when it has", () => {
   assert.equal(D.gateHtml({ runId: "9-1", gate: null, nodeOrder: [], nodes: {}, defs: {} }, {}), "");
   const v = hostileView({ runId: "9-1" });
-  v.gate = { nodeId: "fix", reason: "r", since: null, revision: "b04f.19", openedAt: null, round: 1, iteration: 0, maxIterations: 5, actions: ["approve", "amend", "hold"], amendTargets: ["fix"], decidesNode: "verify", approveContinuesTo: ["verify", "pr"], evidence: [{ name: "summary.md", sha: "d28f372f55cd" }], validation: [{ nodeId: "reproduce", check: "noPlaceholders", ok: true }], upstream: ["review"], companion: { sessionId: "53374b27-5801", status: "ok", reconstructed: false, cwd: "/Users/me/dev/x" }, advice: "Skip it.", decisions: 2 };
+  v.gate = { nodeId: "fix", reason: "r", since: null, revision: "b04f.19", openedAt: null, round: 1, iteration: 0, maxIterations: 5, actions: ["approve", "amend", "hold"], amendTargets: ["fix"], approveContinuesTo: ["fix", "pr"], evidence: [{ name: "summary.md", sha: "d28f372f55cd" }], validation: [{ nodeId: "reproduce", check: "noPlaceholders", ok: true }], upstream: ["review"], companion: { sessionId: "53374b27-5801", status: "ok", reconstructed: false, cwd: "/Users/me/dev/x" }, decisions: 2 };
   const html = D.gateHtml(v, {}) as string;
   assert.match(html, /Waiting for a decision at fix/);
   assert.match(html, /1 of 5 allowed <span class="muted">\(state\.json iteration 0\)<\/span>/);
   assert.match(html, /<b>amend<\/b> \(fix\)/);
-  assert.match(html, /<span>verify<\/span><i>→<\/i><span>pr<\/span>/);
+  assert.match(html, /<span>fix<\/span><i>→<\/i><span>pr<\/span>/);
   assert.match(html, /summary\.md<\/code> <span class="muted">d28f372f55cd/);
   assert.match(html, /✓ reproduce\/noPlaceholders/);
   assert.match(html, /upstream: review/);
   assert.match(html, /started in <code>~\/dev\/x<\/code>/);
   assert.match(html, /dagrun gate show 9-1/);
   assert.match(html, /Decision history · 2 recorded/);
-  assert.match(html, /Agent advice in fix\/summary\.md: <em>Skip it\.<\/em>/);
   assert.doesNotMatch(html, /decide<\/button>|data-act="(approve|decide)"/, "read-only: no decide/approve control");
 });
 
-test("skipped nodes show the real reason (decision / optional / condition), and the issue link keeps only a clean https url", () => {
+test("skipped nodes show the real reason (optional / condition), and the issue link keeps only a clean https url", () => {
   const view = (reason: string | null) => ({
-    runId: "r", nodeOrder: ["verify"], defs: { verify: { dependsOn: [], produces: [], gate: null, optional: false, hasWhen: true } },
-    nodes: { verify: { status: "skipped", skipReason: reason, attempts: [], files: [], gateHistory: [], cost: 0, iteration: 0 } },
+    runId: "r", nodeOrder: ["step"], defs: { step: { dependsOn: [], produces: [], gate: null, optional: false, hasWhen: true } },
+    nodes: { step: { status: "skipped", skipReason: reason, attempts: [], files: [], gateHistory: [], cost: 0, iteration: 0 } },
   });
   const ctx = { ui: { open: {}, tab: {}, file: {} }, art: () => null, output: () => ({ items: [], loaded: true }) };
   const row = (r: string | null) => D.stepsOf(view(r), ctx)[0].html as string;
-  assert.match(row("decision"), /Skipped by decision/);
   assert.match(row("optional"), /Skipped \(optional\)/);
   assert.match(row("when"), /Skipped \(condition not met\)/);
   const hero = D.heroHtml({ runId: "r", workflow: "bugfix", runStatus: "done", stale: false, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T01:00:00.000Z", branch: "b", baseBranch: null, issueUrl: "https://github.com/o/r/issues/59478", planTitle: "T", totalCost: 1, companion: null, nodeOrder: [], nodes: {}, defs: {} }) as string;

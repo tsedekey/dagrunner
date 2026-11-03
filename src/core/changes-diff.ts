@@ -8,7 +8,7 @@
  * files come from `git ls-files --others --exclude-standard` (so the worktree's
  * seeded exclude patterns apply) rendered as new-file diffs via
  * `git diff --no-index /dev/null <file>`. `node_modules` is excluded on both
- * sides, matching normalizeDirty (verify-evidence.ts).
+ * sides.
  */
 
 import { spawnSync } from "node:child_process";

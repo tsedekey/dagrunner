@@ -165,7 +165,6 @@ export type DecideArgs = {
   action: string;
   target?: string;
   comment?: string;
-  runNext?: boolean;
   session?: string;
   confirm?: string;
   configDirs?: string[];
@@ -176,40 +175,29 @@ export type DecideArgs = {
    */
   detach?: (decisionId: string) => number;
   executorFactory?: Parameters<typeof resumeRun>[0]["executorFactory"];
-  /** Test seam: docker exec for the verify-environment teardown the verdict triggers. */
-  dockerExec?: Parameters<typeof resumeRun>[0]["dockerExec"];
 };
-
-const TEARDOWN_NOTE = (b: ReturnType<typeof buildGateBrief>): string =>
-  b.verifyEnvironment?.status === "provisioned"
-    ? ` Any decision here also TEARS DOWN the verify environment (containers/network/image, ${b.verifyEnvironment.resourceCount} owned resources) — only decide after Eddie has finished manual testing and given his verdict.`
-    : "";
 
 function statement(
   workflow: Workflow,
   brief: ReturnType<typeof buildGateBrief>,
   action: string,
   target: string,
-  runNext: boolean | undefined,
 ): string {
   const g = brief.gateNodeId;
   if (action === "approve") {
-    const decides = brief.pendingDecision.decidesNode;
     return (
       `APPROVE gate "${g}" (run ${brief.runId}, revision ${brief.revision}).` +
-      (decides !== undefined ? ` Also decides: "${decides}" ${runNext ? "RUNS" : "is SKIPPED"}.` : "") +
       ` Then runs: ${brief.pendingDecision.approveContinuesTo.join(", ") || "(end of run)"}.` +
       (g === "pr" && workflow.nodes.some((n) => n.id === "pr")
         ? ` This PUSHES the branch and opens a DRAFT PR.`
         : "") +
-      ` Not authorized by this: merge, reviewer requests, marking ready, backport labels.` +
-      TEARDOWN_NOTE(brief)
+      ` Not authorized by this: merge, reviewer requests, marking ready, backport labels.`
     );
   }
   if (action === "amend") {
-    return `AMEND: revise "${target}" with your feedback and re-run everything downstream of it from fresh evidence; the run pauses again at the next gate.` + TEARDOWN_NOTE(brief);
+    return `AMEND: revise "${target}" with your feedback and re-run everything downstream of it from fresh evidence; the run pauses again at the next gate.`;
   }
-  return `HOLD at gate "${g}": record the reason, change nothing, stay paused.` + TEARDOWN_NOTE(brief);
+  return `HOLD at gate "${g}": record the reason, change nothing, stay paused.`;
 }
 
 export async function gateDecide(a: DecideArgs): Promise<number> {
@@ -222,7 +210,6 @@ export async function gateDecide(a: DecideArgs): Promise<number> {
     action: a.action,
     ...(a.target !== undefined ? { target: a.target } : {}),
     ...(a.comment !== undefined ? { comment: a.comment } : {}),
-    ...(a.runNext !== undefined ? { runNext: a.runNext } : {}),
     ...(a.session !== undefined ? { session: a.session } : {}),
   };
   const id = decisionId(req);
@@ -250,7 +237,7 @@ export async function gateDecide(a: DecideArgs): Promise<number> {
 
   if (a.confirm === undefined) {
     process.stdout.write(
-      `PROPOSAL (nothing has changed):\n${statement(r.workflow, brief, v.action, v.target, a.runNext)}\n\n` +
+      `PROPOSAL (nothing has changed):\n${statement(r.workflow, brief, v.action, v.target)}\n\n` +
         `Present exactly this to Eddie. Understanding, "continue explaining" or "looks good" does NOT release it.\n` +
         `Only an explicit go-ahead naming this action authorizes it — then re-run the same command with:\n` +
         `  --confirm ${id}\n`,
@@ -270,7 +257,6 @@ export async function gateDecide(a: DecideArgs): Promise<number> {
     gateRequest: { ...req, decisionId: id },
     ...(a.configDirs !== undefined ? { sessionConfigDirs: a.configDirs } : {}),
     ...(a.executorFactory !== undefined ? { executorFactory: a.executorFactory } : {}),
-    ...(a.dockerExec !== undefined ? { dockerExec: a.dockerExec } : {}),
   });
   return 0;
 }

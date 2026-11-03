@@ -159,7 +159,7 @@ test("buildGateBrief: the pr gate carries the advisory (and it never changes the
   const st: RunState = {
     runId: "r", workflow: "bugfix", createdAt: "T", updatedAt: "T", status: "paused",
     worktreePath: r, branch: "feat", sourcePlanPath: "/p", baseBranch: "main",
-    nodes: { reproduce: node("done"), implement: node("done"), review: node("done"), fix: node("done"), verify: node("done"), pr: node("awaiting-gate") },
+    nodes: { reproduce: node("done"), implement: node("done"), review: node("done"), fix: node("done"), pr: node("awaiting-gate") },
   };
   const build = (gate: string) => buildGateBrief({ runDir: run, state: st, workflow: bugfixWorkflow, gateNodeId: gate, configDirs: [] });
   const pr = build("pr");

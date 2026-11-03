@@ -4,9 +4,9 @@
  *
  * Proves routing/authorization semantics of `dagrun gate show|decide|attach`:
  * association at handoff, blocked/recovery paths, understanding-only cannot
- * advance, bound/stale/duplicate/wrong-run decisions, the fix-gate verify
- * decision, amend-with-invalidation (no replayed publication), pause/restart,
- * and verify's evidence contract (no false pass).
+ * advance, bound/stale/duplicate/wrong-run decisions, the fix gate (a plain
+ * approve straight to the pre-PR gate), amend-with-invalidation (no replayed
+ * publication), pause/restart, and the produces contract (no false pass).
  *
  * It does NOT prove that a real interactive Claude session can be re-entered
  * with `claude --resume` — that is a harness property, checked separately.
@@ -23,7 +23,6 @@ import { readEvents } from "../../src/core/events.js";
 import { startRun, resumeRun } from "../../src/runtime/run-engine.js";
 import { gateAttach, gateDecide, gateOpen, gateShow, resumeOpensCompanion } from "../../src/runtime/gate-cli.js";
 import { createMockExecutor } from "../../src/runtime/mock-executor.js";
-import { fakeDocker } from "../../src/core/verify-cleanup-testkit.js";
 import { bugfixWorkflow } from "../../src/workflow/bugfix-workflow.js";
 import type { DagrunnerConfig } from "../../src/config/xdg.js";
 import type { GateBrief } from "../../src/core/gate.js";
@@ -94,7 +93,7 @@ function newHome(): { home: string; plan: string } {
 // The mock executor writes nothing into the worktree; a real fix does. Model that (an UNTRACKED
 // file, which is what changes.diff must render as a new-file diff) around the mock, per fix run.
 const factory = (over: Record<string, string> = {}) => () => {
-  const inner = createMockExecutor({ reproduce: "gate-pause", implement: "success", review: "success", fix: "gate-pause", verify: "success", pr: "gate-pause", ...over } as never);
+  const inner = createMockExecutor({ reproduce: "gate-pause", implement: "success", review: "success", fix: "gate-pause", pr: "gate-pause", ...over } as never);
   const wrapped: typeof inner = async (id, node, ctx) => {
     if (id === "fix") writeFileSync(join(ctx.worktreePath, "mock-fix-change.txt"), "mock fix change\n");
     return inner(id, node, ctx);
@@ -160,8 +159,8 @@ const R = await newRun();
   assert.match(b.companion.resumeHint ?? "", new RegExp(`claude --resume ${SESSION}`));
   assert.equal(b.companion.resume?.cwd, CFG);
   assert.match(b.companion.resumeHint ?? "", /^cd '.+' && CLAUDE_CONFIG_DIR='.*' claude --resume 1111.* 'DagRunner run .* gate show /s);
-  assert.equal(b.pendingDecision.decidesNode, undefined);
-  assert.deepEqual(b.pendingDecision.approveContinuesTo, ["implement", "review", "fix", "verify", "pr"]);
+  assert.equal("decidesNode" in b.pendingDecision, false);
+  assert.deepEqual(b.pendingDecision.approveContinuesTo, ["implement", "review", "fix", "pr"]);
   assert.ok(existsSync(join(R.runDir, "reproduce", "gate-context.md")));
   assert.equal(s.companion?.configDir, CFG, "config dir recorded at handoff");
   // From a bare terminal (no CLAUDE_CONFIG_DIR) the recorded dir still finds the session.
@@ -247,10 +246,11 @@ const R = await newRun();
   say("6 passed: bound approval advances exactly once; replay is a no-op; decision + exact resume point persisted");
 }
 
-// 7. fix gate: explicit verify decision required; skip verify → pr gate
+// 7. fix gate: a plain approve (no run/skip choice) goes straight to the pre-PR gate
 {
   const b = briefOf(R.runDir, "fix");
-  assert.equal(b.pendingDecision.decidesNode, "verify");
+  assert.equal("decidesNode" in b.pendingDecision, false, "no gate decides a downstream node any more");
+  assert.deepEqual(b.pendingDecision.approveContinuesTo, ["pr"]);
   assert.deepEqual(b.pendingDecision.amendTargets, ["fix"]);
   // engine-written saved diff, on disk at the gate and visible in the brief / status --json before registration
   const diffPath = join(R.runDir, "fix", "changes.diff");
@@ -266,27 +266,23 @@ const R = await newRun();
   const opened = readEvents(R.runDir).filter((e) => e.type === "gate.opened" && e.node === "fix" && e.detail?.["revision"] === b.revision);
   assert.equal(b.openedAt, opened[0]?.ts, "brief.openedAt is the gate.opened event ts");
   assert.equal(buildStatusJson(R.home, R.runId).awaitingGate?.since, opened.at(-1)?.ts, "status --json awaitingGate.since is the gate.opened ts");
-  assert.equal(await decide(R, b, {}), 1, "approve without --run-next refused");
-  assert.equal(stateOf(R.runDir).nodes["fix"]?.status, "awaiting-gate");
-  const id = await propose(R, b, { runNext: false });
-  assert.equal(await decide(R, b, { runNext: false, confirm: id }), 0);
+  const id = await propose(R, b, {});
+  assert.equal(await decide(R, b, { confirm: id }), 0);
   const s = stateOf(R.runDir);
-  const d = JSON.parse(readFileSync(join(R.runDir, "fix", "next-node-decision.json"), "utf8")) as { run: boolean; decisionId: string };
-  assert.equal(d.run, false);
-  assert.equal(d.decisionId, id);
-  assert.equal(s.nodes["verify"]?.status, "skipped", "verify skipped by decision");
+  assert.equal(existsSync(join(R.runDir, "fix", "next-node-decision.json")), false, "the fix gate writes no next-node decision");
+  assert.equal(s.nodes["verify"], undefined, "there is no verify node");
   assert.ok(s.nodes["fix"]!.artifacts.includes(diffPath), "changes.diff registered as a fix artifact on approve");
   assert.ok(readFileSync(join(R.runDir, "pr", "changes.diff"), "utf8").includes("mock-fix-change.txt"), "pr gate open refreshes/copies changes.diff");
-  assert.equal(s.nodes["pr"]?.status, "awaiting-gate", "pre-PR gate reached; a skipped verify must not block pr");
+  assert.equal(s.nodes["pr"]?.status, "awaiting-gate", "pre-PR gate reached straight after the fix gate");
   assert.equal(s.status, "paused");
-  say("7 passed: fix gate demands an explicit run/skip verify choice; skip → verify skipped → pause at pre-PR gate");
+  say("7 passed: fix gate approve needs no run/skip choice → pause at the pre-PR gate, no next-node decision written");
 }
 
-// 8. pre-PR amend: revise fix, invalidate verify/pr, no publication
+// 8. pre-PR amend: revise fix, invalidate pr, no publication
 {
   const b = briefOf(R.runDir, "pr");
   assert.deepEqual(b.pendingDecision.amendTargets, ["pr", "fix"]);
-  assert.equal(b.pendingDecision.decidesNode, undefined);
+  assert.equal("decidesNode" in b.pendingDecision, false);
   assert.equal(await decide(R, b, { action: "amend", target: "reproduce", comment: "redo" }), 1, "undeclared target refused");
   const fixIterBefore = stateOf(R.runDir).nodes["fix"]!.iteration; // mock pauses report iteration 1; real runs report 0
   const o = { action: "amend", target: "fix", comment: "handle the null case too" };
@@ -295,30 +291,32 @@ const R = await newRun();
   const s = stateOf(R.runDir);
   assert.equal(s.nodes["fix"]?.status, "awaiting-gate", "fix revised and paused again");
   assert.equal(readFileSync(join(R.runDir, "fix", `feedback-${fixIterBefore + 1}.md`), "utf8"), "handle the null case too");
-  for (const n of ["verify", "pr"]) assert.notEqual(s.nodes[n]?.status, "done", `${n} must not keep stale results`);
+  assert.notEqual(s.nodes["pr"]?.status, "done", "pr must not keep stale results");
   assert.equal(s.nodes["pr"]?.status, "pending");
   assert.ok(existsSync(join(R.runDir, "pr-attempts", "attempt-1")), "stale pr evidence archived, not reused");
-  assert.equal(existsSync(join(R.runDir, "fix", "next-node-decision.json")), false, "old verify decision cleared");
   assert.ok(!existsSync(join(R.runDir, "pr", "pr-meta.json")) || !JSON.parse(readFileSync(join(R.runDir, "pr", "pr-meta.json"), "utf8")).prUrl, "no PR was published");
   const fixHist = s.nodes["fix"]!.gateHistory.at(-1)!;
-  assert.deepEqual([...(fixHist.invalidated ?? [])].sort(), ["pr", "verify"]);
+  assert.deepEqual([...(fixHist.invalidated ?? [])].sort(), ["pr"]);
   // the old pr-gate revision is now stale
   assert.equal(await decide(R, b, { action: "approve" }), 1, "stale pr-gate approval refused after amend");
-  say("8 passed: amend at pre-PR gate re-runs fix, invalidates + archives verify/pr, clears the old verify decision, no publication");
+  say("8 passed: amend at pre-PR gate re-runs fix, invalidates + archives pr, no publication");
 }
 
-// 9. approve fix again WITH verify → verify runs and passes its evidence contract → pr gate
+// 9. approve fix again → pre-PR gate again with a fresh revision
 {
   const b = briefOf(R.runDir, "fix");
   assert.notEqual(b.revision, "", "fix has a fresh revision");
-  const id = await propose(R, b, { runNext: true });
-  assert.equal(await decide(R, b, { runNext: true, confirm: id }), 0);
+  // The mock pauses always report iteration 1, so the re-opened fix gate can carry the SAME revision
+  // as step 7's; a comment keeps this decision id distinct from the already-applied one (real runs
+  // bump the iteration, so their revisions differ anyway).
+  const o = { comment: "approve the revised fix" };
+  const id = await propose(R, b, o);
+  assert.equal(await decide(R, b, { ...o, confirm: id }), 0);
   const s = stateOf(R.runDir);
-  assert.equal(s.nodes["verify"]?.status, "done");
-  const rep = JSON.parse(readFileSync(join(R.runDir, "verify", "verify-report.json"), "utf8")) as { outcome: string; candidate: { builtFromWorktree: boolean } };
-  assert.equal(rep.outcome, "PROVISIONED");
+  assert.equal(s.nodes["verify"], undefined);
+  assert.equal(s.nodes["fix"]?.gateHistory.at(-1)?.comment, "approve the revised fix", "an approve comment is kept in the audit trail");
   assert.equal(s.nodes["pr"]?.status, "awaiting-gate");
-  say("9 passed: verify runs when chosen; PROVISIONED report passes the evidence contract; pre-PR gate reached");
+  say("9 passed: the revised fix is approved again and the pre-PR gate is reached");
 }
 
 // 10. pre-PR approve → run done; replay is a no-op
@@ -369,11 +367,11 @@ const R = await newRun();
   assert.equal(stateOf(L.runDir).companion, undefined);
   const st = stateOf(L.runDir);
   writeFileSync(join(L.runDir, "state.json"), JSON.stringify({ ...st, status: "running" })); // simulate crash-stale status
-  const stale = join(st.worktreePath, ".claude", "commands", "verify.md");
+  const stale = join(st.worktreePath, ".claude", "commands", "fix.md");
   writeFileSync(stale, "OLD PROMPT");
   transcript(SESSION);
   assert.equal(await quiet(async () => gateAttach({ homeDir: L.home, config, runId: L.runId, session: SESSION, reconstructed: false, replace: false, reseed: true })), 0);
-  assert.notEqual(readFileSync(stale, "utf8"), "OLD PROMPT", "--reseed refreshes the worktree's verify prompt");
+  assert.notEqual(readFileSync(stale, "utf8"), "OLD PROMPT", "--reseed refreshes the worktree's fix prompt");
   assert.equal(stateOf(L.runDir).companion?.sessionId, SESSION);
   // and a run NOT waiting at a gate cannot be attached
   const done = stateOf(R.runDir);
@@ -383,183 +381,21 @@ const R = await newRun();
 }
 
 // ===========================================================================
-// 12. Verify's evidence contract: no false pass
+// 12. Produces contract: no false pass
 // ===========================================================================
 {
-  // (a) a non-passing verify outcome halts the run and blocks pr
-  const V = await newRun({ verify: "outcome-gate-fail" });
+  // A node that "finishes" without writing its declared artifact FAILS (never done) and blocks the rest.
+  const V = await newRun({ implement: "missing-produces" });
   const b = briefOf(V.runDir, "reproduce");
-  await decide(V, b, { confirm: await propose(V, b, {}) });
-  const fb = briefOf(V.runDir, "fix");
-  const id = await propose(V, fb, { runNext: true });
-  await captureExit(() => decide(V, fb, { runNext: true, confirm: id }, { verify: "outcome-gate-fail" }) as Promise<unknown>);
+  const id = await propose(V, b, {});
+  await captureExit(() => decide(V, b, { confirm: id }, { implement: "missing-produces" }) as Promise<unknown>);
   const s = stateOf(V.runDir);
-  assert.equal(s.nodes["verify"]?.status, "failed", "non-PROVISIONED outcome fails verify");
-  assert.notEqual(s.nodes["pr"]?.status, "done", "pr must not run behind a failed verify");
+  assert.equal(s.nodes["implement"]?.status, "failed", "a node that skips its declared artifact fails");
+  assert.match(s.nodes["implement"]?.error ?? "", /produces contract violated/);
+  assert.notEqual(s.nodes["fix"]?.status, "awaiting-gate", "the fix gate must not open behind a failed implement");
+  assert.notEqual(s.nodes["pr"]?.status, "done");
   assert.equal(s.status, "failed");
-  say("12a passed: a failed verify halts the run and blocks pr (no false pass)");
-}
-{
-  // (b) a PROVISIONED claim backed by a stock image (not built from the worktree) is rejected
-  const V = await newRun();
-  const b = briefOf(V.runDir, "reproduce");
-  await decide(V, b, { confirm: await propose(V, b, {}) });
-  const fb = briefOf(V.runDir, "fix");
-  const id = await propose(V, fb, { runNext: true });
-  const base = createMockExecutor({ reproduce: "gate-pause", implement: "success", review: "success", fix: "gate-pause", verify: "success", pr: "gate-pause" } as never);
-  const lying = (() => async (nodeId: string, node: never, ctx: { artifactsDir: string }) => {
-    const r = await (base as never as (a: string, b: never, c: unknown) => Promise<unknown>)(nodeId, node, ctx);
-    if (nodeId === "verify") {
-      const p = join(ctx.artifactsDir, "verify-report.json");
-      const rep = JSON.parse(readFileSync(p, "utf8"));
-      rep.candidate.builtFromWorktree = false; // stock release image
-      writeFileSync(p, JSON.stringify(rep));
-    }
-    return r;
-  }) as never;
-  await captureExit(() => gateDecide({ homeDir: V.home, config, runId: V.runId, gate: "fix", revision: fb.revision, action: "approve", runNext: true, confirm: id, executorFactory: lying } as never));
-  const s = stateOf(V.runDir);
-  assert.equal(s.nodes["verify"]?.status, "failed");
-  assert.match(s.nodes["verify"]?.error ?? "", /builtFromWorktree/);
-  say("12b passed: a PROVISIONED claim on a stock (unbuilt) artifact fails the node");
-}
-
-// ===========================================================================
-// 13. Verify hand-off: the human's verdict at the pre-PR gate tears the environment down
-// ===========================================================================
-/** Executor whose verify PROVISIONS (docker-shaped report) instead of the mock's source-only report. */
-function provisioning(runId: string) {
-  return () => {
-    const base = createMockExecutor({ reproduce: "gate-pause", implement: "success", review: "success", fix: "gate-pause", verify: "success", pr: "gate-pause" } as never);
-    return (async (nodeId: string, node: never, ctx: { artifactsDir: string }) => {
-      const r = await (base as never as (a: string, b: never, c: unknown) => Promise<unknown>)(nodeId, node, ctx);
-      if (nodeId === "verify") {
-        const p = join(ctx.artifactsDir, "verify-report.json");
-        const rep = JSON.parse(readFileSync(p, "utf8"));
-        rep.capability = "docker-compose";
-        delete rep.sourceRationale;
-        rep.run_id = runId;
-        rep.target = { kind: "local-disposable", host: "127.0.0.1", port: 18080, ownedResources: [
-          { kind: "container", name: `dagrun-${runId}-app` }, { kind: "network", name: `dagrun-${runId}-net` }, { kind: "image", name: `dagrun-${runId}-app:latest` } ] };
-        rep.readiness = { command: "curl -s localhost:18080/health", result: "UP" };
-        rep.teardown = { status: "pending" };
-        writeFileSync(p, JSON.stringify(rep));
-      }
-      return r;
-    }) as never;
-  };
-}
-const tdFile = (V: { runDir: string }, dir = "verify") => JSON.parse(readFileSync(join(V.runDir, dir, "teardown.json"), "utf8")) as { status: string; trigger: string; leftovers: string[] };
-async function toPrGate(over: { runNext: boolean } = { runNext: true }) {
-  const V = await newRun();
-  const f = provisioning(V.runId);
-  const dd = (b: GateBrief, o: Record<string, unknown>) => quiet(() => gateDecide({ homeDir: V.home, config, runId: V.runId, gate: b.gateNodeId, revision: b.revision, action: "approve", ...o, executorFactory: f } as never));
-  const b1 = briefOf(V.runDir, "reproduce");
-  await dd(b1, { confirm: await propose(V, b1, {}) });
-  const b2 = briefOf(V.runDir, "fix");
-  await dd(b2, { runNext: over.runNext, confirm: await propose(V, b2, { runNext: over.runNext }) });
-  return { V, f, dd };
-}
-{
-  // (a) approve: brief shows the running env; statement warns; decision tears it down exactly once
-  const { V, f } = await toPrGate();
-  assert.equal(stateOf(V.runDir).nodes["pr"]?.status, "awaiting-gate");
-  const b = briefOf(V.runDir, "pr");
-  assert.equal(b.verifyEnvironment?.status, "provisioned");
-  assert.equal(b.verifyEnvironment?.port, 18080);
-  assert.match(b.verifyEnvironment?.note ?? "", /manual testing pending/);
-  let out = "";
-  const real = process.stdout.write.bind(process.stdout);
-  process.stdout.write = ((x: string) => { out += x; return true; }) as typeof process.stdout.write;
-  try { await gateDecide({ homeDir: V.home, config, runId: V.runId, gate: "pr", revision: b.revision, action: "approve" } as never); } finally { process.stdout.write = real; }
-  assert.match(out, /TEARS DOWN the verify environment/);
-  const d = fakeDocker({ container: [`dagrun-${V.runId}-app`, "other"], network: [`dagrun-${V.runId}-net`], image: [`dagrun-${V.runId}-app:latest`] });
-  const id = /--confirm ([0-9a-f]{16})/.exec(out)![1]!;
-  assert.equal(await quiet(() => gateDecide({ homeDir: V.home, config, runId: V.runId, gate: "pr", revision: b.revision, action: "approve", confirm: id, executorFactory: f, dockerExec: d.exec } as never)), 0);
-  assert.equal(stateOf(V.runDir).nodes["pr"]?.gateHistory.at(-1)?.decision, "approve");
-  assert.equal(tdFile(V).status, "clean");
-  assert.equal(tdFile(V).trigger, "gate-decide:pr:approve");
-  assert.deepEqual([...d.live.container], ["other"]);
-  const callsAfter = d.calls.length;
-  await quiet(() => gateDecide({ homeDir: V.home, config, runId: V.runId, gate: "pr", revision: b.revision, action: "approve", confirm: id, executorFactory: f, dockerExec: d.exec } as never));
-  assert.equal(d.calls.length, callsAfter, "replayed decision does not tear down again");
-  say("13a passed: brief shows the running env + warns; approve records the decision and tears the env down once (only owned resources)");
-}
-{
-  // (b) hold: decision recorded, run stays paused, env torn down; no second teardown on the next decide
-  const { V, f } = await toPrGate();
-  const b = briefOf(V.runDir, "pr");
-  const d = fakeDocker({ container: [`dagrun-${V.runId}-app`], network: [`dagrun-${V.runId}-net`], image: [`dagrun-${V.runId}-app:latest`] });
-  const o = { action: "hold", comment: "need another day" };
-  const id = await propose(V, b, o);
-  await captureExit(() => gateDecide({ homeDir: V.home, config, runId: V.runId, gate: "pr", revision: b.revision, ...o, confirm: id, executorFactory: f, dockerExec: d.exec } as never));
-  const s = stateOf(V.runDir);
-  assert.equal(s.nodes["pr"]?.status, "awaiting-gate");
-  assert.equal(s.nodes["pr"]?.gateHistory.at(-1)?.decision, "hold");
-  assert.equal(tdFile(V).status, "clean");
-  assert.equal(tdFile(V).trigger, "gate-decide:pr:hold");
-  assert.equal(d.live.container.size + d.live.network.size + d.live.image.size, 0);
-  say("13b passed: hold at the pre-PR gate is recorded, stays paused, and tears the env down");
-}
-{
-  // (c) amend → fix: teardown completes BEFORE verify is archived/re-provisioned
-  const { V, f } = await toPrGate();
-  const b = briefOf(V.runDir, "pr");
-  const d = fakeDocker({ container: [`dagrun-${V.runId}-app`], network: [`dagrun-${V.runId}-net`], image: [`dagrun-${V.runId}-app:latest`] });
-  const o = { action: "amend", target: "fix", comment: "change it" };
-  const id = await propose(V, b, o);
-  await quiet(() => gateDecide({ homeDir: V.home, config, runId: V.runId, gate: "pr", revision: b.revision, ...o, confirm: id, executorFactory: f, dockerExec: d.exec } as never));
-  assert.equal(stateOf(V.runDir).nodes["fix"]?.status, "awaiting-gate");
-  assert.equal(d.live.container.size + d.live.network.size + d.live.image.size, 0, "env gone before fix/verify re-run");
-  const att = join(V.runDir, "verify-attempts", "attempt-1");
-  assert.equal(JSON.parse(readFileSync(join(att, "teardown.json"), "utf8")).status, "clean");
-  assert.equal(JSON.parse(readFileSync(join(att, "teardown.json"), "utf8")).worktree.status, "match");
-  say("13c passed: amend tears the env down before verify's dir is archived / re-provisioned");
-}
-{
-  // (d) teardown failure is loud but never loses the decision; amend halts instead of re-provisioning
-  const { V, f } = await toPrGate();
-  const b = briefOf(V.runDir, "pr");
-  const stuck = fakeDocker({ container: [`dagrun-${V.runId}-app`] }, { stubborn: [`dagrun-${V.runId}-app`] });
-  const o = { action: "amend", target: "fix", comment: "again" };
-  const id = await propose(V, b, o);
-  const code = await captureExit(() => gateDecide({ homeDir: V.home, config, runId: V.runId, gate: "pr", revision: b.revision, ...o, confirm: id, executorFactory: f, dockerExec: stuck.exec } as never));
-  assert.equal(code, 1, "amend with leftovers stops loudly");
-  const s = stateOf(V.runDir);
-  assert.equal(s.nodes["fix"]?.gateHistory.at(-1)?.action, "amend", "decision is recorded despite the failed teardown");
-  assert.equal(s.nodes["fix"]?.status, "pending", "run did not continue into a colliding re-provision");
-  assert.equal(tdFile(V, "verify-attempts/attempt-1").status, "leftovers");
-  // approve variant: decision stands, run continues, leftovers stay retryable
-  const P = await toPrGate();
-  const pb = briefOf(P.V.runDir, "pr");
-  const stuck2 = fakeDocker({ container: [`dagrun-${P.V.runId}-app`] }, { stubborn: [`dagrun-${P.V.runId}-app`] });
-  const pid = await propose(P.V, pb, {});
-  assert.equal(await quiet(() => gateDecide({ homeDir: P.V.home, config, runId: P.V.runId, gate: "pr", revision: pb.revision, action: "approve", confirm: pid, executorFactory: P.f, dockerExec: stuck2.exec } as never)), 0);
-  assert.equal(stateOf(P.V.runDir).nodes["pr"]?.gateHistory.at(-1)?.decision, "approve");
-  assert.equal(tdFile(P.V).status, "leftovers");
-  say("13d passed: a failed teardown never loses the decision; leftovers stay pending for `dagrun verify cleanup`");
-}
-{
-  // (e) verify skipped, or source-only (mock default): the docker seam is never touched
-  const S = await toPrGate({ runNext: false });
-  const sb = briefOf(S.V.runDir, "pr");
-  assert.equal(sb.verifyEnvironment, undefined);
-  const never = fakeDocker({});
-  const sid = await propose(S.V, sb, {});
-  await quiet(() => gateDecide({ homeDir: S.V.home, config, runId: S.V.runId, gate: "pr", revision: sb.revision, action: "approve", confirm: sid, executorFactory: S.f, dockerExec: never.exec } as never));
-  assert.equal(never.calls.length, 0, "skipped verify: no docker calls");
-  const Q = await newRun();
-  const qb = briefOf(Q.runDir, "reproduce");
-  await decide(Q, qb, { confirm: await propose(Q, qb, {}) });
-  const fb = briefOf(Q.runDir, "fix");
-  await decide(Q, fb, { runNext: true, confirm: await propose(Q, fb, { runNext: true }) });
-  const pb = briefOf(Q.runDir, "pr");
-  assert.equal(pb.verifyEnvironment, undefined, "source-only report provisions nothing");
-  const never2 = fakeDocker({});
-  const qid = await propose(Q, pb, {});
-  await quiet(() => gateDecide({ homeDir: Q.home, config, runId: Q.runId, gate: "pr", revision: pb.revision, action: "approve", confirm: qid, executorFactory: factory(), dockerExec: never2.exec } as never));
-  assert.equal(never2.calls.length, 0, "source-only verify: no docker calls");
-  say("13e passed: no teardown when verify was skipped or source-only");
+  say("12 passed: a missing declared artifact fails the node and halts the run (no false pass)");
 }
 
 // ===========================================================================
@@ -575,7 +411,7 @@ async function toPrGate(over: { runNext: boolean } = { runNext: true }) {
     DAGRUNNER_HOME: home,
     CLAUDE_CONFIG_DIR: CFG,
     ANTHROPIC_API_KEY: "smoke-dummy",
-    DAGRUN_MOCK_SCENARIOS: JSON.stringify({ reproduce: "gate-pause", implement: "success", review: "success", fix: "gate-pause", verify: "success", pr: "gate-pause" }),
+    DAGRUN_MOCK_SCENARIOS: JSON.stringify({ reproduce: "gate-pause", implement: "success", review: "success", fix: "gate-pause", pr: "gate-pause" }),
   };
   delete env["CLAUDE_CODE_SESSION_ID"];
   const CLI = join(__dirname, "..", "..", "src", "cli", "cli.ts");
@@ -659,9 +495,9 @@ async function toPrGate(over: { runNext: boolean } = { runNext: true }) {
 
   // Drive the remaining gates detached and poll to done.
   const fb2 = briefOf(runDir, "fix");
-  const fp = cli(decideArgs(fb2, ["--run-next", "yes"]));
+  const fp = cli(decideArgs(fb2));
   const fid = /--confirm ([0-9a-f]{16})/.exec(fp.stdout)?.[1] as string;
-  assert.equal(cli([...decideArgs(fb2, ["--run-next", "yes", "--confirm", fid]), "--detach"]).status, 0);
+  assert.equal(cli([...decideArgs(fb2, ["--confirm", fid]), "--detach"]).status, 0);
   await waitFor(d.runId, (j) => j.status === "awaiting-gate" && j.awaitingGate?.nodeId === "pr" && j.awaitingGate.revision != null, "awaiting-gate at pr");
   const pb2 = briefOf(runDir, "pr");
   const pp = cli(decideArgs(pb2));

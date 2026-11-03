@@ -12,16 +12,15 @@
  * run's own artifacts; nothing competes with them as a case history.
  */
 
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync } from "node:fs";
 import { join } from "node:path";
 import type { Workflow } from "./types.js";
 import type { RunState } from "./state.js";
 import { checkNoPlaceholders, checkOutcomeGate } from "./dag.js";
-import { gitHead } from "./verify-evidence.js";
 import { deliverablesAdvisory } from "./deliverables.js";
 import { reviewersAdvisory } from "./reviewers.js";
-import { readVerifyEnv } from "./verify-cleanup.js";
 import { listNodeFiles } from "./node-files.js";
 
 export type GateAction = "approve" | "amend" | "hold";
@@ -37,9 +36,7 @@ export type GateRejectionCode =
   | "stale-revision"
   | "invalid-action"
   | "bad-target"
-  | "missing-comment"
-  | "missing-run-next"
-  | "unexpected-run-next";
+  | "missing-comment";
 
 export type GateRequest = {
   runId: string;
@@ -48,8 +45,6 @@ export type GateRequest = {
   action: string;
   target?: string;
   comment?: string;
-  /** Approve at a gate with `decidesNode`: run (true) or skip (false) that node. */
-  runNext?: boolean;
   /** CLAUDE_CODE_SESSION_ID of the caller, when it identified itself. */
   session?: string;
 };
@@ -90,24 +85,9 @@ export type GateBrief = {
     /** Structured return path (used by `dagrun gate open`). */
     resume?: { sessionId: string; configDir: string; cwd: string | null; prompt: string };
   };
-  /**
-   * The verify hand-off, when this gate sits downstream of a verify node that
-   * provisioned an environment. NOT part of the revision hash (state that changes
-   * at teardown must never make the companion's decision stale).
-   */
-  verifyEnvironment?: {
-    status: "provisioned" | "torn-down" | "teardown-leftovers";
-    host: string;
-    port: number | null;
-    resourceCount: number;
-    demoFile: string;
-    note: string;
-  };
   pendingDecision: {
     actions: GateAction[];
     amendTargets: string[];
-    /** Approving also decides whether this downstream node runs (--run-next yes|no). */
-    decidesNode?: string;
     /** Nodes that will run if the gate is approved. */
     approveContinuesTo: string[];
   };
@@ -154,7 +134,6 @@ export function decisionId(req: {
   action: string;
   target?: string;
   comment?: string;
-  runNext?: boolean;
 }): string {
   return sha256(
     JSON.stringify([
@@ -164,7 +143,6 @@ export function decisionId(req: {
       req.action,
       req.target ?? "",
       req.comment ?? "",
-      req.runNext === undefined ? "" : String(req.runNext),
     ]),
   ).slice(0, 16);
 }
@@ -401,20 +379,6 @@ export function validateGateRequest(args: {
       `${action} requires --comment (the amendment feedback / the reason and evidence wanted)`,
     );
   }
-  const decides = workflow.nodes.find((n) => n.id === brief.gateNodeId)?.gate
-    ?.decidesNode;
-  if (action === "approve" && decides !== undefined && req.runNext === undefined) {
-    return reject(
-      "missing-run-next",
-      `approving gate "${brief.gateNodeId}" also decides whether "${decides}" runs — pass --run-next yes|no explicitly`,
-    );
-  }
-  if (req.runNext !== undefined && !(action === "approve" && decides !== undefined)) {
-    return reject(
-      "unexpected-run-next",
-      `--run-next only applies to approving a gate that decides a downstream node`,
-    );
-  }
   let target = brief.gateNodeId;
   if (action === "amend" && req.target !== undefined) {
     if (!amendTargets(workflow, brief.gateNodeId).includes(req.target)) {
@@ -431,6 +395,19 @@ export function validateGateRequest(args: {
 // ---------------------------------------------------------------------------
 // Evidence collection (read-only fs + git)
 // ---------------------------------------------------------------------------
+
+/** HEAD of a worktree, or null when it is not a git checkout. */
+function gitHead(worktreePath: string): string | null {
+  try {
+    return execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], {
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+  } catch {
+    return null;
+  }
+}
 
 function hashFile(path: string): GateEvidenceFile | null {
   return existsSync(path) ? { path, sha256: sha256(readFileSync(path)) } : null;
@@ -557,28 +534,6 @@ export function buildGateBrief(args: {
     validation.push(...reviewersAdvisory(runDir));
   }
 
-  let verifyEnvironment: GateBrief["verifyEnvironment"];
-  if (ancestorsOf(workflow, gateNodeId).includes("verify") && state.nodes["verify"]?.status === "done") {
-    const env = readVerifyEnv(join(runDir, "verify"), true);
-    if (env !== null && env.resources.length > 0) {
-      const status = env.teardown?.status === "clean" ? "torn-down" : env.teardown?.status === "leftovers" ? "teardown-leftovers" : "provisioned";
-      const demo = join(runDir, "verify", env.demoFile);
-      verifyEnvironment = {
-        status,
-        host: env.host,
-        port: env.port,
-        resourceCount: env.resources.length,
-        demoFile: demo,
-        note:
-          status === "provisioned"
-            ? `Verify environment is RUNNING at ${env.host}:${env.port ?? "?"} — manual testing pending. Point Eddie at ${demo} (steps + expected results); get his verdict BEFORE deciding. Any decision at this gate tears the environment down.`
-            : status === "torn-down"
-              ? "Verify environment already torn down; manual testing cannot be repeated without re-running verify."
-              : "Verify environment teardown left resources behind — run `dagrun verify cleanup <run-id>`.",
-      };
-    }
-  }
-
   const assoc = state.companion;
   const sessionId = assoc?.sessionId ?? null;
   let status: "ok" | "blocked" = "ok";
@@ -620,7 +575,6 @@ export function buildGateBrief(args: {
     iteration: state.nodes[gateNodeId]?.iteration ?? 0,
     ...ev,
     validation,
-    ...(verifyEnvironment !== undefined ? { verifyEnvironment } : {}),
     companion: {
       sessionId,
       reconstructed: assoc?.reconstructed ?? false,
@@ -631,39 +585,10 @@ export function buildGateBrief(args: {
     },
     pendingDecision: {
       actions: [...GATE_ACTIONS],
-      ...(workflow.nodes.find((n) => n.id === gateNodeId)?.gate?.decidesNode !==
-      undefined
-        ? {
-            decidesNode: workflow.nodes.find((n) => n.id === gateNodeId)?.gate
-              ?.decidesNode as string,
-          }
-        : {}),
       amendTargets: amendTargets(workflow, gateNodeId),
       approveContinuesTo: approveContinuesTo(workflow, gateNodeId),
     },
   };
-}
-
-// ---------------------------------------------------------------------------
-// Next-node decision (gate.decidesNode)
-// ---------------------------------------------------------------------------
-
-/** Artifact a gate writes when it decides whether a downstream node runs. */
-export const NEXT_NODE_DECISION_FILE = "next-node-decision.json";
-
-/**
- * Parse `<gate>/next-node-decision.json` for a `when` predicate. Fails loud on
- * malformed content — a missing/garbled decision must never silently run or
- * skip the node. (A missing FILE throws from ctx.read.)
- */
-export function readNextNodeDecision(raw: string, nodeId: string): boolean {
-  const d = JSON.parse(raw) as { node?: unknown; run?: unknown };
-  if (d.node !== nodeId || typeof d.run !== "boolean") {
-    throw new Error(
-      `${NEXT_NODE_DECISION_FILE} malformed — expected {"node":"${nodeId}","run":<boolean>}`,
-    );
-  }
-  return d.run;
 }
 
 // ---------------------------------------------------------------------------

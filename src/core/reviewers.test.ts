@@ -241,7 +241,7 @@ test("buildGateBrief: only the pr gate carries the reviewer advisory, and it nev
   const st: RunState = {
     runId: "r", workflow: "bugfix", createdAt: "T", updatedAt: "T", status: "paused",
     worktreePath: run, branch: "feat", sourcePlanPath: "/p", baseBranch: "main",
-    nodes: { reproduce: node("done"), implement: node("done"), review: node("done"), fix: node("done"), verify: node("done"), pr: node("awaiting-gate") },
+    nodes: { reproduce: node("done"), implement: node("done"), review: node("done"), fix: node("done"), pr: node("awaiting-gate") },
   };
   const build = (gate: string) => buildGateBrief({ runDir: run, state: st, workflow: bugfixWorkflow, gateNodeId: gate, configDirs: [] });
   const missing = build("pr");

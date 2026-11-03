@@ -34,12 +34,6 @@ import type { DagrunnerConfig } from "../config/xdg.js";
 import { accrueSessionCost, readState, writeState } from "../core/state.js";
 import { appendEvent } from "../core/events.js";
 import {
-  formatTeardown,
-  teardownRun,
-  type DockerExec,
-} from "../core/verify-cleanup.js";
-import {
-  ancestorsOf,
   findSessionConfigDir,
   planAmend,
   validateGateRequest,
@@ -50,7 +44,6 @@ import {
   describeGatePause,
   emitGateBrief,
   sessionConfigDirs,
-  writeNextNodeDecision,
 } from "./gate-files.js";
 import type {
   RunState,
@@ -87,7 +80,7 @@ type ExecutorFactory = (
  */
 export function parseGateDecision(
   content: string,
-): { decision: "approve" | "reject"; body: string; runNext?: boolean } | null {
+): { decision: "approve" | "reject"; body: string } | null {
   if (!content || content.trim() === "") return null;
 
   const lines = content.split("\n");
@@ -114,15 +107,7 @@ export function parseGateDecision(
     body = restLines.slice(start).join("\n").trimEnd();
   }
 
-  // Optional `run-next: yes|no` line (approve at a gate that decides a downstream node).
-  const rn = /^run-next:\s*(yes|no)\s*$/im.exec(content);
-  return {
-    decision: value,
-    body,
-    ...(value === "approve" && rn?.[1] !== undefined
-      ? { runNext: rn[1].toLowerCase() === "yes" }
-      : {}),
-  };
+  return { decision: value, body };
 }
 
 /** Node IDs that night-mode may auto-approve (Gate 1 + Gate 2 on both workflows; "pr" = the pre-PR gate on both feature and bugfix — see DECISIONS.md § feature-companion-gates-parity). */
@@ -130,7 +115,7 @@ const AGENT_DECIDABLE_GATES = new Set(["define", "reproduce", "fix", "pr"]);
 
 /**
  * True when night-mode may auto-decide the gate for nodeId.
- * Expand (Gate 1) and fix (Gate 2) are agent-decidable; verify-election and
+ * Define/reproduce (Gate 1), fix (Gate 2) and pr (Gate 3) are agent-decidable;
  * all others are human-only. Exported for unit testing.
  */
 export function agentDecidable(nodeId: string): boolean {
@@ -308,15 +293,6 @@ export function worktreeArtifactPatterns(): string[] {
     }
   }
   // Secondary scratch patterns that aren't in produces.
-  //
-  // verify-plan.md: dropped from verify's `produces` array (run 56962-1
-  // forensics, DECISIONS.md § verify-run-56962-1-forensics) because
-  // payload/commands/verify.md's legitimate short-circuit paths (Docker
-  // unreachable, unrecoverable stall) explicitly skip writing it. It is
-  // still written on the normal (non-short-circuit) path, so it still needs
-  // to be excluded from the worktree/PR here — this hygiene list is a
-  // separate concern from the produces-contract check and must not silently
-  // lose coverage just because the file became conditional.
   for (const p of [
     "*.tmp",
     "*-state.json",
@@ -324,7 +300,6 @@ export function worktreeArtifactPatterns(): string[] {
     ".gitignore",
     ".claude/",
     "**/target/",
-    "verify-plan.md",
   ]) {
     names.add(p);
   }
@@ -676,7 +651,7 @@ import {
   resetInterruptedNodes,
   MAX_INTERRUPT_RETRIES,
   runDag,
-  checkNodeReport,
+  checkOutcomeGate,
   checkNoPlaceholders,
 } from "../core/dag.js";
 import { acquireLock, assertNoLiveDriver, releaseLock } from "../core/lock.js";
@@ -765,7 +740,7 @@ function announcePause(
   const st = readState(stateFile);
   const gate = awaitingGateId(st);
   if (gate === "pr") {
-    // Pre-PR gate opens: refresh the saved change (verify/amend may have moved the
+    // Pre-PR gate opens: refresh the saved change (an amend may have moved the
     // worktree since fix) in fix/ and give the pr gate brief its own copy.
     const args = {
       worktreePath: st.worktreePath,
@@ -1177,17 +1152,6 @@ export async function startRun(opts: {
         gateNode !== undefined
           ? checkNoPlaceholders(runDir, gateNodeId, gateNode)
           : { ok: true as const };
-      if (gateNode?.gate?.decidesNode !== undefined) {
-        // Unattended default preserves prior behavior: the decided node runs.
-        writeNextNodeDecision({
-          runDir,
-          gateNodeId,
-          node: gateNode.gate.decidesNode,
-          run: true,
-          basis:
-            "night-mode default (node runs, as before the fix-gate decision existed)",
-        });
-      }
       nightState = {
         ...nightState,
         nodes: {
@@ -1226,9 +1190,7 @@ export async function startRun(opts: {
         );
       }
 
-      // Re-run the DAG from the newly approved gate. verify (when present) now
-      // runs fully autonomously — no verify-election park here (see D1 of the
-      // verify-autonomy change; DECISIONS.md § verify-autonomy-remove-election).
+      // Re-run the DAG from the newly approved gate.
       const nightResult = await runDag(workflow, executor, nightState, {
         ctx,
         stateFile,
@@ -1277,54 +1239,6 @@ export async function startRun(opts: {
   }
 }
 
-/**
- * The human's verdict on a verify hand-off: tear down the run's provisioned verify
- * environment (see core/verify-cleanup.ts). Applies only at a gate that sits
- * downstream of `verify` (the pre-PR gate) and only when an environment is
- * PROVISIONED and not yet torn down; otherwise a no-op. Never throws and never
- * touches the recorded decision: a failure is printed loudly and left as
- * teardown.json status "leftovers" so `dagrun verify cleanup <run>` can retry.
- * Returns true when nothing is left behind.
- */
-export function teardownVerifyForDecision(args: {
-  workflow: Workflow;
-  gateNodeId: string;
-  runId: string;
-  runDir: string;
-  worktreePath: string;
-  action: string;
-  exec?: DockerExec;
-}): boolean {
-  if (!ancestorsOf(args.workflow, args.gateNodeId).includes("verify"))
-    return true;
-  try {
-    const r = teardownRun({
-      runDir: args.runDir,
-      runId: args.runId,
-      worktreePath: args.worktreePath,
-      trigger: `gate-decide:${args.gateNodeId}:${args.action}`,
-      ...(args.exec !== undefined ? { exec: args.exec } : {}),
-    });
-    if (r.reports.length === 0) return true;
-    process.stdout.write(
-      `dagrun: verdict recorded — ${formatTeardown(r.reports)}`,
-    );
-    if (!r.ok) {
-      process.stderr.write(
-        `dagrun: WARNING verify environment teardown incomplete — the decision stands. ` +
-          `Retry: dagrun verify cleanup ${args.runId}\n`,
-      );
-    }
-    return r.ok;
-  } catch (e) {
-    process.stderr.write(
-      `dagrun: WARNING verify environment teardown crashed (${(e as Error).message}) — the decision stands. ` +
-        `Retry: dagrun verify cleanup ${args.runId}\n`,
-    );
-    return false;
-  }
-}
-
 // ---------------------------------------------------------------------------
 // resumeRun
 // ---------------------------------------------------------------------------
@@ -1335,15 +1249,11 @@ export async function resumeRun(opts: {
   config: DagrunnerConfig;
   approve?: boolean;
   rejectComment?: string;
-  /** Legacy `--approve` at a gate with `decidesNode`: run/skip that node (default: run, recorded). */
-  runNext?: boolean;
   /** Companion gates: the validated-by-CLI request; re-validated here against fresh state. */
   gateRequest?: GateRequest & { decisionId: string };
   /** Test seam: config dirs searched for the companion's transcript. */
   sessionConfigDirs?: string[];
   executorFactory?: ExecutorFactory;
-  /** Test seam: docker exec used by the verify-environment teardown at a verdict. */
-  dockerExec?: DockerExec;
 }): Promise<void> {
   const { runId, homeDir, config } = opts;
   const runDir = join(homeDir, "runs", runId);
@@ -1437,20 +1347,9 @@ export async function resumeRun(opts: {
       // via `dagrun gate decide`, never a fresh spawned session or a bare flag.
       const companionMode =
         state.companion !== undefined && workflow.companionGates === true;
-      const verifyTd = {
-        workflow,
-        gateNodeId,
-        runId,
-        runDir,
-        worktreePath: state.worktreePath,
-        ...(opts.dockerExec !== undefined ? { exec: opts.dockerExec } : {}),
-      };
-      let verifyTeardownOk = true;
       let approveNow = opts.approve === true;
       let rejectNow = opts.rejectComment;
       let boundMeta: Partial<GateHistoryEntry> = {};
-      let runNext = opts.runNext;
-      let nextFocus: string | undefined;
       if (companionMode) {
         if (opts.approve === true || opts.rejectComment !== undefined) {
           process.stderr.write(
@@ -1517,22 +1416,16 @@ export async function resumeRun(opts: {
           process.stdout.write(
             `dagrun: hold recorded at gate "${gateNodeId}" — still paused, nothing advanced\n`,
           );
-          teardownVerifyForDecision({ ...verifyTd, action: "hold" });
           releaseLock(homeDir);
           process.exit(0);
         }
         if (v.action === "approve") {
           approveNow = true;
-          if (req.runNext !== undefined) runNext = req.runNext;
           const c = (req.comment ?? "").trim();
-          if (c !== "") nextFocus = c;
           boundMeta = {
             ...boundMeta,
-            resumePoint: `run ${brief.pendingDecision.approveContinuesTo.join(", ") || "(end)"}${
-              runNext === false && gateNode.gate?.decidesNode !== undefined
-                ? ` — "${gateNode.gate.decidesNode}" skipped by decision`
-                : ""
-            }`,
+            ...(c !== "" ? { comment: c } : {}),
+            resumePoint: `run ${brief.pendingDecision.approveContinuesTo.join(", ") || "(end)"}`,
           };
         } else if (v.target === gateNodeId) {
           rejectNow = (req.comment ?? "").trim();
@@ -1562,13 +1455,6 @@ export async function resumeRun(opts: {
             releaseLock(homeDir);
             process.exit(1);
           }
-          // Tear the verify environment down BEFORE the reset below archives verify/
-          // (the report is the durable inventory) and before verify can re-provision
-          // under the same dagrun-<run>- names.
-          verifyTeardownOk = teardownVerifyForDecision({
-            ...verifyTd,
-            action: "amend",
-          });
           const nodesNext = { ...state.nodes };
           for (const id of plan.reset) {
             const ns = nodesNext[id];
@@ -1594,12 +1480,6 @@ export async function resumeRun(opts: {
             (req.comment ?? "").trim(),
             "utf8",
           );
-          const decided = tNode.gate?.decidesNode;
-          if (decided !== undefined) {
-            rmSync(join(runDir, plan.revise, "next-node-decision.json"), {
-              force: true,
-            });
-          }
           nodesNext[plan.revise] = {
             ...tState,
             status: "pending",
@@ -1626,15 +1506,6 @@ export async function resumeRun(opts: {
           process.stdout.write(
             `dagrun: amend — "${plan.revise}" will revise (iteration ${n}); invalidated: ${plan.reset.join(", ")}\n`,
           );
-          if (!verifyTeardownOk) {
-            // The amended run would re-provision verify under the same names: stop here.
-            process.stderr.write(
-              `dagrun: amend recorded but NOT continued — verify environment leftovers must be removed first.\n` +
-                `  Run: dagrun verify cleanup ${runId}   then: dagrun resume ${runId}\n`,
-            );
-            releaseLock(homeDir);
-            process.exit(1);
-          }
         }
       }
       const amendedAncestor =
@@ -1688,8 +1559,6 @@ export async function resumeRun(opts: {
         process.stdout.write(
           `dagrun: rejected — node "${gateNodeId}" will revise (iteration ${n})\n`,
         );
-        if (companionMode)
-          teardownVerifyForDecision({ ...verifyTd, action: "amend" });
       } else if (approveNow) {
         // Approve: mark done, collect artifacts from disk, continue. A
         // mechanical noPlaceholders violation still fails the node even after
@@ -1709,30 +1578,6 @@ export async function resumeRun(opts: {
             ? checkNoPlaceholders(runDir, gateNodeId, gateNode)
             : { ok: true as const };
         const approveTs = new Date().toISOString();
-        if (gateNode.gate?.decidesNode !== undefined) {
-          // The fix-gate decision: does the downstream node run? Companion path
-          // requires an explicit answer (validated); legacy path defaults to
-          // "run" (the prior behavior) and records that it was a default.
-          writeNextNodeDecision({
-            runDir,
-            gateNodeId,
-            node: gateNode.gate.decidesNode,
-            run: runNext ?? true,
-            basis:
-              runNext === undefined
-                ? "legacy default — no explicit run/skip choice (node runs, as before)"
-                : companionMode
-                  ? "companion gate decision"
-                  : "legacy --run-next flag",
-            ...(boundMeta.revision !== undefined
-              ? { revision: boundMeta.revision }
-              : {}),
-            ...(boundMeta.decisionId !== undefined
-              ? { decisionId: boundMeta.decisionId }
-              : {}),
-            ...(nextFocus !== undefined ? { focus: nextFocus } : {}),
-          });
-        }
         state = {
           ...state,
           nodes: {
@@ -1760,8 +1605,6 @@ export async function resumeRun(opts: {
           updatedAt: approveTs,
         };
         writeState(stateFile, state);
-        if (companionMode)
-          teardownVerifyForDecision({ ...verifyTd, action: "approve" });
         if (approvePlaceholderCheck.ok) {
           process.stdout.write(`dagrun: approved — continuing run\n`);
         } else {
@@ -1836,9 +1679,6 @@ export async function resumeRun(opts: {
             env: {
               ...process.env,
               DAGRUN_GATE_NODE_ID: gateNodeId,
-              ...(gateNode?.gate?.decidesNode !== undefined
-                ? { DAGRUN_GATE_DECIDES_NODE: gateNode.gate.decidesNode }
-                : {}),
               DAGRUN_GATE_CONTEXT_FILE: contextFilePath,
               DAGRUN_GATE_DECISION_FILE: decisionFilePath,
             },
@@ -1879,9 +1719,6 @@ export async function resumeRun(opts: {
           await resumeRun({
             ...opts,
             approve: true,
-            ...(parsed.runNext !== undefined
-              ? { runNext: parsed.runNext }
-              : {}),
           });
           return;
         } else {
@@ -1893,12 +1730,6 @@ export async function resumeRun(opts: {
       }
     } // closes else (gateNode !== undefined)
   }
-
-  // verify (when present in the workflow) now runs fully autonomously after
-  // fix — no human election, no Gate 3. See D1 of the verify-autonomy change
-  // (DECISIONS.md § verify-autonomy-remove-election). It is a required,
-  // blocking node; its own outcomeGate (checked in dag.ts/rerunNode) is what
-  // halts the run on a bad result, not a human decision made here.
 
   // Re-seed siblings into the worktree and export DAGRUNNER_ROOT so session-start.sh
   // can re-apply them at every node session start. resumeRun is a fresh process —
@@ -2147,8 +1978,8 @@ export function listRuns(
  *
  * Without this, a node's transcript.log/reflections.md/burn.json only ever
  * reflect the LAST attempt — every prior failure's evidence is destroyed by
- * the next rerun. On a node that retries repeatedly (e.g. verify against a
- * flaky external dependency), that's the only record of why earlier attempts
+ * the next rerun. On a node that retries repeatedly (e.g. a node that depends on a
+ * flaky external service), that's the only record of why earlier attempts
  * failed, and it was gone by the time anyone went looking. See
  * DECISIONS.md § rerun-artifact-archiving.
  *
@@ -2241,8 +2072,6 @@ export async function rerunNode(opts: {
   homeDir: string;
   config: DagrunnerConfig;
   executorFactory?: ExecutorFactory;
-  /** Test seam: docker exec used to tear down a still-provisioned verify env first. */
-  dockerExec?: DockerExec;
 }): Promise<void> {
   const { runId, nodeId, homeDir, config } = opts;
   const runDir = join(homeDir, "runs", runId);
@@ -2268,28 +2097,6 @@ export async function rerunNode(opts: {
 
   const worktreePath = state.worktreePath;
   const artifactsDir = join(runDir, nodeId);
-
-  // Re-running verify re-provisions under the same dagrun-<run>- names: any earlier
-  // environment that was never torn down must go first (and the attempt archive below
-  // would otherwise move its report — the only inventory — out of sight).
-  if (nodeId === "verify") {
-    const r = teardownRun({
-      runDir,
-      runId,
-      worktreePath: state.worktreePath,
-      trigger: "rerun:verify",
-      ...(opts.dockerExec !== undefined ? { exec: opts.dockerExec } : {}),
-    });
-    if (r.reports.length > 0)
-      process.stdout.write(`dagrun: ${formatTeardown(r.reports)}`);
-    if (!r.ok) {
-      process.stderr.write(
-        `dagrun: refusing to re-run verify — a previous verify environment could not be fully torn down. ` +
-          `Fix, then: dagrun verify cleanup ${runId}\n`,
-      );
-      process.exit(1);
-    }
-  }
 
   // Re-seed .claude/ so any changes to commands, hooks, or settings-seed.ts
   // take effect without needing a new full run (e.g. allowedDomains fixes).
@@ -2382,7 +2189,7 @@ export async function rerunNode(opts: {
         endedAt: now,
       };
     } else {
-      const gateCheck = checkNodeReport(runDir, nodeId, node, worktreePath);
+      const gateCheck = checkOutcomeGate(runDir, nodeId, node);
       if (!gateCheck.ok) {
         newStatus = "failed";
         updates = {

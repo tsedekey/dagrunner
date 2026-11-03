@@ -82,15 +82,13 @@ interface without first reading the reference — interface shape mismatches req
 a brief implementation summary" below.** The bugfix workflow already proves red at the bug-symptom
 level in `reproduce.md` Step 2 (the reproducing test/validation command is run and confirmed to
 currently fail, before any guide is written) — repeating that proof here would duplicate work `fix`
-and `verify` already build on. This step exists ONLY to close the equivalent gap on the feature
+already builds on. This step exists ONLY to close the equivalent gap on the feature
 path, which has no such proof today.
 
 If you read `define/guide.md`, before writing any implementation code:
 
 1. **Identify the test(s) the guide's acceptance criteria imply**, at the unit/integration level —
-   NOT an `@MultiDbTest` acceptance test. Authoring the acceptance test is `verify`'s job, done later
-   in isolated context specifically so it isn't graded by the same session that wrote the feature
-   (see `payload/commands/verify.md`); duplicating that here would blur the split and buy nothing.
+   NOT an `@MultiDbTest` acceptance test — this step proves red at the unit/integration level only.
    Pick the smallest test (or small group of tests) that would fail today because the described
    behavior doesn't exist yet, and would pass once it does.
 2. **Write that test first.** Run it. Confirm it fails, and — this is the part that actually

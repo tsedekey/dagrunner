@@ -87,7 +87,6 @@ a{color:var(--accent)}
 .dec-meta code{font-family:var(--mono)}
 .dec-comment{margin-top:.4rem;font-size:.8125rem}.dec-comment summary{cursor:pointer;color:var(--accent)}.dec-comment p{margin:.4rem 0 0;line-height:1.55;max-width:70ch;white-space:pre-wrap}
 [hidden]{display:none!important}
-.decides{font-size:.8125rem;line-height:1.5}
 .diff{font-family:var(--mono);font-size:.74rem;line-height:1.5;background:var(--code-bg);border-radius:6px;padding:.6em 0;overflow-x:auto;margin:.4em 0;max-height:28rem}
 .diff code{background:none}
 .diff .dl{display:block;padding:0 .9em 0 0;white-space:pre}

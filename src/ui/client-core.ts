@@ -43,7 +43,7 @@ export const CORE_JS = String.raw`
     done: 'Done', skipped: 'Skipped', failed: 'Failed'
   };
   var RUNSTATUS = { running: 'Running', paused: 'Paused at gate', done: 'Done', failed: 'Failed', aborted: 'Aborted' };
-  var SKIP_TEXT = { decision: 'Skipped by decision', optional: 'Skipped (optional)', when: 'Skipped (condition not met)' };
+  var SKIP_TEXT = { optional: 'Skipped (optional)', when: 'Skipped (condition not met)' };
   function icon(status, size) {
     var s = size || 14;
     var o = '<svg class="st-ico st-ico--' + esc(status) + '" width="' + s + '" height="' + s + '" viewBox="0 0 16 16" aria-hidden="true" focusable="false">';
@@ -235,7 +235,6 @@ export const CORE_JS = String.raw`
     return T('<div>' +
       '<h2 id="gateH">{{ico}} Waiting for a decision at {node}</h2>' +
       '<p>The {node} round is finished and its output is ready for review. Decisions are made in the companion conversation, not here. This page only watches the run.</p>' +
-      '{{decides}}' +
       '<p class="who">{{who}}</p>' +
       '<div class="cmdrow"><code class="cmd" id="gateCmd">{cmd}</code><button class="btn" type="button" data-act="copy" data-fk="copy">Copy command</button><button class="btn" type="button" data-act="see-node" data-node="{node}" data-fk="see">Read the {node} artifacts</button></div>' +
       '</div>' +
@@ -248,8 +247,6 @@ export const CORE_JS = String.raw`
       '</dl>' +
       '<details data-act="gate-history"{{open}}><summary>Decision history · {n} recorded</summary>{{decisions}}</details>', {
       ico: icon('awaiting-gate', 22), node: g.nodeId, cmd: cmd,
-      decides: g.decidesNode ? '<p class="decides">Approving also decides whether <code>' + esc(g.decidesNode) + '</code> runs (<code>--run-next yes|no</code>).' +
-        (g.advice ? ' Agent advice in ' + esc(g.nodeId) + '/summary.md: <em>' + esc(g.advice) + '</em>' : '') + '</p>' : '',
       who: c ? 'Owned by companion session <code>' + esc(c.sessionId || '–') + '</code> (' + esc(c.status) + (c.reconstructed ? ', reconstructed' : '') + ')' +
         (c.cwd ? ', started in <code>' + esc(String(c.cwd).replace(/^\/Users\/[^/]+/, '~')) + '</code>' : '') + '.' : 'No companion session recorded for this run (legacy gate).',
       rev: g.revision ? '<code>' + esc(g.revision) + '</code>' : '<em class="muted">not opened yet — run <code>' + esc(cmd) + '</code></em>',
@@ -297,8 +294,8 @@ export const CORE_JS = String.raw`
       (d ? T('<dt>Command</dt><dd><code>{c}</code></dd>', { c: d.command }) : '') +
       T('<dt>Model</dt><dd>{m}</dd>', { m: (n.model || (d && d.model) || '–') + (d && d.effort ? ' · effort ' + d.effort : '') }) +
       (d ? T('<dt>Depends on</dt><dd>{x}</dd><dt>Produces</dt><dd>{p}</dd>', {
-        x: (d.dependsOn.join(', ') || '–') + (d.joinRule ? ' (' + d.joinRule + ')' : ''), p: d.produces.join(', ') || '–' }) : '') +
-      (d && d.gate ? T('<dt>Gate</dt><dd>up to {m} iterations{dn}</dd>', { m: d.gate.maxIterations, dn: d.gate.decidesNode ? ', decides ' + d.gate.decidesNode : '' }) : '') +
+        x: (d.dependsOn.join(', ') || '–'), p: d.produces.join(', ') || '–' }) : '') +
+      (d && d.gate ? T('<dt>Gate</dt><dd>up to {m} iterations</dd>', { m: d.gate.maxIterations }) : '') +
       T('<dt>Started</dt><dd>{s}</dd><dt>Ended</dt><dd>{e}</dd><dt>Session</dt><dd><code>{sid}</code></dd>', { s: fmtWhen(n.startedAt), e: fmtWhen(n.endedAt), sid: n.sessionId || '–' }) +
       att +
       (n.error ? T('<dt>Error</dt><dd class="err">{e}</dd>', { e: n.error }) : '') +

@@ -9,7 +9,7 @@ Claude Code for everything else. See `CLAUDE.md` for the reuse law and engineeri
 ## What it does
 
 Walks a feature or bugfix change through a fixed, gated pipeline (e.g.
-`expand → implement → review → fix → verify → pr`), pausing at human gates and checkpointing to
+`reproduce|define → implement → review → fix → pr`), pausing at human gates and checkpointing to
 disk so it survives process exit. Each node is a Claude Code session spawned via the Agent SDK in
 its own git worktree. Three human-driven sibling commands (`ci-babysit`, `pr-triage`,
 `/seed-data`) run outside the pipeline against a live PR/cluster.

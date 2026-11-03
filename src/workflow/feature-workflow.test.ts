@@ -369,47 +369,24 @@ test("featureWorkflow: all dependsOn references point to known nodes", () => {
 });
 
 // ---------------------------------------------------------------------------
-// verify node — autonomous, required, outcomeGate-gated (verify-autonomy change)
+// no verify node (removed — DECISIONS.md § verify-node-removed)
 // ---------------------------------------------------------------------------
 
-test("featureWorkflow: verify depends on fix, is required (non-optional), has no human gate", () => {
-  const node = featureWorkflow.nodes.find((n) => n.id === "verify");
-  assert.ok(node !== undefined, "verify node must exist");
-  assert.ok(node.dependsOn?.includes("fix"), "verify must depend on fix");
-  assert.notEqual(
-    node.optional,
-    true,
-    "verify must be required — a non-PASS outcome must block pr",
-  );
-  assert.equal(
-    node.gate,
-    undefined,
-    "verify must have no human gate — it runs autonomously",
+test("featureWorkflow: node ids are define, implement, review, fix, pr", () => {
+  assert.deepEqual(
+    featureWorkflow.nodes.map((n) => n.id),
+    ["define", "implement", "review", "fix", "pr"],
   );
 });
 
-test("featureWorkflow: verify uses sonnet (raised from haiku for authoring reasoning)", () => {
-  const node = featureWorkflow.nodes.find((n) => n.id === "verify");
-  assert.ok(node !== undefined);
-  assert.equal(node.model, "sonnet");
-});
-
-test("featureWorkflow: verify is the same optional runtime demonstration, decided at the fix gate", () => {
-  const node = featureWorkflow.nodes.find((n) => n.id === "verify");
-  assert.ok(node !== undefined);
-  assert.equal(node.command, "/verify");
-  assert.ok(node.when !== undefined);
-  assert.equal(
-    featureWorkflow.nodes.find((n) => n.id === "fix")?.gate?.decidesNode,
-    "verify",
-  );
-  assert.deepEqual(node.outcomeGate, {
-    file: "verify-report.json",
-    field: "outcome",
-    passValues: ["PROVISIONED"],
-  });
-  assert.deepEqual(node.produces, ["verify-report.json", "demo.md"]);
-  assert.equal(node.evidenceCheck, "verify-runtime");
+test("featureWorkflow: there is no verify node and no node declares decidesNode / joinRule / evidenceCheck", () => {
+  assert.equal(featureWorkflow.nodes.find((n) => n.id === "verify"), undefined);
+  for (const n of featureWorkflow.nodes) {
+    assert.equal((n.gate as Record<string, unknown> | undefined)?.decidesNode, undefined, `${n.id}: no gate decides a downstream node`);
+    assert.equal((n as Record<string, unknown>).joinRule, undefined, `${n.id}: no joinRule`);
+    assert.equal((n as Record<string, unknown>).evidenceCheck, undefined, `${n.id}: no evidenceCheck`);
+    assert.equal(n.when, undefined, `${n.id}: every node always runs`);
+  }
 });
 
 test("featureWorkflow: every gate returns to the companion; pr is a pre-PR gate that can amend fix (parity with bugfix — DECISIONS.md § feature-companion-gates-parity)", () => {
@@ -423,17 +400,11 @@ test("featureWorkflow: every gate returns to the companion; pr is a pre-PR gate 
   );
 });
 
-test("featureWorkflow: pr uses haiku model and depends on both fix and verify", () => {
+test("featureWorkflow: pr uses haiku model and depends on fix only", () => {
   const node = featureWorkflow.nodes.find((n) => n.id === "pr");
   assert.ok(node !== undefined);
-  assert.ok(node.dependsOn?.includes("fix"));
-  assert.ok(node.dependsOn?.includes("verify"));
+  assert.deepEqual(node.dependsOn, ["fix"]);
   assert.equal(node.model, "haiku");
-});
-
-test("featureWorkflow: pr tolerates a skipped verify (joinRule) but a failed verify still blocks — parity with bugfix (DECISIONS.md § feature-companion-gates-parity)", () => {
-  const n = featureWorkflow.nodes.find((x) => x.id === "pr");
-  assert.equal(n?.joinRule, "none-failed-min-one-success");
 });
 
 // digest node removed (DECISIONS.md § digest-removed-folded-into-companion) —

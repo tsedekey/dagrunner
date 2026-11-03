@@ -168,15 +168,6 @@ Write `<artifactsDir>/summary.md`:
 ## Build/test result
 
 <PASSED / FAILED — include the test output tail if FAILED>
-
-## Verify recommendation
-
-<Recommendation: run | skip — and why in 1-3 sentences. `verify` is an OPTIONAL runtime
-hand-off (build the candidate, deploy it locally, leave it running with manual steps so Eddie can test it by hand). Recommend
-`run` when seeing it work adds understanding or confidence beyond the tests (user-visible behavior,
-cross-component flow, hard-to-unit-test bug); `skip` when the regression test already shows it
-plainly (pure refactor, trivial guard, doc/config). If `run`: the smallest scenario worth showing.
-This is advice to Eddie's fix-gate decision — not a decision.>
 ```
 
 ### Step 4b — Escalation: 3 consecutive failed rounds (mandatory when triggered)

@@ -50,10 +50,8 @@ import {
   seedWorktreeSiblings,
 } from "../runtime/run-engine.js";
 import { readState, writeState } from "../core/state.js";
-import { verifyCleanup } from "../runtime/verify-cli.js";
 import { defaultExec, suggestReviewers } from "../runtime/reviewers-cli.js";
 import { parseReviewersConfig } from "../config/reviewers-config.js";
-import { pendingVerifyEnvs } from "../core/verify-cleanup.js";
 import {
   gateAttach,
   gateDecide,
@@ -300,19 +298,12 @@ async function cmdResume(argv: string[]): Promise<void> {
   const approve = hasFlag(argv, "--approve");
   const rejectComment = flagValue(argv, "--reject");
   const configFlag = flagValue(argv, "--config");
-  const runNextRaw = flagValue(argv, "--run-next");
-  if (runNextRaw !== undefined && runNextRaw !== "yes" && runNextRaw !== "no") {
-    process.stderr.write(`dagrun resume: --run-next must be yes or no\n`);
-    process.exit(1);
-  }
-
   const homeDir = resolveHome();
   const config = resolveConfig(homeDir, configFlag);
   assertAuth(config.claudeConfigDir);
 
   if (hasFlag(argv, "--detach")) {
-    const hasDecisionFlags =
-      approve || rejectComment !== undefined || runNextRaw !== undefined;
+    const hasDecisionFlags = approve || rejectComment !== undefined;
     if (resumeNeedsInteractiveReview({ homeDir, runId, hasDecisionFlags })) {
       process.stderr.write(
         `dagrun resume: --detach refused — run "${runId}" is at a legacy (non-companion) gate whose review needs an interactive terminal. ` +
@@ -326,7 +317,7 @@ async function cmdResume(argv: string[]): Promise<void> {
   }
 
   // Bare `resume` on a companion-gate run re-enters the originating conversation.
-  if (!approve && rejectComment === undefined && runNextRaw === undefined) {
+  if (!approve && rejectComment === undefined) {
     const handled = resumeOpensCompanion({
       homeDir,
       config,
@@ -348,7 +339,6 @@ async function cmdResume(argv: string[]): Promise<void> {
     ...(mockFactoryR !== undefined ? { executorFactory: mockFactoryR } : {}),
     ...(approve ? { approve: true } : {}),
     ...(rejectComment !== undefined ? { rejectComment } : {}),
-    ...(runNextRaw !== undefined ? { runNext: runNextRaw === "yes" } : {}),
   });
 }
 
@@ -368,7 +358,7 @@ async function cmdGate(argv: string[]): Promise<void> {
         `  dagrun gate show <run-id>\n` +
         `  dagrun gate open <run-id> [--cwd <dir>]      (resume the originating companion conversation, told a gate is waiting)\n` +
         `  dagrun gate decide <run-id> --gate <node> --revision <rev> --action approve|amend|hold\n` +
-        `      [--run-next yes|no] [--target <node>] [--comment "<text>"] [--session <id>] [--confirm <decision-id> [--detach]]\n` +
+        `      [--target <node>] [--comment "<text>"] [--session <id>] [--confirm <decision-id> [--detach]]\n` +
         `  dagrun gate attach <run-id> --session <id> [--reconstructed] [--replace] [--reseed]\n`,
     );
     process.exit(1);
@@ -411,13 +401,6 @@ async function cmdGate(argv: string[]): Promise<void> {
       );
       process.exit(1);
     }
-    const rn = flagValue(argv, "--run-next");
-    if (rn !== undefined && rn !== "yes" && rn !== "no") {
-      process.stderr.write(
-        `dagrun gate decide: --run-next must be yes or no\n`,
-      );
-      process.exit(1);
-    }
     const target = flagValue(argv, "--target");
     const comment = flagValue(argv, "--comment");
     // Default to the caller's own Claude session so any OTHER Claude session (a dev
@@ -454,38 +437,10 @@ async function cmdGate(argv: string[]): Promise<void> {
       action,
       ...(target !== undefined ? { target } : {}),
       ...(comment !== undefined ? { comment } : {}),
-      ...(rn !== undefined ? { runNext: rn === "yes" } : {}),
       ...(session !== undefined ? { session } : {}),
       ...(confirm !== undefined ? { confirm } : {}),
     });
   }
-  if (code !== 0) process.exit(code);
-}
-
-/** Safety net: a PROVISIONED verify env with no recorded teardown must not leak silently. */
-function warnPendingVerifyEnv(
-  homeDir: string,
-  runId: string,
-  prefix: string,
-): void {
-  const pending = pendingVerifyEnvs(join(homeDir, "runs", runId));
-  if (pending.length === 0) return;
-  const n = pending.reduce((a, e) => a + e.resources.length, 0);
-  process.stdout.write(
-    `${prefix}VERIFY ENVIRONMENT STILL PROVISIONED (${n} owned resources, not torn down).\n` +
-      `  Tear down with: dagrun verify cleanup ${runId}\n`,
-  );
-}
-
-function cmdVerify(argv: string[]): void {
-  const runId = argv[1];
-  if (argv[0] !== "cleanup" || runId === undefined || runId.startsWith("--")) {
-    process.stderr.write(
-      `Usage: dagrun verify cleanup <run-id>   (tear down the run's provisioned verify environment; idempotent)\n`,
-    );
-    process.exit(1);
-  }
-  const code = verifyCleanup({ homeDir: resolveHome(), runId });
   if (code !== 0) process.exit(code);
 }
 
@@ -588,8 +543,6 @@ function cmdStatus(argv: string[]): void {
 
   process.stdout.write(`\nTotal cost: $${totalCost.toFixed(4)}\n`);
 
-  warnPendingVerifyEnv(homeDir, state.runId, "\n");
-
   const gateNode = Object.entries(state.nodes).find(
     ([, ns]) => ns.status === "awaiting-gate",
   );
@@ -619,9 +572,8 @@ function cmdList(): void {
   );
 
   for (const run of runs) {
-    const leak = pendingVerifyEnvs(join(homeDir, "runs", run.runId)).length > 0;
     process.stdout.write(
-      `${run.runId.padEnd(36)}  ${run.status.padEnd(10)}  ${run.updatedAt}${leak ? "  [verify env NOT torn down: dagrun verify cleanup " + run.runId + "]" : ""}\n`,
+      `${run.runId.padEnd(36)}  ${run.status.padEnd(10)}  ${run.updatedAt}\n`,
     );
   }
 }
@@ -1087,12 +1039,11 @@ function printHelp(): void {
       "  dagrun init [--home <path>]",
       "  dagrun preflight [--base-branch <branch>] [--config <file>]",
       "  dagrun start <workflow> --plan <file> [--max-budget-usd <n>] [--force] [--night] [--companion-session <id> | --no-companion] [--detach]",
-      '  dagrun resume <run-id> [--approve [--run-next yes|no]] [--reject "<comment>"] [--detach]   (continue a run; --approve/--reject = direct-decision flags, same engine as gate decide)',
+      '  dagrun resume <run-id> [--approve] [--reject "<comment>"] [--detach]   (continue a run; --approve/--reject = direct-decision flags, same engine as gate decide)',
       "  dagrun gate show <run-id>                                    (companion flow: show, then propose-and-confirm decide)",
       "  dagrun gate open <run-id>                                    (resume the originating companion, with a gate prompt)",
-      "  dagrun gate decide <run-id> --gate <node> --revision <rev> --action approve|amend|hold [--run-next yes|no] [--target <node>] [--comment <text>] [--confirm <id> [--detach]]",
+      "  dagrun gate decide <run-id> --gate <node> --revision <rev> --action approve|amend|hold [--target <node>] [--comment <text>] [--confirm <id> [--detach]]",
       "  dagrun gate attach <run-id> --session <id> [--reconstructed] [--replace] [--reseed]",
-      "  dagrun verify cleanup <run-id>                               (tear down the provisioned verify environment)",
       "  dagrun reviewers <run-id> | --run-dir <abs-run-dir>          (suggest an Expert + a Stretch reviewer for the PR; report-only, never posts)",
       "  dagrun status [<run-id>] [--json]                            (--json: read-only machine-readable status; poll this after --detach)",
       `  dagrun ui [--port <n>] [--open] [--home <dir>]               (read-only timeline viewer, loopback-only; default port ${DEFAULT_UI_PORT})`,
@@ -1161,10 +1112,6 @@ async function main(argv: string[]): Promise<number> {
 
     case "gate":
       await cmdGate(rest);
-      return 0;
-
-    case "verify":
-      cmdVerify(rest);
       return 0;
 
     case "reviewers":
