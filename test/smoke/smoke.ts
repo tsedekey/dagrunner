@@ -118,7 +118,7 @@ let RUN_ID = "";
 
 // ---------------------------------------------------------------------------
 // Step 2 — dagrun start feature --plan toy-plan.md
-//          expand (Gate 1) → awaiting-gate → exits
+//          define (Gate 1) → awaiting-gate → exits
 // ---------------------------------------------------------------------------
 
 {
@@ -130,9 +130,9 @@ let RUN_ID = "";
   );
 
   const result = runCli(
-    ["start", "feature", "--plan", TOY_PLAN_PATH],
+    ["start", "feature", "--plan", TOY_PLAN_PATH, "--no-companion"],
     HOME_ENV,
-    180_000, // 3 minutes for one real API call (expand)
+    180_000, // 3 minutes for one real API call (define)
   );
 
   assert.strictEqual(
@@ -154,11 +154,11 @@ let RUN_ID = "";
   RUN_ID = runs[0] as string;
   const runDir = join(HOME, "runs", RUN_ID);
 
-  // Confirm guide.md was produced by expand.
-  const guidePath = join(runDir, "expand", "guide.md");
+  // Confirm guide.md was produced by define.
+  const guidePath = join(runDir, "define", "guide.md");
   assert.ok(existsSync(guidePath), `guide.md must exist at ${guidePath}`);
 
-  console.log(`step 2 passed: start -> expand -> gate (run: ${RUN_ID})`);
+  console.log(`step 2 passed: start -> define -> gate (run: ${RUN_ID})`);
 }
 
 // ---------------------------------------------------------------------------
@@ -198,7 +198,7 @@ let RUN_ID = "";
   );
 
   const runDir = join(HOME, "runs", RUN_ID);
-  const feedback1 = join(runDir, "expand", "feedback-1.md");
+  const feedback1 = join(runDir, "define", "feedback-1.md");
   assert.ok(existsSync(feedback1), `feedback-1.md must exist at ${feedback1}`);
   // Run must be paused again after revise.
   assert.ok(
