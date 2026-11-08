@@ -785,6 +785,7 @@ import {
   runDag,
   checkOutcomeGate,
   checkNoPlaceholders,
+  reenableBlockedDependents,
 } from "../core/dag.js";
 import { acquireLock, assertNoLiveDriver, releaseLock } from "../core/lock.js";
 import { makeSDKRunner } from "./sdk-runner.js";
@@ -2135,6 +2136,12 @@ export async function rerunNode(opts: {
   homeDir: string;
   config: DagrunnerConfig;
   executorFactory?: ExecutorFactory;
+  /**
+   * TEST seam (same as resumeRun's): resolve the run against this workflow instead of the
+   * shipped one named by state.workflow — lets tests rerun a node of a tiny custom workflow
+   * (`when` / `optional` siblings) that no shipped workflow has. Real callers never pass it.
+   */
+  workflow?: Workflow;
 }): Promise<void> {
   const { runId, nodeId, homeDir, config } = opts;
   const runDir = join(homeDir, "runs", runId);
@@ -2149,7 +2156,7 @@ export async function rerunNode(opts: {
   // Before ANY side effect: the re-seed below, the attempt archive and the artifact
   // wipe all assume the adopted worktree still exists (see assertRunWorktreeExists).
   assertRunWorktreeExists(state, config.DEVHARNESS_SRC);
-  const workflow = workflowFromState(state);
+  const workflow = opts.workflow ?? workflowFromState(state);
   const node = workflow.nodes.find((n) => n.id === nodeId);
 
   if (node === undefined) {
@@ -2308,14 +2315,34 @@ export async function rerunNode(opts: {
     };
   }
 
-  const updatedState: RunState = {
+  // The node has run now: a "skipped because blocked" marker from the sweep is stale on it.
+  const { skipReason: _staleSkip, ...prevRest } = prev;
+  let updatedState: RunState = {
     ...state,
     updatedAt: now,
     nodes: {
       ...state.nodes,
-      [nodeId]: { ...prev, ...updates },
+      [nodeId]: { ...prevRest, ...updates },
     },
   };
+  // The node may have finished now: whatever the end-of-run sweep skipped ONLY because it
+  // had not (skipReason "blocked-dependency") goes back to pending so `resume` runs it,
+  // instead of ending the run `done` with review/fix/pr still skipped. A node that failed
+  // again keeps them skipped (still accurately blocked). Their leftover artifacts are
+  // archived, like this node's own just above. See DECISIONS.md §
+  // rerun-reenables-blocked-dependents.
+  if (newStatus !== "failed") {
+    const reenabled = reenableBlockedDependents(workflow, updatedState, nodeId);
+    for (const id of reenabled.reset) {
+      archivePriorAttempt(runDir, id, join(runDir, id));
+    }
+    if (reenabled.reset.length > 0) {
+      process.stdout.write(
+        `dagrun: re-enabled ${reenabled.reset.join(", ")} (skipped only because "${nodeId}" had not finished)\n`,
+      );
+    }
+    updatedState = reenabled.state;
+  }
   writeState(stateFile, updatedState);
   const prPost = runPrPostProcess(updatedState, runDir, stateFile);
   if (!prPost.ok) {

@@ -27,6 +27,9 @@
  *           through the real startRun/runDag path. Run F2 — the SHIPPED bugfix
  *           pipeline: implement could not prove RED (red.json != confirmed) ->
  *           implement failed with the outcome-gate error, review/fix/pr never run.
+ *           Run F3 — the same run, recovered: `rerunNode implement` (RED now proven)
+ *           returns review/fix/pr (skipped only because implement had not finished)
+ *           to pending and `resumeRun` runs them to the fix gate — NOT a false `done`.
  *   Run G/H — noPlaceholders on a gate (generic primitive; no shipped node uses it,
  *           so a tiny custom gated workflow does): manual approve (G) and the
  *           night-mode auto-approve (H) both fail the node.
@@ -905,6 +908,82 @@ console.log(
 );
 
 // ---------------------------------------------------------------------------
+// RUN F3 — recovery of F2 through the real rerunNode + resumeRun path. Before
+//          v0.1.84 review/fix/pr stayed `skipped` (terminal) after the rerun and
+//          the resume ended the run `done` — a false success. Now rerunNode
+//          returns the nodes skipped ONLY because implement had not finished to
+//          pending, so the resume runs them and stops at the fix gate.
+//          See DECISIONS.md § rerun-reenables-blocked-dependents.
+// ---------------------------------------------------------------------------
+
+const RUN_ID_F3 = readdirSync(join(HOME_F2, "runs")).find((d) =>
+  existsSync(join(HOME_F2, "runs", d, "state.json")),
+) as string;
+const runDirF3 = join(HOME_F2, "runs", RUN_ID_F3);
+{
+  const s = JSON.parse(readFileSync(join(runDirF3, "state.json"), "utf8")) as {
+    nodes: Record<string, { status: string; skipReason?: string }>;
+  };
+  for (const id of ["review", "fix", "pr"]) {
+    assert.strictEqual(
+      s.nodes[id]?.skipReason,
+      "blocked-dependency",
+      `F3: setup — ${id} must carry the blocked-dependency marker (the sweep wrote it)`,
+    );
+  }
+}
+
+await rerunNode({
+  runId: RUN_ID_F3,
+  nodeId: "implement",
+  homeDir: HOME_F2,
+  config,
+  executorFactory: () => createMockExecutor({ implement: "success" }), // RED proven this time
+});
+{
+  const state = readState(runDirF3);
+  assert.strictEqual(state.nodes["implement"]?.status, "done", "F3: the rerun landed implement done");
+  for (const id of ["review", "fix", "pr"]) {
+    assert.strictEqual(
+      state.nodes[id]?.status,
+      "pending",
+      `F3: ${id} was skipped only because implement had not finished — rerun must return it to pending, got ${String(state.nodes[id]?.status)}`,
+    );
+  }
+}
+
+const executedF3: string[] = [];
+await resumeRunCapturingExit({
+  runId: RUN_ID_F3,
+  homeDir: HOME_F2,
+  config,
+  executorFactory: () => {
+    const base = createMockExecutor({ review: "success", fix: "gate-pause", pr: "success" });
+    return async (id, node, ctx) => {
+      executedF3.push(id);
+      return base(id, node, ctx);
+    };
+  },
+});
+{
+  const state = readState(runDirF3);
+  assert.deepStrictEqual(executedF3, ["review", "fix"], "F3: resume ran review and fix (implement was not re-run); pr waits behind the fix gate");
+  assert.strictEqual(
+    state.status,
+    "paused",
+    `F3: the run must stop at the fix gate, NOT end done with review/fix/pr skipped — got ${state.status}`,
+  );
+  assert.strictEqual(state.nodes["implement"]?.status, "done", "F3: implement done");
+  assert.strictEqual(state.nodes["review"]?.status, "done", "F3: review done");
+  assert.strictEqual(state.nodes["fix"]?.status, "awaiting-gate", "F3: the first pause is the fix gate");
+  assert.strictEqual(state.nodes["pr"]?.status, "pending", "F3: pr not yet run");
+  assert.ok(!existsSync(join(HOME_F2, "active.lock")), "F3: the lock was released at the pause");
+}
+console.log(
+  "step F3 passed: rerun implement (RED proven) -> review/fix/pr back to pending -> resume ran them -> paused at the fix gate (not a false done)",
+);
+
+// ---------------------------------------------------------------------------
 // RUN I — rerunNode archives the failed attempt's artifacts (transcript.log/
 //          reflections.md/burn.json/etc) to <runDir>/<nodeId>-attempts/attempt-1/
 //          BEFORE wiping the live dir, instead of deleting them outright.
@@ -1443,7 +1522,7 @@ console.log(
 console.log(
   "\nall smoke-mock steps passed (Run A: feature happy path (first pause = fix), Run B: bugfix happy path, " +
     "Run C: night clean unattended, Run D/D2: night flagged (concern from implement / from the gate artifact), Run E: stale gate auto-skip, " +
-    "Run F: outcomeGate blocks the dependent on non-PASS, Run F2: shipped bugfix pipeline fails at implement when RED is not proven, Run G: noPlaceholders blocks a manually-approved " +
+    "Run F: outcomeGate blocks the dependent on non-PASS, Run F2: shipped bugfix pipeline fails at implement when RED is not proven, Run F3: rerun implement + resume re-enables the blocked review/fix/pr and stops at the fix gate, Run G: noPlaceholders blocks a manually-approved " +
     "gate, Run H: noPlaceholders blocks a night-mode auto-approved gate, Run I: rerunNode archives " +
     "the prior failed attempt before wiping, Run J: resumeRun archives an interrupted node's " +
     "partial artifacts before the retry re-executes, Run K: worktree adoption lifecycle)",

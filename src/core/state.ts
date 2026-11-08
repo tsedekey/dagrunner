@@ -122,6 +122,17 @@ export type NodeState = {
   /** Number of interrupt-driven retries consumed. Absent = 0. */
   interruptRetries?: number;
   /**
+   * Why a `skipped` node was skipped, ONLY when it was skipped because an upstream
+   * dependency never finished (runDag's end-of-run sweep of still-pending nodes).
+   * It is the one thing a rerun may undo: `rerunNode` returns exactly these nodes to
+   * `pending` so a `resume` runs them. A node skipped by its own rule — a `when`
+   * predicate, an optional node that failed, a stale gate — never carries it and stays
+   * skipped. Absent = legacy state written before v0.1.84 (or any other skip):
+   * a rerun leaves it untouched, exactly as before. DECISIONS.md §
+   * rerun-reenables-blocked-dependents.
+   */
+  skipReason?: "blocked-dependency";
+  /**
    * One entry per completed execution of this node (done / failed / paused at a
    * gate), in order. The top-level startedAt/endedAt/cost describe only the
    * latest execution; this keeps earlier iterations (amend / gate revise / rerun)

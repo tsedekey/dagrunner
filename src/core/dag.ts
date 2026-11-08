@@ -10,7 +10,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Node, Workflow, Ctx } from "./types.js";
-import type { NodeStatus, RunState } from "./state.js";
+import type { NodeState, NodeStatus, RunState } from "./state.js";
 import { accrueSessionCost, writeState } from "./state.js";
 import type { NodeExecutor } from "../runtime/mock-executor.js";
 
@@ -235,6 +235,54 @@ export function resetInterruptedNodes(
   return changed
     ? { ...state, nodes, updatedAt: new Date().toISOString() }
     : state;
+}
+
+// ---------------------------------------------------------------------------
+// reenableBlockedDependents
+// ---------------------------------------------------------------------------
+
+/**
+ * A node that was rerun may now finish; the transitive dependents the end-of-run sweep
+ * marked `skipped` (`skipReason: "blocked-dependency"`) were skipped only because it
+ * had not. Return them to `pending` (endedAt/error/skipReason cleared; cost, attempts
+ * and gateHistory kept) so a `resume` runs them instead of ending the run `done` with
+ * them still skipped. Anything else is returned untouched: `when`-skipped and
+ * optional-failed nodes (skipped by their own rule), `done` dependents, and legacy
+ * skips with no marker. If the node is still blocked by something else, resume's
+ * sweep simply marks it again. Pure; `rerunNode` archives the reset nodes' artifacts.
+ */
+export function reenableBlockedDependents(
+  workflow: Workflow,
+  state: RunState,
+  nodeId: string,
+): { state: RunState; reset: string[] } {
+  const down = new Set<string>([nodeId]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const n of workflow.nodes) {
+      if (!down.has(n.id) && (n.dependsOn ?? []).some((d) => down.has(d))) {
+        down.add(n.id);
+        grew = true;
+      }
+    }
+  }
+  const reset = workflow.nodes
+    .map((n) => n.id)
+    .filter(
+      (id) =>
+        id !== nodeId &&
+        down.has(id) &&
+        state.nodes[id]?.status === "skipped" &&
+        state.nodes[id]?.skipReason === "blocked-dependency",
+    );
+  if (reset.length === 0) return { state, reset };
+  const nodes = { ...state.nodes };
+  for (const id of reset) {
+    // Omit, never assign undefined — exactOptionalPropertyTypes forbids it.
+    const { endedAt: _e, error: _x, skipReason: _s, ...rest } = nodes[id] as NodeState;
+    nodes[id] = { ...rest, status: "pending" };
+  }
+  return { state: { ...state, nodes }, reset };
 }
 
 // ---------------------------------------------------------------------------
@@ -541,10 +589,13 @@ export async function runDag(
 
   // Bug 2: mark any remaining pending nodes as skipped (blocked-by-skipped-dep chains).
   // These are nodes that can never become ready because their only path was cut off.
+  // The marker is what lets `rerunNode` tell them from a `when`/optional skip and
+  // return them to pending (see reenableBlockedDependents).
   for (const [id, ns] of Object.entries(run.nodes)) {
     if (ns.status === "pending") {
       updateNode(id, {
         status: "skipped",
+        skipReason: "blocked-dependency",
         endedAt: new Date().toISOString(),
       });
     }

@@ -118,12 +118,18 @@ dagrun start bugfix --plan <approved fix-plan file> --companion-session "$CLAUDE
 `dagrun status <run> --json` reports `status: "failed"` and, per node, `error`. If `implement` failed with
 `outcome gate failed — red = "not-reproduced", expected one of: confirmed`, `implement` could not prove RED
 (bug already fixed, test missing/unrunnable/flaky, environment unavailable, or the plan's reproduction does
-not show the symptom). Nothing was implemented and review/fix/pr never ran. Report `reason` from
-`implement/red.json` and the evidence in `implement/red-evidence.md` to Eddie and stop: the plan is the
-contract, so the next step is a revised plan from the planning session and a NEW run. Do not
-`dagrun rerun … implement` + `resume` to push past it — the downstream nodes were marked skipped, so the
-resumed run would end `done` without review/fix/pr. `dagrun gate show <run>` on the failed run prints the
-failed node's error rather than a brief.
+not show the symptom). Nothing was implemented and review/fix/pr never ran (they are `skipped` — only
+because `implement` had not finished). Report `reason` from `implement/red.json` and the evidence in
+`implement/red-evidence.md` to Eddie and stop: the plan is the contract, so when the plan is the problem the
+next step is a revised plan from the planning session and a NEW run. When the cause was NOT the plan (for
+example the environment was unavailable) and Eddie agrees, `dagrun rerun <run> implement` followed by
+`dagrun resume <run>` is a real recovery: the rerun returns review/fix/pr to `pending`, the resume runs them,
+and the run stops at the fix gate like any other — it does not end `done` with them skipped. Nodes that were
+skipped by their own rule (a `when` condition, an optional node that failed) stay skipped. This holds only
+when the skips were recorded by dagrunner v0.1.84 or later: a run that already failed under an older version
+carries no marker saying why its nodes were skipped, so there the same rerun + resume still ends `done` with
+review/fix/pr `skipped` — check `dagrun status <run> --json`, and if they are `skipped` treat the run as
+unfinished and start a NEW run. `dagrun gate show <run>` on the failed run prints the failed node's error rather than a brief.
 
 ## Lesson promotion (rare — not every finding)
 
@@ -159,7 +165,7 @@ companion runs. Pick by run state:
 | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Paused at a gate (a node is `awaiting-gate`)                                                                         | `gate show`, then `gate decide` (propose, wait, `--confirm`). `gate open` / bare `dagrun resume <run>` in a real terminal re-enters the companion conversation; from a non-terminal, bare `resume` only prints the pause and decides nothing. `gate attach` only while paused. |
 | No gate pending (`gate show` says "not paused at a gate"; `gate open`/`attach`/`decide` error `not-awaiting`)        | `dagrun resume <run>` (no flags) is the only command that works: it reconciles crashed nodes and runs whatever is still `pending`.                                                                                                                                             |
-| Top-level `failed` but the nodes are `done`, after a node was completed out-of-band with `dagrun rerun <run> <node>` | `dagrun resume <run>` (no flags). It makes no decision; it just continues from current state and recomputes the run status. `rerun` never updates the top-level status and never retries/unskips other nodes.                                                                  |
+| Top-level `failed` but the nodes are `done`, after a node was completed out-of-band with `dagrun rerun <run> <node>` | `dagrun resume <run>` (no flags). It makes no decision; it just continues from current state and recomputes the run status. `rerun` never updates the top-level status; it does return nodes skipped only because the rerun node had not finished to `pending` (v0.1.84+), and nothing else.                                                                  |
 | Crashed (status `running`, node stuck `running`, no process)                                                         | `dagrun resume <run>` (no flags): stuck nodes are reset to `pending` (up to a retry cap) and re-run.                                                                                                                                                                           |
 
 ## Running in the background (`--detach`)
