@@ -28,6 +28,18 @@ export class WorktreeAdoptionError extends Error {
   }
 }
 
+/**
+ * A run's recorded worktree is gone (or is no longer a git worktree). Extends
+ * WorktreeAdoptionError so the CLI's existing "print the message, exit 1, no stack
+ * trace" catch (`orFailAdoption`) covers it with no new plumbing.
+ */
+export class MissingWorktreeError extends WorktreeAdoptionError {
+  constructor(message: string) {
+    super(message);
+    this.name = "MissingWorktreeError";
+  }
+}
+
 export type AdoptedWorktree = {
   /** realpath of the worktree root. */
   worktreePath: string;
@@ -190,6 +202,49 @@ export function validateAdoptedWorktree(opts: {
   }
 
   return { worktreePath: wt.toplevel, branch };
+}
+
+/**
+ * Fail loud when a run's recorded worktree no longer exists. dagrunner ADOPTS the
+ * worktree (workmux owns it), so `wm rm` / `wm rm --gone` / `wm rm --all` can delete
+ * it out from under a live run — and the seeding steps of `resume`, `rerun` and
+ * `gate attach --reseed` would silently RE-CREATE the path as a bare `.claude/`
+ * directory (`cpSync` makes parents) and run nodes there. Call this BEFORE any side
+ * effect (lock, state write, seeding, archiving). Read-only commands (status,
+ * report, gate show) deliberately do not call it. Legacy runs (no `worktreeOrigin`,
+ * worktree under `<home>/worktrees`) are checked the same way.
+ *
+ * "Exists" = a directory containing a `.git` entry (a file in a linked worktree, a
+ * directory in a main checkout): a leftover plain directory (for instance the
+ * `.claude/` an earlier unguarded resume re-created) is not a worktree.
+ *
+ * `devharnessSrc` only personalises the recovery command text.
+ */
+export function assertRunWorktreeExists(
+  run: { runId: string; worktreePath: string; branch: string },
+  devharnessSrc?: string,
+): void {
+  const p = run.worktreePath;
+  const isDir = existsSync(p) && statSync(p).isDirectory();
+  if (isDir && existsSync(join(p, ".git"))) return;
+  const src = devharnessSrc ?? "<DEVHARNESS_SRC>";
+  const what = isDir
+    ? `"${p}" exists but is not a git worktree (no .git there — a leftover directory)`
+    : `"${p}" no longer exists`;
+  throw new MissingWorktreeError(
+    `dagrun: run "${run.runId}" cannot continue — its worktree ${what}.\n` +
+      `It was removed outside dagrunner (for example by \`wm rm\`), and dagrunner cannot run a node without it. ` +
+      `Nothing was changed. Either:\n` +
+      `  1. recreate a worktree for the recorded branch "${run.branch}" at that same path, then retry` +
+      (isDir ? ` (remove the leftover directory first)` : ``) +
+      `:\n` +
+      `       # if the branch was deleted too (\`wm rm\` deletes it unless run with -k), recreate it first at the run's last\n` +
+      `       # commit (origin/${run.branch} if it was pushed, else the worktreeHead in <run dir>/<gate>/gate.json or the reflog):\n` +
+      `       git -C "${src}" branch "${run.branch}" <commit>\n` +
+      `       git -C "${src}" worktree prune   # only if git still lists the removed path\n` +
+      `       git -C "${src}" worktree add "${p}" "${run.branch}"\n` +
+      `  2. give up on the run: dagrun abort ${run.runId}`,
+  );
 }
 
 /**

@@ -54,7 +54,11 @@ import type {
   GateHistoryEntry,
 } from "../core/state.js";
 import type { ExecutionCtx, NodeExecutor } from "./mock-executor.js";
-import { validateAdoptedWorktree, type AdoptedWorktree } from "./worktree.js";
+import {
+  assertRunWorktreeExists,
+  validateAdoptedWorktree,
+  type AdoptedWorktree,
+} from "./worktree.js";
 
 type ExecutorFactory = (
   config: DagrunnerConfig,
@@ -1325,8 +1329,14 @@ export async function resumeRun(opts: {
   // lock (dead pid) falls through and is recovered as before.
   assertNoLiveDriver(homeDir, runId);
 
+  // The adopted worktree may have been removed from under the run (`wm rm`): fail
+  // loud BEFORE reconcile/lock/seeding — the sibling seed below would otherwise
+  // re-create the deleted path as a bare .claude/ dir and run nodes in it.
+  const loaded = readState(stateFile);
+  assertRunWorktreeExists(loaded, config.DEVHARNESS_SRC);
+
   // Reconcile: running → failed (crash recovery). Then re-acquire lock.
-  let state = reconcileRunningNodes(readState(stateFile));
+  let state = reconcileRunningNodes(loaded);
   releaseLock(homeDir);
   acquireLock(homeDir, runId);
   writeState(stateFile, state);
@@ -2136,6 +2146,9 @@ export async function rerunNode(opts: {
   }
 
   const state = readState(stateFile);
+  // Before ANY side effect: the re-seed below, the attempt archive and the artifact
+  // wipe all assume the adopted worktree still exists (see assertRunWorktreeExists).
+  assertRunWorktreeExists(state, config.DEVHARNESS_SRC);
   const workflow = workflowFromState(state);
   const node = workflow.nodes.find((n) => n.id === nodeId);
 

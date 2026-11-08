@@ -566,4 +566,92 @@ async function failedStart(over: Record<string, string>) {
   say("14c passed: detached decides drove the run to done; status --json done/not stale; events.jsonl complete and ordered");
 }
 
+// ===========================================================================
+// 15. The adopted worktree was removed from under a live run (`wm rm`): resume / rerun / gate attach
+//     --reseed / confirmed gate decide FAIL LOUD through the REAL CLI — exit 1, the message on stderr,
+//     no stack trace, nothing detached, state byte-identical, the deleted path NOT re-created — while
+//     read-only commands (status --json, gate show, a gate-decide PROPOSAL) keep working. Then the
+//     recovery the message names (prune + `git worktree add` at the same path) really works.
+//     The --detach cases matter most: the driver always confirms with --detach, and a throw inside the
+//     detached child would only reach driver.log while status --json kept saying awaiting-gate.
+// ===========================================================================
+{
+  const G = await newRun(); // paused at the fix gate with a companion
+  for (const d of ["inbox", "store"]) mkdirSync(join(G.home, d), { recursive: true });
+  writeFileSync(join(G.home, "config.json"), JSON.stringify({ DEVHARNESS_SRC: TOY_REPO }));
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    DAGRUNNER_HOME: G.home,
+    CLAUDE_CONFIG_DIR: CFG,
+    ANTHROPIC_API_KEY: "smoke-dummy",
+    DAGRUN_MOCK_SCENARIOS: JSON.stringify({ implement: "success", review: "success", fix: "gate-pause", pr: "gate-pause" }),
+  };
+  delete env["CLAUDE_CODE_SESSION_ID"];
+  const CLI = join(__dirname, "..", "..", "src", "cli", "cli.ts");
+  const cli = (args: string[]) =>
+    spawnSync(process.execPath, ["--import", "tsx", CLI, ...args], { env, encoding: "utf8", cwd: join(__dirname, "..", "..") });
+
+  const st0 = stateOf(G.runDir);
+  const wt = st0.worktreePath;
+  const branch = st0.branch;
+  // `wm rm` deletes the directory; git still lists it as a (prunable) worktree.
+  rmSync(wt, { recursive: true, force: true });
+  assert.ok(!existsSync(wt));
+  const stateBefore = readFileSync(join(G.runDir, "state.json"), "utf8");
+  const noStack = (stderr: string): void => assert.doesNotMatch(stderr, /\n\s+at /, `no stack trace expected: ${stderr}`);
+  const refused = (r: ReturnType<typeof cli>, what: string): void => {
+    assert.equal(r.status, 1, `${what} must exit 1: ${r.stdout}${r.stderr}`);
+    assert.ok(r.stderr.includes(wt), `${what}: names the missing path`);
+    assert.ok(r.stderr.includes(`"${G.runId}"`), `${what}: names the run`);
+    assert.match(r.stderr, /removed outside dagrunner/);
+    assert.match(r.stderr, /dagrun abort /);
+    noStack(r.stderr);
+    assert.doesNotMatch(r.stdout, /detached/, `${what}: nothing was detached`);
+    assert.equal(readFileSync(join(G.runDir, "state.json"), "utf8"), stateBefore, `${what}: state.json byte-identical`);
+    assert.ok(!existsSync(join(G.home, "active.lock")), `${what}: no lock taken`);
+    assert.ok(!existsSync(join(G.runDir, "driver.log")), `${what}: no detached driver was started`);
+    assert.ok(!existsSync(wt), `${what}: the deleted worktree was NOT re-created`);
+  };
+
+  refused(cli(["resume", G.runId, "--detach"]), "resume --detach");
+  refused(cli(["resume", G.runId]), "resume");
+  refused(cli(["rerun", G.runId, "fix"]), "rerun");
+  assert.ok(!existsSync(join(G.runDir, "fix-attempts")), "rerun archived nothing");
+  refused(cli(["gate", "attach", G.runId, "--session", SESSION, "--replace", "--reseed"]), "gate attach --reseed");
+
+  // Read-only commands keep working on the same run.
+  const sj = cli(["status", G.runId, "--json"]);
+  assert.equal(sj.status, 0, sj.stderr);
+  assert.equal((JSON.parse(sj.stdout) as { awaitingGate: { nodeId: string } | null }).awaitingGate?.nodeId, "fix");
+  const gs = cli(["gate", "show", G.runId]);
+  assert.equal(gs.status, 0, gs.stderr);
+  const missingBrief = JSON.parse(gs.stdout) as GateBrief;
+  assert.equal(missingBrief.gateNodeId, "fix");
+  assert.equal(missingBrief.worktreeHead, null, "no HEAD in a removed worktree — null, not a crash (so the gate revision differs from the pre-removal one)");
+  assert.ok(!existsSync(wt), "read-only commands did not re-create the worktree");
+
+  // A decide PROPOSAL changes nothing and still works; its confirm (the detached path) is refused up front.
+  const decideArgs = (extra: string[] = []) => ["gate", "decide", G.runId, "--gate", "fix", "--revision", missingBrief.revision, "--action", "approve", "--session", SESSION, ...extra];
+  const prop = cli(decideArgs());
+  assert.equal(prop.status, 0, prop.stderr);
+  const cid = /--confirm ([0-9a-f]{16})/.exec(prop.stdout)?.[1] as string;
+  assert.ok(cid, "proposal printed a confirm id");
+  const stateAfterProposal = readFileSync(join(G.runDir, "state.json"), "utf8");
+  assert.equal(stateAfterProposal, stateBefore, "a proposal never touches state");
+  refused(cli([...decideArgs(["--confirm", cid]), "--detach"]), "gate decide --confirm --detach");
+  refused(cli(decideArgs(["--confirm", cid])), "gate decide --confirm");
+
+  // The recovery the message offers works: git still lists the path until pruned, then `worktree add` at the same path.
+  const gitTry = (...a: string[]) => spawnSync("git", ["-C", TOY_REPO, ...a], { encoding: "utf8" });
+  const early = gitTry("worktree", "add", wt, branch);
+  assert.notEqual(early.status, 0, "git refuses a missing-but-registered path until pruned — which is why the message names prune");
+  assert.equal(gitTry("worktree", "prune").status, 0);
+  const re = gitTry("worktree", "add", wt, branch);
+  assert.equal(re.status, 0, re.stderr);
+  const ok = cli(["gate", "attach", G.runId, "--session", SESSION, "--replace", "--reseed"]);
+  assert.equal(ok.status, 0, `after recreating the worktree the same command works: ${ok.stderr}`);
+  assert.ok(existsSync(join(wt, ".claude", "commands", "fix.md")), "--reseed seeded the recreated worktree");
+  say("15 passed: removed worktree -> resume/resume --detach/rerun/gate attach --reseed/gate decide --confirm [--detach] exit 1 with the message (no stack, no detach, state untouched, path not re-created); status/gate show/proposal still work; prune + git worktree add at the same path recovers");
+}
+
 console.log("smoke-gates: ALL PASSED");

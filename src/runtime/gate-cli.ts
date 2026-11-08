@@ -30,6 +30,7 @@ import { featureWorkflow } from "../workflow/feature-workflow.js";
 import type { Workflow } from "../core/types.js";
 import { awaitingGateId, emitGateBrief, sessionConfigDirs } from "./gate-files.js";
 import { resumeRun } from "./run-engine.js";
+import { assertRunWorktreeExists } from "./worktree.js";
 
 function load(homeDir: string, runId: string) {
   const runDir = join(homeDir, "runs", runId);
@@ -254,6 +255,11 @@ export async function gateDecide(a: DecideArgs): Promise<number> {
     return err(`refused [confirm-mismatch] --confirm ${a.confirm} does not match this exact decision (${id}); re-propose`);
   }
 
+  // The confirmed decision runs nodes in the run's worktree. Refuse HERE if it is gone: with
+  // --detach the throw would otherwise land in a detached child's driver.log while state.json
+  // still says awaiting-gate, and the driver polling `status --json` would wait forever.
+  assertRunWorktreeExists(r.state, a.config.DEVHARNESS_SRC);
+
   if (a.detach !== undefined) return a.detach(id);
 
   await resumeRun({
@@ -288,6 +294,9 @@ export function gateAttach(args: {
   if (awaitingGateId(r.state) === undefined) {
     return err(`run is "${r.state.status}" and no node is awaiting a gate — attach only while paused at a gate`);
   }
+  // --reseed copies into the worktree: refuse before the association is written, so a
+  // failed attach is not half-applied. Plain attach never touches the worktree.
+  if (args.reseed === true) assertRunWorktreeExists(r.state, args.config.DEVHARNESS_SRC);
   const dirs = args.configDirs ?? sessionConfigDirs(args.config, r.state);
   const foundDir = findSessionConfigDir(args.session, dirs);
   if (foundDir === null) {

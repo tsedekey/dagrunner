@@ -52,6 +52,7 @@ import {
 import { readState, writeState } from "../core/state.js";
 import { cleanupAll, cleanupRun } from "../runtime/cleanup.js";
 import {
+  assertRunWorktreeExists,
   resolveWorktreeArg,
   validateAdoptedWorktree,
   WorktreeAdoptionError,
@@ -363,6 +364,14 @@ async function cmdResume(argv: string[]): Promise<void> {
       process.exit(1);
     }
     assertNoLiveDriver(homeDir, runId);
+    // The child would throw on a removed worktree into driver.log while state.json still
+    // says paused — refuse here, synchronously, like `start --detach` does for adoption.
+    const stateFileR = join(homeDir, "runs", runId, "state.json");
+    if (existsSync(stateFileR)) {
+      await orFailAdoption(() =>
+        assertRunWorktreeExists(readState(stateFileR), config.DEVHARNESS_SRC),
+      );
+    }
     detachSelf(homeDir, runId, ["resume", ...argv]);
     return;
   }
@@ -383,14 +392,16 @@ async function cmdResume(argv: string[]): Promise<void> {
   }
 
   const mockFactoryR = mockExecutorFactoryFromEnv();
-  await resumeRun({
-    runId,
-    homeDir,
-    config,
-    ...(mockFactoryR !== undefined ? { executorFactory: mockFactoryR } : {}),
-    ...(approve ? { approve: true } : {}),
-    ...(rejectComment !== undefined ? { rejectComment } : {}),
-  });
+  await orFailAdoption(() =>
+    resumeRun({
+      runId,
+      homeDir,
+      config,
+      ...(mockFactoryR !== undefined ? { executorFactory: mockFactoryR } : {}),
+      ...(approve ? { approve: true } : {}),
+      ...(rejectComment !== undefined ? { rejectComment } : {}),
+    }),
+  );
 }
 
 async function cmdGate(argv: string[]): Promise<void> {
@@ -433,15 +444,17 @@ async function cmdGate(argv: string[]): Promise<void> {
       process.stderr.write(`dagrun gate attach: --session <id> is required\n`);
       process.exit(1);
     }
-    code = gateAttach({
-      homeDir,
-      config,
-      runId,
-      session,
-      reconstructed: hasFlag(argv, "--reconstructed"),
-      replace: hasFlag(argv, "--replace"),
-      reseed: hasFlag(argv, "--reseed"),
-    });
+    code = await orFailAdoption(() =>
+      gateAttach({
+        homeDir,
+        config,
+        runId,
+        session,
+        reconstructed: hasFlag(argv, "--reconstructed"),
+        replace: hasFlag(argv, "--replace"),
+        reseed: hasFlag(argv, "--reseed"),
+      }),
+    );
   } else {
     const gate = flagValue(argv, "--gate");
     const revision = flagValue(argv, "--revision");
@@ -469,7 +482,7 @@ async function cmdGate(argv: string[]): Promise<void> {
       process.exit(1);
     }
     const mockFactoryG = mockExecutorFactoryFromEnv();
-    code = await gateDecide({
+    code = await orFailAdoption(() => gateDecide({
       ...(mockFactoryG !== undefined ? { executorFactory: mockFactoryG } : {}),
       ...(detach
         ? {
@@ -490,7 +503,7 @@ async function cmdGate(argv: string[]): Promise<void> {
       ...(comment !== undefined ? { comment } : {}),
       ...(session !== undefined ? { session } : {}),
       ...(confirm !== undefined ? { confirm } : {}),
-    });
+    }));
   }
   if (code !== 0) process.exit(code);
 }
@@ -646,7 +659,7 @@ async function cmdRerun(argv: string[]): Promise<void> {
   const homeDir = resolveHome();
   const config = resolveConfig(homeDir);
   assertAuth(config.claudeConfigDir);
-  await rerunNode({ runId, nodeId, homeDir, config });
+  await orFailAdoption(() => rerunNode({ runId, nodeId, homeDir, config }));
 }
 
 function cmdAbort(argv: string[]): void {
