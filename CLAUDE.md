@@ -16,8 +16,8 @@ A thin **TypeScript** binary (`dagrun`) that orchestrates a DAG of Claude Code a
 
 **Do not reinvent wheels. Lean on Claude Code.** Build only what has no native primitive that
 survives across separate processes/worktrees: the DAG executor, conditional skip, checkpoint-and-exit
-gates, worktree lifecycle, per-run artifacts. Everything inside a single agent run **reuses** Claude
-Code (Agent SDK node execution, subagent fan-out, in-session Stop-hook loops, hooks, structured
+gates, worktree adoption and seeding (workmux creates the worktree), per-run artifacts. Everything
+inside a single agent run **reuses** Claude Code (Agent SDK node execution, subagent fan-out, in-session Stop-hook loops, hooks, structured
 output, session resume, slash-command prompts). When tempted to add a library, framework, or tool —
 stop. The answer is almost always a native Claude Code mechanism.
 
@@ -32,7 +32,9 @@ stop. The answer is almost always a native Claude Code mechanism.
 
 ## Home layout (XDG, crev-derived)
 
-- State/artifacts/worktrees/inbox/store: `~/.local/share/dagrunner/` (override via `DAGRUNNER_HOME`).
+- State/artifacts/inbox/store: `~/.local/share/dagrunner/` (override via `DAGRUNNER_HOME`). Worktrees are
+  not created here any more: a run adopts the worktree it is started in (workmux creates it; run from
+  inside it or pass `--worktree`). Only runs made before v0.1.80 keep theirs under `worktrees/`.
 - Cache: `~/.cache/dagrunner/`. Binary: `~/.local/bin/dagrun`.
 - Machine config: `~/.local/share/dagrunner/config.json`. `DEVHARNESS_SRC` is mandatory-explicit.
 - Secrets live in env / keychain only — never written to the run tree, never logged.

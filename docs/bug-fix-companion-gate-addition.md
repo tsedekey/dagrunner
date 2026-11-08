@@ -150,8 +150,10 @@ in which you cannot answer Eddie. Add `--detach` to either (and to `resume`, whe
 dagrun spawns the same command as a detached child (output in `<run>/driver.log`), prints the run id, pid and
 log path, and exits 0 at once. The child is the only process that drives the run and takes the run lock.
 
-- Start: `dagrun start bugfix --plan <file> --companion-session "$CLAUDE_CODE_SESSION_ID" --detach`.
-  `status` may say "no state.json yet" for a few seconds while the worktree is created — retry, or read `driver.log`.
+- Start: `dagrun start bugfix --plan <file> --companion-session "$CLAUDE_CODE_SESSION_ID" --detach`, run from
+  inside the linked worktree the run should adopt (or add `--worktree <path>`); dagrunner no longer creates one.
+  `status` may say "no state.json yet" for a few seconds while the detached child validates and seeds the
+  worktree — retry, or read `driver.log`.
 - Confirm a decision: `dagrun gate decide … --confirm <id> --detach` (`--detach` without `--confirm` is refused;
   a proposal changes nothing and returns immediately anyway).
 - Poll: `dagrun status <run> --json` (read-only). Read `status` — `running` | `awaiting-gate` | `done` |
