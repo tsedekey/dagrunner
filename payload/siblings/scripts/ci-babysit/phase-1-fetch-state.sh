@@ -5,7 +5,7 @@ BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 # Same precedence as phase 0: --run-id <id> in the args string ($1) > DAGRUN_RUN_ID > sanitized branch.
 RUN_ID_ARG=$(echo "${1:-}" | sed -n 's/.*--run-id[[:space:]]*\([^[:space:]]*\).*/\1/p')
 RUN_ID="${RUN_ID_ARG:-${DAGRUN_RUN_ID:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-')}}"
-DAGRUNNER_HOME="${DAGRUNNER_HOME:-$HOME/.local/share/dagrunner}"
+DAGRUNNER_HOME="${DAGRUNNER_HOME:-$HOME/.local/share/camunda/dagrunner}"
 ARTIFACTS_DIR="$DAGRUNNER_HOME/runs/$RUN_ID/ci-babysit"
 STATE_FILE="$ARTIFACTS_DIR/ci-babysit-state.json"
 TICK_FILE="$ARTIFACTS_DIR/ci-babysit-tick.json"

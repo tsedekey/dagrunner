@@ -73,6 +73,32 @@ test("resolveUiHome: returns an explicit --home path that exists", () => {
   assert.equal(resolveUiHome(home), home);
 });
 
+test("resolveUiHome: an un-moved install (old default only, no override) throws the home-moved message; --home bypasses it", () => {
+  const fakeHome = mkdtempSync(join(tmpdir(), "dr-ui-fakehome-"));
+  const origHome = process.env["HOME"];
+  const origEnv = process.env["DAGRUNNER_HOME"];
+  process.env["HOME"] = fakeHome;
+  delete process.env["DAGRUNNER_HOME"];
+  try {
+    mkdirSync(join(fakeHome, ".local", "share", "dagrunner", "runs"), { recursive: true });
+    assert.throws(
+      () => resolveUiHome(),
+      (e: unknown) =>
+        e instanceof Error &&
+        /moved/.test(e.message) &&
+        e.message.includes(join(fakeHome, ".local", "share", "camunda", "dagrunner")) &&
+        e.message.includes(join(fakeHome, ".local", "share", "dagrunner")) &&
+        e.message.includes("scripts/move-home.mjs"),
+    );
+    const explicit = mkdtempSync(join(tmpdir(), "dr-ui-explicit-"));
+    assert.equal(resolveUiHome(explicit), explicit);
+  } finally {
+    if (origHome !== undefined) process.env["HOME"] = origHome;
+    else delete process.env["HOME"];
+    if (origEnv !== undefined) process.env["DAGRUNNER_HOME"] = origEnv;
+  }
+});
+
 test("isValidRunId: rejects path traversal and separators, accepts normal run ids", () => {
   assert.equal(isValidRunId("9-1"), true);
   assert.equal(isValidRunId("toy-plan-1700000000000-abc123"), true);

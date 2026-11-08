@@ -27,7 +27,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { platform } from "node:os";
-import { computeHomePath } from "../config/xdg.js";
+import { computeHomePath, legacyHomeMovedMessage } from "../config/xdg.js";
 import { discoverRuns } from "./discover.js";
 import { buildRunSnapshot } from "./run-snapshot.js";
 import { renderPage } from "./page.js";
@@ -39,6 +39,9 @@ import { formatSse, formatSseComment } from "./sse.js";
 /** `dagrun ui --home <dir>` resolution: unlike `resolveHome()`, honours an explicit flag. Fails loud (throws), never a silent cwd fallback. */
 export function resolveUiHome(homeFlag?: string): string {
   const home = computeHomePath(homeFlag);
+  // An un-moved install (old default present, new absent, no override) is its own loud error.
+  const moved = legacyHomeMovedMessage(homeFlag);
+  if (moved !== null) throw new Error(moved);
   if (!existsSync(home)) {
     throw new Error(
       `dagrun ui: home not found at "${home}" (${homeFlag !== undefined && homeFlag !== "" ? "--home" : "DAGRUNNER_HOME / XDG default"}). Run \`dagrun init\` first, or pass --home <dir>.`,

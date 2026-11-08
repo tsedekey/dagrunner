@@ -164,7 +164,7 @@ export function buildSeededSettings(opts: {
    */
   devharnessSrc?: string;
   /**
-   * Dagrunner home (DAGRUNNER_HOME, e.g. ~/.local/share/dagrunner). When
+   * Dagrunner home (DAGRUNNER_HOME, e.g. ~/.local/share/camunda/dagrunner). When
    * provided, added to additionalDirectories so nodes can read the durable
    * store (e.g. reflection-log.jsonl) — a sibling of runDir that the runDir
    * entry alone does not cover.

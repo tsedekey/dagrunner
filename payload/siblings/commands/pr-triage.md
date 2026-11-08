@@ -29,7 +29,7 @@ pr-triage fails loud if either is gone on the next tick. Outside a dagrunner-man
 other git checkout) this constraint does not apply — there is no `dagrun cleanup` to avoid.
 
 **Coexistence with ci-babysit:** both run on the same PR. pr-triage owns
-`~/.local/share/dagrunner/runs/<run-id>/pr-triage/` only. It never touches the branch, never
+`$DAGRUNNER_HOME/runs/<run-id>/pr-triage/` (`$DAGRUNNER_HOME` defaults to `~/.local/share/camunda/dagrunner`) only. It never touches the branch, never
 pushes, never rebases — those are ci-babysit's domain.
 
 **gh comment surface verified from live camunda/camunda PRs (gh v2.93.0):**
@@ -70,7 +70,7 @@ zsh "$SCRIPT_DIR/phase-0-bootstrap.sh" "$ARGUMENTS"
 - [ ] Running on a real branch (not detached HEAD) inside a git checkout
 - [ ] PR number discovered (non-empty) for that branch
 - [ ] `$ARTIFACTS_DIR/pr-triage-state.json` written with `{run_id, pr_number, branch, worktree, repo, artifacts}`
-      where `ARTIFACTS_DIR = ~/.local/share/dagrunner/runs/<run-id>/pr-triage/`
+      where `ARTIFACTS_DIR = $DAGRUNNER_HOME/runs/<run-id>/pr-triage/`
 
 ---
 
@@ -119,7 +119,8 @@ If the script exits 0 with "tick is a no-op" output, skip to Phase 5. Otherwise 
 # same precedence as every phase script: --run-id in $ARGUMENTS > DAGRUN_RUN_ID > sanitized branch
 RUN_ID_ARG=$(echo "$ARGUMENTS" | sed -n 's/.*--run-id[[:space:]]*\([^[:space:]]*\).*/\1/p')
 RUN_ID="${RUN_ID_ARG:-${DAGRUN_RUN_ID:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-')}}"
-ARTIFACTS_DIR="${DAGRUN_ARTIFACTS:-$HOME/.local/share/dagrunner/runs/${RUN_ID}/pr-triage}"
+DAGRUNNER_HOME="${DAGRUNNER_HOME:-$HOME/.local/share/camunda/dagrunner}"
+ARTIFACTS_DIR="${DAGRUN_ARTIFACTS:-$DAGRUNNER_HOME/runs/${RUN_ID}/pr-triage}"
 TRIAGE_STATE="$ARTIFACTS_DIR/triage-state.json"
 TICK_FILE="$ARTIFACTS_DIR/pr-triage-tick.json"
 ```
@@ -485,7 +486,7 @@ Each tick is independent and idempotent:
 ## Reflections
 
 If this tick encountered anything unexpected that would prevent wasted time on a future run,
-append one JSON line to `~/.local/share/dagrunner/store/reflection-log.jsonl`:
+append one JSON line to `$DAGRUNNER_HOME/store/reflection-log.jsonl` (default `~/.local/share/camunda/dagrunner`):
 
 ```bash
 printf '%s\n' "$(jq -n \
@@ -494,7 +495,7 @@ printf '%s\n' "$(jq -n \
   --arg run_id "${DAGRUN_RUN_ID:-unknown}" \
   --arg body "## $(date -u +%Y-%m-%d)\n\n**Symptom:** ...\n**Root cause:** ...\n**Resolution:** ...\n**Watch for:** ..." \
   '{ts: $ts, source: $source, run_id: $run_id, body: $body}')" \
-  >> ~/.local/share/dagrunner/store/reflection-log.jsonl
+  >> "${DAGRUNNER_HOME:-$HOME/.local/share/camunda/dagrunner}/store/reflection-log.jsonl"
 ```
 
 Only log if it adds knowledge not already in the log. Routine classification decisions (bot nit,

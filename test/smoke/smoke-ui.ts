@@ -6,7 +6,7 @@
  * paused at its first (fix) gate, one driven to `done`), starts the real
  * `startUiServer` on an ephemeral port against that home, hits every JSON/SSE
  * endpoint and the HTML page, and proves the server never wrote to either run
- * directory. Does NOT touch `~/.local/share/dagrunner` or run `59478-2` — see
+ * directory. Does NOT touch `~/.local/share/camunda/dagrunner` or run `59478-2` — see
  * DECISIONS.md § agent-driven-slice3-ui for the separate, manual, read-only
  * pass against real data.
  *

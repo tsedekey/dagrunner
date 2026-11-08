@@ -52,7 +52,7 @@ zsh "$SCRIPT_DIR/phase-0-bootstrap.sh" "$ARGUMENTS"
 
 - [ ] Running on a real branch (not detached HEAD) inside a git checkout
 - [ ] PR number discovered (non-empty) for that branch
-- [ ] `~/.local/share/dagrunner/runs/{run_id}/ci-babysit/ci-babysit-state.json` written
+- [ ] `$DAGRUNNER_HOME/runs/{run_id}/ci-babysit/ci-babysit-state.json` written (`$DAGRUNNER_HOME` defaults to `~/.local/share/camunda/dagrunner`)
 
 ---
 
@@ -72,7 +72,7 @@ zsh "$SCRIPT_DIR/phase-1-fetch-state.sh" "$ARGUMENTS"
 - [ ] Base branch state fetched
 - [ ] Check conclusions fetched (or empty with warning)
 - [ ] Transitions computed
-- [ ] `~/.local/share/dagrunner/runs/{run_id}/ci-babysit/ci-babysit-tick.json` written
+- [ ] `$DAGRUNNER_HOME/runs/{run_id}/ci-babysit/ci-babysit-tick.json` written
 
 ---
 
@@ -277,7 +277,7 @@ Each tick is independent and idempotent:
 ## Learnings
 
 If this tick encountered anything unexpected that is not already captured in prior reflections,
-append one JSON line to `~/.local/share/dagrunner/store/reflection-log.jsonl`:
+append one JSON line to `$DAGRUNNER_HOME/store/reflection-log.jsonl` (default `~/.local/share/camunda/dagrunner`):
 
 ```json
 {

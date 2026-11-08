@@ -2,7 +2,7 @@
  * settings-seed.test.ts — co-located unit tests for buildSeededSettings,
  * readSourcePassthrough, and readWorkProfileMcpServers.
  *
- * All FS fixtures use mkdtempSync — never touches ~/.local/share/dagrunner.
+ * All FS fixtures use mkdtempSync — never touches ~/.local/share/camunda/dagrunner.
  *
  * Run with:
  *   node --test --import tsx src/config/settings-seed.test.ts
@@ -150,7 +150,7 @@ test("buildSeededSettings: devharnessSrc absent when not provided", () => {
 
 test("buildSeededSettings: dagrunnerHome in additionalDirectories when provided", () => {
   const dir = mkdtempSync(join(tmpdir(), "dr-ss-"));
-  const dagrunnerHome = join(dir, ".local", "share", "dagrunner");
+  const dagrunnerHome = join(dir, ".local", "share", "camunda", "dagrunner");
 
   const settings = buildSeededSettings({
     runDir: join(dir, "run"),
@@ -457,7 +457,7 @@ test("buildSeededSettings: golden snapshot (fixed inputs)", () => {
       "work-mcp": { command: "work-cmd", type: "stdio" },
     },
     devharnessSrc: "/test/devharness/src",
-    dagrunnerHome: "/test/home/.local/share/dagrunner",
+    dagrunnerHome: "/test/home/.local/share/camunda/dagrunner",
     // claudeConfigDir omitted — reads real FS; breaks hermeticity
   });
 

@@ -1,7 +1,8 @@
 #!/bin/zsh
 set -euo pipefail
 
-REFLECTION_LOG="$HOME/.local/share/dagrunner/store/reflection-log.jsonl"
+DAGRUNNER_HOME="${DAGRUNNER_HOME:-$HOME/.local/share/camunda/dagrunner}"
+REFLECTION_LOG="$DAGRUNNER_HOME/store/reflection-log.jsonl"
 if [ -f "$REFLECTION_LOG" ]; then
   PRIOR=$(jq -r 'select(.source == "ci-babysit") | "[\(.ts)]\n\(.body)"' "$REFLECTION_LOG" 2>/dev/null || true)
   if [ -n "$PRIOR" ]; then
@@ -56,7 +57,7 @@ if [ -z "$PR_NUMBER" ]; then
   exit 1
 fi
 
-ARTIFACTS_DIR="$HOME/.local/share/dagrunner/runs/${RUN_ID}/ci-babysit"
+ARTIFACTS_DIR="$DAGRUNNER_HOME/runs/${RUN_ID}/ci-babysit"
 mkdir -p "$ARTIFACTS_DIR"
 STATE_FILE="$ARTIFACTS_DIR/ci-babysit-state.json"
 TICK_FILE="$ARTIFACTS_DIR/ci-babysit-tick.json"

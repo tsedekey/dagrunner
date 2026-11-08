@@ -48,6 +48,12 @@ gate — run it before any commit. `npm run smoke:live` runs the real 6-step SDK
 
 Machine setup (XDG home, `DEVHARNESS_SRC`, secrets) is documented in `CLAUDE.md`.
 
+The default home is `~/.local/share/camunda/dagrunner` (override: `DAGRUNNER_HOME` or `--home`). Upgrading
+from v0.1.84 or earlier, where it was `~/.local/share/dagrunner`? `dagrun` refuses to run until you move it
+once: `node scripts/move-home.mjs --dry-run` previews, `node scripts/move-home.mjs` does it. If legacy
+worktrees remain under the old `worktrees/` the script refuses; clear them first with
+`DAGRUNNER_HOME=~/.local/share/dagrunner dagrun cleanup --all` (the plain command refuses until the home is moved).
+
 ## How self-changes get made
 
 Agree the change in conversation with a Claude Code session rooted in this repo, then either

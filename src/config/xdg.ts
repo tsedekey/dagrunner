@@ -8,9 +8,16 @@
  *   check, then creates it.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { parseReviewersConfig, type ReviewersConfig } from "./reviewers-config.js";
 
 // ---------------------------------------------------------------------------
@@ -40,6 +47,31 @@ export type DagrunnerConfig = {
 // ---------------------------------------------------------------------------
 
 /**
+ * The ONE definition of the default home: everything Eddie's agents leave behind
+ * lives under ~/.local/share/camunda/ (v0.1.85, DECISIONS.md § home-under-camunda).
+ */
+export function defaultHomePath(): string {
+  return join(homedir(), ".local", "share", "camunda", "dagrunner");
+}
+
+/** The pre-v0.1.85 default home. Only ever read to detect an un-moved install. */
+export function legacyHomePath(): string {
+  return join(homedir(), ".local", "share", "dagrunner");
+}
+
+/** Absolute path of scripts/move-home.mjs in THIS install (same depth from src/ and dist/). */
+export function moveHomeScriptPath(): string {
+  return fileURLToPath(new URL("../../scripts/move-home.mjs", import.meta.url));
+}
+
+/** True when --home or DAGRUNNER_HOME names the home explicitly (empty counts as unset). */
+function hasHomeOverride(homeFlag?: string): boolean {
+  if (homeFlag !== undefined && homeFlag !== "") return true;
+  const envHome = process.env["DAGRUNNER_HOME"];
+  return envHome !== undefined && envHome !== "";
+}
+
+/**
  * Compute the home path from optional flag, env, or XDG default.
  * NEVER checks existence — callers that need existence use resolveHome().
  */
@@ -51,7 +83,56 @@ export function computeHomePath(homeFlag?: string): string {
   if (envHome !== undefined && envHome !== "") {
     return envHome;
   }
-  return join(homedir(), ".local", "share", "dagrunner");
+  return defaultHomePath();
+}
+
+function shellQuote(s: string): string {
+  return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * Fail-loud detection of an un-moved install: no --home / DAGRUNNER_HOME, the
+ * new default does NOT exist, and the OLD default (~/.local/share/dagrunner)
+ * DOES. Returns the message to show (callers exit / throw with it), else null.
+ * Never falls back to the old home silently: reading runs from a home that is
+ * supposed to have moved would hide the very state the move script must fix.
+ */
+export function legacyHomeMovedMessage(homeFlag?: string): string | null {
+  if (hasHomeOverride(homeFlag)) return null;
+  const next = defaultHomePath();
+  const old = legacyHomePath();
+  if (existsSync(next) || !existsSync(old)) return null;
+  const script = shellQuote(moveHomeScriptPath());
+  return (
+    `dagrun: the dagrunner home moved (v0.1.85).\n` +
+    `  New default: ${next} (does not exist)\n` +
+    `  Old home:    ${old} (still exists)\n` +
+    `  Move it once with: node ${script}\n` +
+    `  Preview first with: node ${script} --dry-run\n` +
+    `  (Until then DAGRUNNER_HOME=${old} makes any command use the old home, e.g. \`DAGRUNNER_HOME=${old} dagrun cleanup --all\`, which the move needs first if legacy worktrees remain.)`
+  );
+}
+
+/**
+ * One-line `dagrun preflight` warning for a leftover old home: the active home
+ * is the new default AND the old default still exists (new wins; the old one is
+ * ignored). Top-level names only. Null otherwise — an explicit override is not
+ * our business.
+ */
+export function legacyHomeLeftoverWarning(activeHome: string): string | null {
+  const old = legacyHomePath();
+  if (activeHome !== defaultHomePath() || !existsSync(old)) return null;
+  let names: string[];
+  try {
+    names = readdirSync(old).sort();
+  } catch {
+    names = [];
+  }
+  return (
+    `the old dagrunner home ${old} still exists next to the active ${activeHome} and is ignored; ` +
+    `it contains: ${names.length > 0 ? names.join(", ") : "(empty)"}. ` +
+    `Archive or delete it once nothing needs it.`
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -61,17 +142,19 @@ export function computeHomePath(homeFlag?: string): string {
 /**
  * Resolve the dagrunner home directory.
  *
- * Resolution order: DAGRUNNER_HOME env → ~/.local/share/dagrunner
+ * Resolution order: DAGRUNNER_HOME env → ~/.local/share/camunda/dagrunner
  *
  * Fails loud with exact paths checked if:
  *   - DAGRUNNER_HOME is set but the directory doesn't exist
+ *   - the home moved (new default absent, old ~/.local/share/dagrunner present):
+ *     the message names both paths and the exact move-home.mjs command
  *   - neither DAGRUNNER_HOME nor the XDG default exists
  *
  * Do NOT call from `init` — use computeHomePath() + initHome() instead.
  */
 export function resolveHome(): string {
   const envHome = process.env["DAGRUNNER_HOME"];
-  const xdgDefault = join(homedir(), ".local", "share", "dagrunner");
+  const xdgDefault = defaultHomePath();
 
   if (envHome !== undefined && envHome !== "") {
     if (!existsSync(envHome)) {
@@ -81,6 +164,12 @@ export function resolveHome(): string {
       process.exit(1);
     }
     return envHome;
+  }
+
+  const moved = legacyHomeMovedMessage();
+  if (moved !== null) {
+    process.stderr.write(`${moved}\n`);
+    process.exit(1);
   }
 
   if (!existsSync(xdgDefault)) {

@@ -4,7 +4,8 @@ set -euo pipefail
 # Same precedence as phase 0: --run-id <id> in the args string ($1) > DAGRUN_RUN_ID > sanitized branch.
 RUN_ID_ARG=$(echo "${1:-}" | sed -n 's/.*--run-id[[:space:]]*\([^[:space:]]*\).*/\1/p')
 RUN_ID="${RUN_ID_ARG:-${DAGRUN_RUN_ID:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-')}}"
-ARTIFACTS_DIR="${DAGRUN_ARTIFACTS:-$HOME/.local/share/dagrunner/runs/${RUN_ID}/pr-triage}"
+DAGRUNNER_HOME="${DAGRUNNER_HOME:-$HOME/.local/share/camunda/dagrunner}"
+ARTIFACTS_DIR="${DAGRUN_ARTIFACTS:-$DAGRUNNER_HOME/runs/${RUN_ID}/pr-triage}"
 STATE_FILE="$ARTIFACTS_DIR/pr-triage-state.json"
 TICK_FILE="$ARTIFACTS_DIR/pr-triage-tick.json"
 TRIAGE_STATE="$ARTIFACTS_DIR/triage-state.json"

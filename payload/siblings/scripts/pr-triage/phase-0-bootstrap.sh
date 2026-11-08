@@ -1,7 +1,8 @@
 #!/bin/zsh
 set -euo pipefail
 
-REFLECTION_LOG="$HOME/.local/share/dagrunner/store/reflection-log.jsonl"
+DAGRUNNER_HOME="${DAGRUNNER_HOME:-$HOME/.local/share/camunda/dagrunner}"
+REFLECTION_LOG="$DAGRUNNER_HOME/store/reflection-log.jsonl"
 mkdir -p "$(dirname "$REFLECTION_LOG")"
 if [ -f "$REFLECTION_LOG" ]; then
   echo "=== Prior reflections (pr-triage) ==="
@@ -48,13 +49,13 @@ fi
 
 RUN_ID="${RUN_ID_ARG:-${DAGRUN_RUN_ID:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-')}}"
 
-ARTIFACTS_DIR="${DAGRUN_ARTIFACTS:-$HOME/.local/share/dagrunner/runs/${RUN_ID}/pr-triage}"
+ARTIFACTS_DIR="${DAGRUN_ARTIFACTS:-$DAGRUNNER_HOME/runs/${RUN_ID}/pr-triage}"
 mkdir -p "$ARTIFACTS_DIR"
 mkdir -p "$ARTIFACTS_DIR/drafts"
 
 STATE_FILE="$ARTIFACTS_DIR/pr-triage-state.json"
 
-CI_BABYSIT_STATE="$HOME/.local/share/dagrunner/runs/${RUN_ID}/ci-babysit/since-state.json"
+CI_BABYSIT_STATE="$DAGRUNNER_HOME/runs/${RUN_ID}/ci-babysit/since-state.json"
 if [ ! -f "$CI_BABYSIT_STATE" ]; then
   echo "WARNING: ci-babysit has not run for this worktree. Continuing — pr-triage can triage independently."
 fi

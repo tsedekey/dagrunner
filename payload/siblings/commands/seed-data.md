@@ -123,7 +123,7 @@ To reset: cancel instances and delete process definitions in Operate UI, or recr
 ## Reflections
 
 If this run encountered anything unexpected, append one JSON line to
-`~/.local/share/dagrunner/store/reflection-log.jsonl`:
+`$DAGRUNNER_HOME/store/reflection-log.jsonl` (default `~/.local/share/camunda/dagrunner`):
 
 ```json
 {

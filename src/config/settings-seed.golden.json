@@ -8,7 +8,7 @@
       "/tmp",
       "/tmp",
       "/test/devharness/src",
-      "/test/home/.local/share/dagrunner"
+      "/test/home/.local/share/camunda/dagrunner"
     ],
     "allow": [
       "Read",

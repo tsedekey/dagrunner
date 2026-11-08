@@ -6,7 +6,8 @@
 # DONE-run artifacts only.
 set -euo pipefail
 
-REFLECTION_LOG="$HOME/.local/share/dagrunner/store/reflection-log.jsonl"
+DAGRUNNER_HOME="${DAGRUNNER_HOME:-$HOME/.local/share/camunda/dagrunner}"
+REFLECTION_LOG="$DAGRUNNER_HOME/store/reflection-log.jsonl"
 mkdir -p "$(dirname "$REFLECTION_LOG")"
 if [ -f "$REFLECTION_LOG" ]; then
   echo "=== Prior reflections (manual-smoke) ==="
@@ -42,7 +43,7 @@ if [ -z "$RUN_ID" ]; then
   exit 1
 fi
 
-RUN_DIR="$HOME/.local/share/dagrunner/runs/${RUN_ID}"
+RUN_DIR="$DAGRUNNER_HOME/runs/${RUN_ID}"
 STATE_FILE="$RUN_DIR/state.json"
 
 if [ ! -f "$STATE_FILE" ]; then

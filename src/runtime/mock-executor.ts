@@ -64,7 +64,7 @@ export type NodeExecResult =
     };
 
 export type ExecutionCtx = {
-  /** Root run directory: ~/.local/share/dagrunner/runs/<run-id>/ */
+  /** Root run directory: ~/.local/share/camunda/dagrunner/runs/<run-id>/ */
   runDir: string;
   /** Per-node artifact directory: runDir/<nodeId>/ */
   artifactsDir: string;

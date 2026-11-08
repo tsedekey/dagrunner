@@ -150,7 +150,7 @@ This is a bare CLI call — it needs no `$DAGRUN_*` env var and no hook (this co
 gets dagrunner's node-session wiring), the same as `gate show`/`gate decide`/`status` you already run
 directly. It is fail-soft: a missing `--source`/`--body` prints usage to stderr and does nothing; an empty
 `--body` is a silent no-op. Confirm it actually landed — `tail -n1
-${DAGRUNNER_HOME:-~/.local/share/dagrunner}/store/reflection-log.jsonl` — before telling Eddie it was
+${DAGRUNNER_HOME:-~/.local/share/camunda/dagrunner}/store/reflection-log.jsonl` — before telling Eddie it was
 captured; a broken call must never be reported as success. The body should stand alone (a later harvest
 reads only `source`/`body`, with no other context), and `source` is always `companion`, not a node id.
 

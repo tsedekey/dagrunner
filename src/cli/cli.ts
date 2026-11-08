@@ -11,6 +11,7 @@
 import {
   computeHomePath,
   initHome,
+  legacyHomeLeftoverWarning,
   resolveHome,
   resolveConfig,
 } from "../config/xdg.js";
@@ -177,6 +178,10 @@ async function cmdPreflight(argv: string[]): Promise<void> {
   const baseBranch = flagValue(argv, "--base-branch");
   const homeDir = resolveHome();
   const config = resolveConfig(homeDir, configFlag);
+
+  // A leftover pre-v0.1.85 home is a warning, never a failure: the new home wins.
+  const leftover = legacyHomeLeftoverWarning(homeDir);
+  if (leftover !== null) process.stderr.write(`dagrun preflight: WARNING: ${leftover}\n`);
 
   const result = runPreflight(config, homeDir, {
     ...(baseBranch !== undefined ? { baseBranch } : {}),
