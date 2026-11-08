@@ -4,9 +4,11 @@
  *
  * Proves routing/authorization semantics of `dagrun gate show|decide|attach`:
  * association at handoff, blocked/recovery paths, understanding-only cannot
- * advance, bound/stale/duplicate/wrong-run decisions, the fix gate (a plain
- * approve straight to the pre-PR gate), amend-with-invalidation (no replayed
- * publication), pause/restart, and the produces contract (no false pass).
+ * advance, bound/stale/duplicate/wrong-run decisions, the fix gate — the FIRST
+ * gate of a run (a plain approve straight to the pre-PR gate), amend-with-
+ * invalidation (no replayed publication), pause/restart, the produces contract
+ * (no false pass) and the RED-first outcome gate (a failed implement is visible
+ * in `status --json`). The plan is the guide: there is no define/reproduce node.
  *
  * It does NOT prove that a real interactive Claude session can be re-entered
  * with `claude --resume` — that is a harness property, checked separately.
@@ -94,7 +96,7 @@ function newHome(): { home: string; plan: string; worktreePath: string } {
 // The mock executor writes nothing into the worktree; a real fix does. Model that (an UNTRACKED
 // file, which is what changes.diff must render as a new-file diff) around the mock, per fix run.
 const factory = (over: Record<string, string> = {}) => () => {
-  const inner = createMockExecutor({ reproduce: "gate-pause", implement: "success", review: "success", fix: "gate-pause", pr: "gate-pause", ...over } as never);
+  const inner = createMockExecutor({ implement: "success", review: "success", fix: "gate-pause", pr: "gate-pause", ...over } as never);
   const wrapped: typeof inner = async (id, node, ctx) => {
     if (id === "fix") writeFileSync(join(ctx.worktreePath, "mock-fix-change.txt"), "mock fix change\n");
     return inner(id, node, ctx);
@@ -152,17 +154,23 @@ const R = await newRun();
 {
   const s = stateOf(R.runDir);
   assert.equal(s.status, "paused");
-  assert.equal(s.nodes["reproduce"]?.status, "awaiting-gate");
+  assert.equal(s.nodes["fix"]?.status, "awaiting-gate", "the first pause of a run is the fix gate");
+  assert.equal(s.nodes["implement"]?.status, "done");
+  assert.equal(s.nodes["review"]?.status, "done");
+  assert.deepEqual(JSON.parse(readFileSync(join(R.runDir, "implement", "red.json"), "utf8")), { red: "confirmed" });
   assert.equal(s.companion?.sessionId, SESSION);
   assert.equal(s.companion?.source, "handoff");
-  const b = briefOf(R.runDir, "reproduce");
+  const b = briefOf(R.runDir, "fix");
   assert.equal(b.companion.status, "ok");
   assert.match(b.companion.resumeHint ?? "", new RegExp(`claude --resume ${SESSION}`));
   assert.equal(b.companion.resume?.cwd, CFG);
   assert.match(b.companion.resumeHint ?? "", /^cd '.+' && CLAUDE_CONFIG_DIR='.*' claude --resume 1111.* 'DagRunner run .* gate show /s);
   assert.equal("decidesNode" in b.pendingDecision, false);
-  assert.deepEqual(b.pendingDecision.approveContinuesTo, ["implement", "review", "fix", "pr"]);
-  assert.ok(existsSync(join(R.runDir, "reproduce", "gate-context.md")));
+  assert.deepEqual(b.pendingDecision.approveContinuesTo, ["pr"]);
+  assert.ok(existsSync(join(R.runDir, "fix", "gate-context.md")));
+  // implement's outcome gate (RED proven) is part of the fix gate's validation, with red.json as evidence.
+  assert.ok(b.validation.some((v) => v.nodeId === "implement" && v.check === "outcomeGate" && v.ok), "the RED outcome gate shows in the brief's validation");
+  assert.ok(b.upstreamArtifacts.some((u) => u.nodeId === "implement" && u.files.some((f) => f.path.endsWith("red.json"))), "red.json is gate evidence");
   assert.equal(s.companion?.configDir, CFG, "config dir recorded at handoff");
   // From a bare terminal (no CLAUDE_CONFIG_DIR) the recorded dir still finds the session.
   const savedCfg = process.env["CLAUDE_CONFIG_DIR"];
@@ -206,48 +214,32 @@ const R = await newRun();
 
 // 4. understanding-only: propose never mutates; wrong confirm never advances
 {
-  const b = briefOf(R.runDir, "reproduce");
+  const b = briefOf(R.runDir, "fix");
   const before = JSON.stringify(stateOf(R.runDir));
   const id = await propose(R, b, {});
   assert.equal(JSON.stringify(stateOf(R.runDir)), before, "a proposal must not change state");
   assert.equal(await decide(R, b, { confirm: "0000000000000000" }), 1, "wrong confirm id refused");
-  assert.equal(stateOf(R.runDir).nodes["reproduce"]?.status, "awaiting-gate");
+  assert.equal(stateOf(R.runDir).nodes["fix"]?.status, "awaiting-gate");
   assert.equal(await decide(R, b, { confirm: id, session: "some-other-session" }), 1, "a different session cannot decide");
-  assert.equal(stateOf(R.runDir).nodes["reproduce"]?.status, "awaiting-gate");
+  assert.equal(stateOf(R.runDir).nodes["fix"]?.status, "awaiting-gate");
   say("4 passed: proposal is read-only; wrong confirm / foreign session cannot advance");
 }
 
 // 5. wrong-run and stale
 {
-  const b = briefOf(R.runDir, "reproduce");
+  const b = briefOf(R.runDir, "fix");
   const other = await newRun();
-  const ob = briefOf(other.runDir, "reproduce");
+  const ob = briefOf(other.runDir, "fix");
   assert.equal(await decide(R, { ...b, revision: ob.revision } as GateBrief, {}), 1, "revision from another run refused");
   assert.equal(await decide(R, { ...b, revision: b.revision.slice(0, -1) + (b.revision.endsWith("0") ? "1" : "0") } as GateBrief, {}), 1, "stale revision refused");
-  assert.equal(await decide(R, { ...b, gateNodeId: "fix" } as GateBrief, {}), 1, "gate that is not awaiting refused");
-  assert.equal(stateOf(R.runDir).nodes["reproduce"]?.status, "awaiting-gate");
+  assert.equal(await decide(R, { ...b, gateNodeId: "pr" } as GateBrief, {}), 1, "gate that is not awaiting refused");
+  assert.equal(stateOf(R.runDir).nodes["fix"]?.status, "awaiting-gate");
   say("5 passed: wrong-run, stale-revision and wrong-gate decisions refused, state untouched");
 }
 
-// 6. approve reproduce → runs to fix gate; duplicate replay is a no-op
-{
-  const b = briefOf(R.runDir, "reproduce");
-  const id = await propose(R, b, {});
-  assert.equal(await decide(R, b, { confirm: id }), 0);
-  let s = stateOf(R.runDir);
-  assert.equal(s.nodes["reproduce"]?.status, "done");
-  assert.equal(s.nodes["fix"]?.status, "awaiting-gate");
-  const h = s.nodes["reproduce"]!.gateHistory.at(-1)!;
-  assert.equal(h.decisionId, id);
-  assert.equal(h.revision, b.revision);
-  assert.match(h.resumePoint ?? "", /implement/);
-  const snap = JSON.stringify(s.nodes);
-  assert.equal(await decide(R, b, { confirm: id }), 0, "duplicate is a benign no-op");
-  assert.equal(JSON.stringify(stateOf(R.runDir).nodes), snap, "duplicate approval advanced nothing");
-  say("6 passed: bound approval advances exactly once; replay is a no-op; decision + exact resume point persisted");
-}
-
-// 7. fix gate: a plain approve (no run/skip choice) goes straight to the pre-PR gate
+// 6. fix gate (the first gate): a plain approve (no run/skip choice) goes straight to the pre-PR gate;
+//    the bound approval advances exactly once and a replay is a no-op.
+//    (The former step 7 — the fix-gate approve — is folded in here: fix is now the first gate.)
 {
   const b = briefOf(R.runDir, "fix");
   assert.equal("decidesNode" in b.pendingDecision, false, "no gate decides a downstream node any more");
@@ -271,12 +263,20 @@ const R = await newRun();
   assert.equal(await decide(R, b, { confirm: id }), 0);
   const s = stateOf(R.runDir);
   assert.equal(existsSync(join(R.runDir, "fix", "next-node-decision.json")), false, "the fix gate writes no next-node decision");
-  assert.equal(s.nodes["verify"], undefined, "there is no verify node");
+  for (const gone of ["define", "reproduce", "verify"]) assert.equal(s.nodes[gone], undefined, `there is no ${gone} node`);
   assert.ok(s.nodes["fix"]!.artifacts.includes(diffPath), "changes.diff registered as a fix artifact on approve");
   assert.ok(readFileSync(join(R.runDir, "pr", "changes.diff"), "utf8").includes("mock-fix-change.txt"), "pr gate open refreshes/copies changes.diff");
+  assert.equal(s.nodes["fix"]?.status, "done");
   assert.equal(s.nodes["pr"]?.status, "awaiting-gate", "pre-PR gate reached straight after the fix gate");
   assert.equal(s.status, "paused");
-  say("7 passed: fix gate approve needs no run/skip choice → pause at the pre-PR gate, no next-node decision written");
+  const h = s.nodes["fix"]!.gateHistory.at(-1)!;
+  assert.equal(h.decisionId, id);
+  assert.equal(h.revision, b.revision);
+  assert.match(h.resumePoint ?? "", /pr/);
+  const snap = JSON.stringify(s.nodes);
+  assert.equal(await decide(R, b, { confirm: id }), 0, "duplicate is a benign no-op");
+  assert.equal(JSON.stringify(stateOf(R.runDir).nodes), snap, "duplicate approval advanced nothing");
+  say("6 passed: the fix gate (the first gate) approve needs no run/skip choice -> pause at the pre-PR gate, no next-node decision written; bound approval advances exactly once, replay is a no-op, decision + exact resume point persisted");
 }
 
 // 8. pre-PR amend: revise fix, invalidate pr, no publication
@@ -284,7 +284,7 @@ const R = await newRun();
   const b = briefOf(R.runDir, "pr");
   assert.deepEqual(b.pendingDecision.amendTargets, ["pr", "fix"]);
   assert.equal("decidesNode" in b.pendingDecision, false);
-  assert.equal(await decide(R, b, { action: "amend", target: "reproduce", comment: "redo" }), 1, "undeclared target refused");
+  assert.equal(await decide(R, b, { action: "amend", target: "implement", comment: "redo" }), 1, "undeclared target refused");
   const fixIterBefore = stateOf(R.runDir).nodes["fix"]!.iteration; // mock pauses report iteration 1; real runs report 0
   const o = { action: "amend", target: "fix", comment: "handle the null case too" };
   const id = await propose(R, b, o);
@@ -337,7 +337,7 @@ const R = await newRun();
 {
   const X = await newRun();
   transcript(SESSION, false); // original conversation vanishes
-  const brief = briefOf(X.runDir, "reproduce");
+  const brief = briefOf(X.runDir, "fix");
   const out: string[] = [];
   const real = process.stdout.write.bind(process.stdout);
   process.stdout.write = ((s: string) => { out.push(s); return true; }) as typeof process.stdout.write;
@@ -347,7 +347,7 @@ const R = await newRun();
   assert.equal(shown.companion.status, "blocked");
   assert.match(shown.companion.blockedReason ?? "", /--reconstructed/);
   assert.equal(await decide(X, brief, {}), 1, "cannot decide while the original session is unavailable");
-  assert.equal(stateOf(X.runDir).nodes["reproduce"]?.status, "awaiting-gate");
+  assert.equal(stateOf(X.runDir).nodes["fix"]?.status, "awaiting-gate");
   // recovery: attach a RECONSTRUCTED session (explicit, recorded), then decide
   transcript(SESSION_2);
   assert.equal(await quiet(async () => gateAttach({ homeDir: X.home, config, runId: X.runId, session: "no-such-session-zzzz", reconstructed: true, replace: true })), 1, "unreachable session cannot be attached");
@@ -382,14 +382,22 @@ const R = await newRun();
 }
 
 // ===========================================================================
-// 12. Produces contract: no false pass
+// 12. Produces contract and RED-first outcome gate: no false pass
+//     implement is the ROOT node now, so these failures happen inside startRun itself
+//     (the run ends failed, exit 1) — there is no earlier gate to approve first.
 // ===========================================================================
+async function failedStart(over: Record<string, string>) {
+  const { home, plan, worktreePath } = newHome();
+  const code = await captureExit(() =>
+    startRun({ workflow: bugfixWorkflow, planPath: plan, homeDir: home, worktreePath, config, executorFactory: factory(over), companionSessionId: SESSION }),
+  );
+  const runId = readdirSync(join(home, "runs"))[0] as string;
+  return { code, home, runId, runDir: join(home, "runs", runId) };
+}
 {
   // A node that "finishes" without writing its declared artifact FAILS (never done) and blocks the rest.
-  const V = await newRun({ implement: "missing-produces" });
-  const b = briefOf(V.runDir, "reproduce");
-  const id = await propose(V, b, {});
-  await captureExit(() => decide(V, b, { confirm: id }, { implement: "missing-produces" }) as Promise<unknown>);
+  const V = await failedStart({ implement: "missing-produces" });
+  assert.equal(V.code, 1, "a failed run exits 1");
   const s = stateOf(V.runDir);
   assert.equal(s.nodes["implement"]?.status, "failed", "a node that skips its declared artifact fails");
   assert.match(s.nodes["implement"]?.error ?? "", /produces contract violated/);
@@ -397,6 +405,31 @@ const R = await newRun();
   assert.notEqual(s.nodes["pr"]?.status, "done");
   assert.equal(s.status, "failed");
   say("12 passed: a missing declared artifact fails the node and halts the run (no false pass)");
+}
+{
+  // RED could not be proven: implement wrote everything, but red.json is not "confirmed" -> the outcome
+  // gate fails the node, review/fix/pr never run, and `status --json` shows WHY (nodes.<id>.error).
+  const V = await failedStart({ implement: "outcome-gate-fail" });
+  assert.equal(V.code, 1);
+  const s = stateOf(V.runDir);
+  assert.equal(s.nodes["implement"]?.status, "failed");
+  assert.match(s.nodes["implement"]?.error ?? "", /^outcome gate failed — red = "FAIL_ASSERTION", expected one of: confirmed$/);
+  for (const id of ["review", "fix", "pr"]) assert.equal(s.nodes[id]?.status, "skipped", `${id} never ran`);
+  assert.equal(s.status, "failed");
+  const sj = buildStatusJson(V.home, V.runId);
+  assert.equal(sj.status, "failed");
+  assert.equal(sj.awaitingGate, null, "no gate opens behind a failed implement");
+  assert.equal(sj.nodes["implement"]?.error, s.nodes["implement"]?.error, "status --json reports the failure reason");
+  {
+    const out: string[] = [];
+    const real = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((x: string) => { out.push(x); return true; }) as typeof process.stdout.write;
+    try { assert.equal(gateShow({ homeDir: V.home, config, runId: V.runId }), 0); } finally { process.stdout.write = real; }
+    const shown = out.join("");
+    assert.match(shown, /not paused at a gate \(status: failed\)/);
+    assert.match(shown, /implement: outcome gate failed — red = "FAIL_ASSERTION"/, "gate show names the failed node and why");
+  }
+  say("12b passed: RED not proven -> outcome-gate failure on implement, review/fix/pr never run, status --json carries the error");
 }
 
 // ===========================================================================
@@ -412,7 +445,7 @@ const R = await newRun();
     DAGRUNNER_HOME: home,
     CLAUDE_CONFIG_DIR: CFG,
     ANTHROPIC_API_KEY: "smoke-dummy",
-    DAGRUN_MOCK_SCENARIOS: JSON.stringify({ reproduce: "gate-pause", implement: "success", review: "success", fix: "gate-pause", pr: "gate-pause" }),
+    DAGRUN_MOCK_SCENARIOS: JSON.stringify({ implement: "success", review: "success", fix: "gate-pause", pr: "gate-pause" }),
   };
   delete env["CLAUDE_CODE_SESSION_ID"];
   const CLI = join(__dirname, "..", "..", "src", "cli", "cli.ts");
@@ -468,19 +501,20 @@ const R = await newRun();
   const d = detachedOut(st.stdout);
   assert.ok(d.log.endsWith(join("runs", d.runId, "driver.log")));
   const runDir = join(home, "runs", d.runId);
-  const paused = await waitFor(d.runId, (j) => j.status === "awaiting-gate" && j.awaitingGate?.revision != null, "awaiting-gate at reproduce");
-  assert.equal(paused.awaitingGate?.nodeId, "reproduce");
-  assert.equal(paused.awaitingGate?.revision, briefOf(runDir, "reproduce").revision, "status reports the gate revision");
+  const paused = await waitFor(d.runId, (j) => j.status === "awaiting-gate" && j.awaitingGate?.revision != null, "awaiting-gate at fix (the first gate)");
+  assert.equal(paused.awaitingGate?.nodeId, "fix");
+  assert.equal(paused.awaitingGate?.revision, briefOf(runDir, "fix").revision, "status reports the gate revision");
   assert.equal(paused.stale, false);
   assert.deepEqual(paused.currentNodes, []);
   assert.equal(paused.companion?.sessionId, SESSION);
-  assert.equal(paused.nodes["reproduce"]?.attempts.length, 1, "per-iteration timing recorded");
+  assert.equal(paused.nodes["fix"]?.attempts.length, 1, "per-iteration timing recorded");
+  assert.equal(paused.nodes["implement"]?.status, "done");
   assert.ok(paused.lastEventAt !== null);
   assert.ok(readFileSync(d.log, "utf8").includes("PAUSED at gate"), "driver output went to driver.log");
   say(`14a passed: start --detach returned in ${Date.now() - t0}ms; status --json reports awaiting-gate/revision/companion/attempts`);
 
   // Confirmed decide --detach. First prove a LIVE driver blocks it (state untouched), then a STALE lock does not.
-  const rb = briefOf(runDir, "reproduce");
+  const rb = briefOf(runDir, "fix");
   const decideArgs = (b: GateBrief, extra: string[] = []) => ["gate", "decide", d.runId, "--gate", b.gateNodeId, "--revision", b.revision, "--action", "approve", "--session", SESSION, ...extra];
   const proposal = cli(decideArgs(rb));
   assert.equal(proposal.status, 0, proposal.stderr);
@@ -507,17 +541,12 @@ const R = await newRun();
   const dec1 = cli([...decideArgs(rb, ["--confirm", cid]), "--detach"]);
   assert.equal(dec1.status, 0, `decide --detach failed: ${dec1.stdout}${dec1.stderr}`);
   assert.equal(detachedOut(dec1.stdout).runId, d.runId);
-  const atFix = await waitFor(d.runId, (j) => j.status === "awaiting-gate" && j.awaitingGate?.nodeId === "fix" && j.awaitingGate.revision != null, "awaiting-gate at fix");
-  assert.equal(atFix.stale, false);
-  assert.equal(atFix.nodes["reproduce"]?.status, "done");
-  say("14b passed: live lock refuses a second driver (state untouched, reported by status); stale lock recovered; decide --detach advanced to fix");
+  const atPr = await waitFor(d.runId, (j) => j.status === "awaiting-gate" && j.awaitingGate?.nodeId === "pr" && j.awaitingGate.revision != null, "awaiting-gate at pr");
+  assert.equal(atPr.stale, false);
+  assert.equal(atPr.nodes["fix"]?.status, "done");
+  say("14b passed: live lock refuses a second driver (state untouched, reported by status); stale lock recovered; decide --detach advanced from the fix gate to the pre-PR gate");
 
-  // Drive the remaining gates detached and poll to done.
-  const fb2 = briefOf(runDir, "fix");
-  const fp = cli(decideArgs(fb2));
-  const fid = /--confirm ([0-9a-f]{16})/.exec(fp.stdout)?.[1] as string;
-  assert.equal(cli([...decideArgs(fb2, ["--confirm", fid]), "--detach"]).status, 0);
-  await waitFor(d.runId, (j) => j.status === "awaiting-gate" && j.awaitingGate?.nodeId === "pr" && j.awaitingGate.revision != null, "awaiting-gate at pr");
+  // Drive the last gate detached and poll to done.
   const pb2 = briefOf(runDir, "pr");
   const pp = cli(decideArgs(pb2));
   const pid2 = /--confirm ([0-9a-f]{16})/.exec(pp.stdout)?.[1] as string;
@@ -531,7 +560,7 @@ const R = await newRun();
   const kinds = new Set(evs.map((e) => e.type));
   for (const k of ["run.started", "node.started", "node.finished", "gate.opened", "gate.decision", "run.status"]) assert.ok(kinds.has(k), `events.jsonl missing ${k}`);
   assert.ok(evs.filter((e) => e.type === "gate.opened").every((e) => typeof e.detail?.["revision"] === "string"), "gate.opened carries the revision");
-  assert.ok(evs.some((e) => e.type === "gate.decision" && e.node === "reproduce" && e.detail?.["action"] === "approve" && typeof e.detail?.["decisionId"] === "string"));
+  assert.ok(evs.some((e) => e.type === "gate.decision" && e.node === "fix" && e.detail?.["action"] === "approve" && typeof e.detail?.["decisionId"] === "string"));
   assert.equal(evs.at(-1)?.type, "run.status");
   assert.ok(evs.every((e, i) => i === 0 || (evs[i - 1] as { ts: string }).ts <= e.ts), "events are time-ordered");
   say("14c passed: detached decides drove the run to done; status --json done/not stale; events.jsonl complete and ordered");

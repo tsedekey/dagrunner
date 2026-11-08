@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 /**
- * Block 9 — 7-step smoke test for dagrunner v1 (Phase 2a + 2b).
+ * Block 9 — 6-step smoke test for dagrunner v1 (Phase 2a + 2b).
  *
  * Drives the real thin slice end-to-end using non-interactive flags.
- * Makes REAL SDK calls for steps 2-6 (step 6 approves Gate 2 and lets the pr
- * node compose the PR body, then pauses at the pre-PR gate).
- * Step 7 uses a synthetic state (no API call) to test reconcile plumbing only.
+ * Makes REAL SDK calls for steps 2-6 (step 2 runs implement (RED first) -> review ->
+ * fix and pauses at the fix gate, the first gate of a run; step 6 approves it and lets
+ * the pr node compose the PR body, then pauses at the pre-PR gate).
+ * Step 6 uses a synthetic state (no API call) to test reconcile plumbing only.
  *
  * Run: node --import tsx ./test/smoke/smoke.ts
  *
@@ -124,7 +125,8 @@ let WORKTREE = "";
 
 // ---------------------------------------------------------------------------
 // Step 2 — dagrun start feature --plan toy-plan.md
-//          define (Gate 1) → awaiting-gate → exits
+//          implement (proves RED first) -> review -> fix (first gate) -> awaiting-gate -> exits
+//          The plan is the guide: there is no define/reproduce node and no gate before implement.
 // ---------------------------------------------------------------------------
 
 {
@@ -149,7 +151,7 @@ let WORKTREE = "";
       "--no-companion",
     ],
     HOME_ENV,
-    180_000, // 3 minutes for one real API call (define)
+    900_000, // 15 minutes: implement (RED -> GREEN) + review (multi-subagent fan-out) + fix, real API calls
   );
 
   assert.strictEqual(
@@ -174,15 +176,58 @@ let WORKTREE = "";
   // The run recorded the worktree it was handed (never created one).
   const st2 = JSON.parse(
     readFileSync(join(runDir, "state.json"), "utf8"),
-  ) as { worktreePath: string; worktreeOrigin?: string };
+  ) as { worktreePath: string; worktreeOrigin?: string; nodes: Record<string, { status: string }> };
   assert.strictEqual(st2.worktreePath, WORKTREE, "state.worktreePath is the adopted worktree");
   assert.strictEqual(st2.worktreeOrigin, "adopted", "state.worktreeOrigin is adopted");
 
-  // Confirm guide.md was produced by define.
-  const guidePath = join(runDir, "define", "guide.md");
-  assert.ok(existsSync(guidePath), `guide.md must exist at ${guidePath}`);
+  // The first pause is the fix gate; no define/reproduce node exists.
+  assert.strictEqual(
+    st2.nodes["fix"]?.status,
+    "awaiting-gate",
+    `the first pause must be the fix gate, got: ${String(st2.nodes["fix"]?.status)}`,
+  );
+  assert.strictEqual(st2.nodes["define"], undefined, "no define node");
+  assert.strictEqual(st2.nodes["reproduce"], undefined, "no reproduce node");
 
-  console.log(`step 2 passed: start -> define -> gate (run: ${RUN_ID})`);
+  // implement proved RED first: red.json confirmed + the evidence + summary.
+  for (const f of ["summary.md", "red-evidence.md", "red.json"]) {
+    assert.ok(existsSync(join(runDir, "implement", f)), `implement/${f} must exist`);
+  }
+  const red = JSON.parse(
+    readFileSync(join(runDir, "implement", "red.json"), "utf8"),
+  ) as { red?: string };
+  assert.strictEqual(red.red, "confirmed", `implement must have proved RED, red.json: ${JSON.stringify(red)}`);
+
+  // review ran and wrote valid findings.json
+  assert.ok(
+    existsSync(join(runDir, "review", "findings.json")),
+    "review/findings.json must exist after review node",
+  );
+  const findingsRaw = JSON.parse(
+    readFileSync(join(runDir, "review", "findings.json"), "utf8"),
+  ) as Record<string, unknown>;
+  for (const key of [
+    "run_id",
+    "timestamp",
+    "reviewers_run",
+    "reviewers_skipped",
+    "adversarial_verifier_run",
+    "findings",
+  ]) {
+    assert.ok(key in findingsRaw, `findings.json must have key "${key}"`);
+  }
+  assert.ok(
+    Array.isArray(findingsRaw["findings"]),
+    "findings.json findings must be an array",
+  );
+  assert.ok(
+    existsSync(join(runDir, "fix", "summary.md")),
+    "fix/summary.md must exist after fix node",
+  );
+
+  console.log(
+    `step 2 passed: start -> implement (RED confirmed) -> review -> fix -> fix gate pause (run: ${RUN_ID})`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -206,7 +251,7 @@ let WORKTREE = "";
 }
 
 // ---------------------------------------------------------------------------
-// Step 4 — dagrun resume --reject "add error handling section"
+// Step 4 — dagrun resume --reject "add error handling section" (at the fix gate)
 // ---------------------------------------------------------------------------
 
 {
@@ -222,7 +267,7 @@ let WORKTREE = "";
   );
 
   const runDir = join(HOME, "runs", RUN_ID);
-  const feedback1 = join(runDir, "define", "feedback-1.md");
+  const feedback1 = join(runDir, "fix", "feedback-1.md");
   assert.ok(existsSync(feedback1), `feedback-1.md must exist at ${feedback1}`);
   // Run must be paused again after revise.
   assert.ok(
@@ -233,71 +278,10 @@ let WORKTREE = "";
 }
 
 // ---------------------------------------------------------------------------
-// Step 5 — dagrun resume --approve (Gate 1) -> implement -> review -> fix -> Gate 2
-// ---------------------------------------------------------------------------
-
-{
-  const result = runCli(
-    ["resume", RUN_ID, "--approve"],
-    HOME_ENV,
-    600_000, // 10 minutes: implement + review (multi-subagent fan-out) + fix
-  );
-  assert.strictEqual(
-    result.status,
-    0,
-    `approve Gate 1 failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
-  );
-
-  const runDir = join(HOME, "runs", RUN_ID);
-  const stateRaw = JSON.parse(
-    readFileSync(join(runDir, "state.json"), "utf8"),
-  ) as { status: string; nodes: Record<string, { status: string }> };
-
-  // After Gate 1 approve: implement runs, review runs, fix hits Gate 2 and pauses.
-  assert.ok(
-    stateRaw.status === "paused" || stateRaw.status === "running",
-    `run must be paused at Gate 2 or running, got: ${stateRaw.status}`,
-  );
-  assert.ok(
-    existsSync(join(runDir, "implement", "summary.md")),
-    "implement/summary.md must exist",
-  );
-  assert.ok(
-    existsSync(join(runDir, "review", "findings.json")),
-    "review/findings.json must exist after review node",
-  );
-  // findings.json must be valid JSON with required top-level keys
-  const findingsRaw = JSON.parse(
-    readFileSync(join(runDir, "review", "findings.json"), "utf8"),
-  ) as Record<string, unknown>;
-  for (const key of [
-    "run_id",
-    "timestamp",
-    "reviewers_run",
-    "reviewers_skipped",
-    "adversarial_verifier_run",
-    "findings",
-  ]) {
-    assert.ok(key in findingsRaw, `findings.json must have key "${key}"`);
-  }
-  assert.ok(
-    Array.isArray(findingsRaw["findings"]),
-    "findings.json findings must be an array",
-  );
-  assert.ok(
-    existsSync(join(runDir, "fix", "summary.md")),
-    "fix/summary.md must exist after fix node",
-  );
-  console.log(
-    "step 5 passed: approve Gate 1 -> implement -> review -> fix -> Gate 2 pause",
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Step 6 — dagrun resume --approve (Gate 2) -> pr composes -> pre-PR gate pause
+// Step 5 — dagrun resume --approve (fix gate) -> pr composes -> pre-PR gate pause
 //
-// The pipeline is define/reproduce -> implement -> review -> fix -> pr: approving
-// Gate 2 runs pr directly, which composes body.md/pr-meta.json and then pauses
+// The pipeline is implement -> review -> fix (gate) -> pr (gate): approving
+// the fix gate runs pr directly, which composes body.md/pr-meta.json and then pauses
 // at the pre-PR gate (push + draft-PR creation only happen after that gate is
 // approved, so DAGRUN_NO_PR is belt-and-braces here). This step asserts that
 // pr's real SDK session starts and ends in a post-run status, and that the
@@ -330,7 +314,7 @@ let WORKTREE = "";
   assert.strictEqual(
     result.status,
     0,
-    `Gate 2 approve failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
+    `fix gate approve failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
   );
 
   const runDir = join(HOME, "runs", RUN_ID);
@@ -387,12 +371,12 @@ let WORKTREE = "";
     `  reflection-log has ${lines.length} entries — hook-driven capture verified (seeded entry found)`,
   );
   console.log(
-    "step 6 passed: Gate 2 approve -> pr ran (real SDK session, hook wiring proven) -> pre-PR gate",
+    "step 5 passed: fix gate approve -> pr ran (real SDK session, hook wiring proven) -> pre-PR gate",
   );
 }
 
 // ---------------------------------------------------------------------------
-// Step 7 — reconcile: running node -> failed (synthetic, no API call)
+// Step 6 — reconcile: running node -> failed (synthetic, no API call)
 // ---------------------------------------------------------------------------
 
 {
@@ -524,7 +508,7 @@ let WORKTREE = "";
   );
 
   console.log(
-    `step 7 passed: interrupt-retry cap hit — implement stayed failed, no SDK call fired`,
+    `step 6 passed: interrupt-retry cap hit — implement stayed failed, no SDK call fired`,
   );
 }
 
@@ -532,4 +516,4 @@ let WORKTREE = "";
 // Done
 // ---------------------------------------------------------------------------
 
-console.log("\nall 7 smoke test steps passed");
+console.log("\nall 6 smoke test steps passed");

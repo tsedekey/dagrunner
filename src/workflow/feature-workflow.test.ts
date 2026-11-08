@@ -372,11 +372,28 @@ test("featureWorkflow: all dependsOn references point to known nodes", () => {
 // no verify node (removed — DECISIONS.md § verify-node-removed)
 // ---------------------------------------------------------------------------
 
-test("featureWorkflow: node ids are define, implement, review, fix, pr", () => {
+test("featureWorkflow: node ids are implement, review, fix, pr (the plan is the guide — no define node)", () => {
   assert.deepEqual(
     featureWorkflow.nodes.map((n) => n.id),
-    ["define", "implement", "review", "fix", "pr"],
+    ["implement", "review", "fix", "pr"],
   );
+  assert.equal(featureWorkflow.nodes.find((n) => n.id === "define"), undefined);
+  assert.equal(featureWorkflow.nodes.find((n) => n.id === "reproduce"), undefined);
+});
+
+test("featureWorkflow: implement is the root (no dependsOn) and the only root", () => {
+  const roots = featureWorkflow.nodes.filter((n) => (n.dependsOn ?? []).length === 0);
+  assert.deepEqual(roots.map((n) => n.id), ["implement"]);
+});
+
+test("featureWorkflow: implement proves RED first — outcomeGate on red.json, red-evidence.md produced", () => {
+  const node = featureWorkflow.nodes.find((n) => n.id === "implement");
+  assert.ok(node !== undefined);
+  assert.deepEqual(node.outcomeGate, { file: "red.json", field: "red", passValues: ["confirmed"] });
+  assert.ok(node.produces?.includes("summary.md"));
+  assert.ok(node.produces?.includes("red-evidence.md"));
+  assert.ok(node.produces?.includes("red.json"));
+  assert.equal(node.gate, undefined, "implement is not gated — the first human gate is fix");
 });
 
 test("featureWorkflow: there is no verify node and no node declares decidesNode / joinRule / evidenceCheck", () => {
@@ -396,7 +413,7 @@ test("featureWorkflow: every gate returns to the companion; pr is a pre-PR gate 
   assert.deepEqual(pr.gate.amendTargets, ["fix"]);
   assert.deepEqual(
     featureWorkflow.nodes.filter((n) => n.gate !== undefined).map((n) => n.id),
-    ["define", "fix", "pr"],
+    ["fix", "pr"],
   );
 });
 

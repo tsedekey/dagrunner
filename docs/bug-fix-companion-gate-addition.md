@@ -9,9 +9,15 @@ questions, and a new "Lesson promotion" section wires the companion to `dagrun
 reflect` (see `DECISIONS.md § digest-removed-folded-into-companion`). Nothing below is a pending,
 not-yet-applied increment — this mirror and the deployed file were in sync as of v0.1.65.
 
-**v0.1.79 — the `verify` node was removed** (DECISIONS.md § verify-node-removed), so this mirror
-now describes the pipeline as reproduce -> implement -> review -> fix -> pr: no `--run-next`, no
-verify advice or evidence, no verify teardown. **The deployed
+**v0.1.79 — the `verify` node was removed** (DECISIONS.md § verify-node-removed): no `--run-next`, no
+verify advice or evidence, no verify teardown.
+
+**v0.1.82 — the plan is the guide: the `reproduce` node and its gate were removed** (DECISIONS.md §
+plan-is-the-guide), so this mirror now describes the pipeline as implement -> review -> fix -> pr, with
+two gates: `fix` (the FIRST pause of a run) and the pre-PR `pr` gate. `implement` proves RED first and
+fails the run when it cannot (see "When the run fails" below). **The deployed bug-fix-companion
+references (`dagrunner-gates.md`, `execution-gates.md`, `handoffs.md`) still describe the `reproduce`
+gate and must be updated separately** (outside this repo). **The deployed
 `~/.claude/skills/bug-fix-companion/references/dagrunner-gates.md` still describes verify and must be
 updated separately** (it is outside this repo); until then it will tell the companion to pass a
 `--run-next` flag that no longer exists (ignored) and to look for `verify/` evidence that is never
@@ -88,11 +94,12 @@ dagrun start bugfix --plan <approved fix-plan file> --companion-session "$CLAUDE
 5. Persist in the case checkpoint: gate, revision, the exact decision and scope, decision id, and the
    resume point the run printed. Reference the run's own artifacts rather than copying them.
 
-## The three gates (bugfix)
+## The two gates (bugfix)
 
-- **`reproduce`** — reproduction guide. Review: is the bug real, is the root cause the agreed one, does the
-  change surface / regression test match the plan? Amend = re-run reproduce with feedback.
-- **`fix`** — the diff after review. Review: exact diff, tests actually run, before/after regression
+- **`fix`** — the FIRST gate of a run (there is no gate before it; the plan was approved upstream): the diff
+  after `implement` (RED→GREEN) and `review`. Also read `implement/red-evidence.md` and `implement/red.json`
+  (the RED proof) and any `## Concerns / plan challenges` section in `implement/summary.md` — a flagged
+  plan challenge belongs in this conversation. The brief's validation list shows the RED outcome gate. Review: exact diff, tests actually run, before/after regression
   evidence, review findings and their handling, deviations from the plan. Walk `review/findings.json`
   and `fix/summary.md` one finding at a time as usual, and as part of that same walkthrough — not a
   separate pass — name every finding `fix/summary.md` explicitly DEFERRED or left unresolved, with its
@@ -101,10 +108,22 @@ dagrun start bugfix --plan <approved fix-plan file> --companion-session "$CLAUDE
   plain approve — it carries no further choice; it continues straight to the pre-PR gate. An approve
   `--comment`, if given, is recorded in the gate history.
 - **`pr`** — pre-PR gate. Review the PR body and the diff. Before Eddie decides, name the open questions a PR reviewer would likely ask — design
-  tradeoffs with a reasonable alternative, scope boundaries the guide drew (this was the removed
+  tradeoffs with a reasonable alternative, scope boundaries the plan drew (this was the removed
   `digest` node's Section 2). Approve = the branch is pushed and a DRAFT PR opens. Amend `--target fix` sends the code back;
   nothing has been published yet. Approval never implies merge, reviewers, ready-for-review, or
   backport labels.
+
+## When the run fails (RED not proven)
+
+`dagrun status <run> --json` reports `status: "failed"` and, per node, `error`. If `implement` failed with
+`outcome gate failed — red = "not-reproduced", expected one of: confirmed`, `implement` could not prove RED
+(bug already fixed, test missing/unrunnable/flaky, environment unavailable, or the plan's reproduction does
+not show the symptom). Nothing was implemented and review/fix/pr never ran. Report `reason` from
+`implement/red.json` and the evidence in `implement/red-evidence.md` to Eddie and stop: the plan is the
+contract, so the next step is a revised plan from the planning session and a NEW run. Do not
+`dagrun rerun … implement` + `resume` to push past it — the downstream nodes were marked skipped, so the
+resumed run would end `done` without review/fix/pr. `dagrun gate show <run>` on the failed run prints the
+failed node's error rather than a brief.
 
 ## Lesson promotion (rare — not every finding)
 

@@ -38,8 +38,8 @@ function tempRun(over: Partial<RunState> = {}) {
     branch: "b",
     sourcePlanPath: "/p",
     nodes: {
-      reproduce: { status: "done", artifacts: [], iteration: 0, cost: 0, gateHistory: [], startedAt: "2026-01-01T00:00:00.000Z" },
-      implement: { status: "running", artifacts: [], iteration: 0, cost: 0, gateHistory: [], startedAt: "2026-01-01T00:05:00.000Z" },
+      implement: { status: "done", artifacts: [], iteration: 0, cost: 0, gateHistory: [], startedAt: "2026-01-01T00:00:00.000Z" },
+      review: { status: "running", artifacts: [], iteration: 0, cost: 0, gateHistory: [], startedAt: "2026-01-01T00:05:00.000Z" },
     },
     ...over,
   };
@@ -110,18 +110,18 @@ test("buildFeedHistory: merges events.jsonl and every node's transcript into one
     join(runDir, "events.jsonl"),
     [
       { ts: "2026-01-01T00:00:00.000Z", type: "run.started", detail: { workflow: "bugfix" } },
-      { ts: "2026-01-01T00:00:00.001Z", type: "node.started", node: "reproduce", iteration: 0 },
-      { ts: "2026-01-01T00:05:00.000Z", type: "node.started", node: "implement", iteration: 0 },
+      { ts: "2026-01-01T00:00:00.001Z", type: "node.started", node: "implement", iteration: 0 },
+      { ts: "2026-01-01T00:05:00.000Z", type: "node.started", node: "review", iteration: 0 },
     ].map((e) => JSON.stringify(e)).join("\n") + "\n",
   );
-  mkdirSync(join(runDir, "reproduce"), { recursive: true });
   mkdirSync(join(runDir, "implement"), { recursive: true });
-  writeFileSync(join(runDir, "reproduce", "transcript.log"), asst("2026-01-01T00:02:00.000Z", { type: "text", text: "repro text" }) + "\n");
-  writeFileSync(join(runDir, "implement", "transcript.log"), asst("2026-01-01T00:06:00.000Z", { type: "tool_use", name: "Edit", input: { file_path: "/wt/9-1/src/A.java" } }) + "\n");
+  mkdirSync(join(runDir, "review"), { recursive: true });
+  writeFileSync(join(runDir, "implement", "transcript.log"), asst("2026-01-01T00:02:00.000Z", { type: "text", text: "impl text" }) + "\n");
+  writeFileSync(join(runDir, "review", "transcript.log"), asst("2026-01-01T00:06:00.000Z", { type: "tool_use", name: "Edit", input: { file_path: "/wt/9-1/src/A.java" } }) + "\n");
   const h = buildFeedHistory(home, "9-1");
   assert.deepEqual(
     h.items.map((i) => `${i.source}:${i.kind}:${i.node ?? ""}`),
-    ["events:run:", "events:start:reproduce", "transcript:text:reproduce", "events:start:implement", "transcript:tool:implement"],
+    ["events:run:", "events:start:implement", "transcript:text:implement", "events:start:review", "transcript:tool:review"],
   );
   assert.equal(h.items[4]?.text, "A.java"); // Edit shows file basename (like logProgress)
   assert.equal(h.total, 5);

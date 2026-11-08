@@ -31,35 +31,31 @@ test("bugfixWorkflow: name is 'bugfix'", () => {
 // Node shape
 // ---------------------------------------------------------------------------
 
-test("bugfixWorkflow: has exactly 5 nodes", () => {
-  assert.equal(bugfixWorkflow.nodes.length, 5);
+test("bugfixWorkflow: has exactly 4 nodes", () => {
+  assert.equal(bugfixWorkflow.nodes.length, 4);
 });
 
-test("bugfixWorkflow: node ids are reproduce, implement, review, fix, pr", () => {
+test("bugfixWorkflow: node ids are implement, review, fix, pr (the plan is the guide — no reproduce node)", () => {
   const ids = bugfixWorkflow.nodes.map((n) => n.id);
-  assert.deepEqual(ids, [
-    "reproduce",
-    "implement",
-    "review",
-    "fix",
-    "pr",
-  ]);
+  assert.deepEqual(ids, ["implement", "review", "fix", "pr"]);
+  assert.equal(bugfixWorkflow.nodes.find((n) => n.id === "reproduce"), undefined);
+  assert.equal(bugfixWorkflow.nodes.find((n) => n.id === "define"), undefined);
 });
 
-test("bugfixWorkflow: reproduce produces guide.md and has a gate", () => {
-  const node = bugfixWorkflow.nodes.find((n) => n.id === "reproduce");
-  assert.ok(node !== undefined, "reproduce node must exist");
-  assert.deepEqual(node.produces, ["guide.md"]);
-  assert.ok(node.gate !== undefined, "reproduce must have a gate");
+test("bugfixWorkflow: implement is the root (no dependsOn) and the only root", () => {
+  const roots = bugfixWorkflow.nodes.filter((n) => (n.dependsOn ?? []).length === 0);
+  assert.deepEqual(roots.map((n) => n.id), ["implement"]);
 });
 
-test("bugfixWorkflow: implement depends on reproduce", () => {
+test("bugfixWorkflow: implement proves RED first — outcomeGate on red.json, red-evidence.md produced", () => {
   const node = bugfixWorkflow.nodes.find((n) => n.id === "implement");
   assert.ok(node !== undefined);
-  assert.ok(
-    node.dependsOn?.includes("reproduce"),
-    "implement must depend on reproduce",
-  );
+  assert.deepEqual(node.outcomeGate, { file: "red.json", field: "red", passValues: ["confirmed"] });
+  assert.ok(node.produces?.includes("summary.md"));
+  assert.ok(node.produces?.includes("red-evidence.md"));
+  // red.json is produced too: the mock executor and the gate evidence only see `produces`.
+  assert.ok(node.produces?.includes("red.json"));
+  assert.equal(node.gate, undefined, "implement is not gated — the first human gate is fix");
 });
 
 test("bugfixWorkflow: review depends on implement", () => {
@@ -95,7 +91,7 @@ test("bugfixWorkflow: every gate returns to the companion; pr is a pre-PR gate t
   assert.deepEqual(pr.gate.amendTargets, ["fix"]);
   assert.deepEqual(
     bugfixWorkflow.nodes.filter((n) => n.gate !== undefined).map((n) => n.id),
-    ["reproduce", "fix", "pr"],
+    ["fix", "pr"],
   );
 });
 

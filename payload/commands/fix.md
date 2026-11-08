@@ -193,9 +193,10 @@ This finding/test has now failed 3 consecutive fix rounds: <name the specific fi
 Three consecutive fix attempts on the same finding, each producing a different (or the same)
 failure, is a signal that the underlying approach may be wrong — not that a 4th attempt is more
 likely to succeed than the first three were. **Consider rejecting this round** with an instruction
-to reconsider the underlying approach rather than requesting another fix attempt — e.g. send the
-run back to `/define` (feature) or `/reproduce` (bugfix) for a revised guide, rather than continuing
-to iterate on `fix`.
+to reconsider the underlying approach rather than requesting another fix attempt. If the plan
+itself is what is wrong (the approach it prescribes cannot work), say so plainly and stop: the plan
+is the contract, so the driver sends the human back to the planning session for a revised plan —
+which is a new revision and a new run, not another round of `fix`.
 ```
 
 This is a mandatory section when the trigger condition is met — do not talk yourself out of writing

@@ -130,7 +130,7 @@ export function checkOutcomeGate(
 // noPlaceholders — mechanical scan for unresolved placeholder markers
 // ---------------------------------------------------------------------------
 
-/** Whole-word, case-sensitive placeholder markers a finished guide must not contain. */
+/** Whole-word, case-sensitive placeholder markers a finished document must not contain. */
 const PLACEHOLDER_RE = /\b(TBD|TODO|FIXME|XXX)\b/;
 
 /**
@@ -138,12 +138,14 @@ const PLACEHOLDER_RE = /\b(TBD|TODO|FIXME|XXX)\b/;
  * When `node.noPlaceholders` is absent or empty, always ok (no expectation to
  * violate). When present, for each named filename (relative to the node's
  * artifact dir): reads the file, blanks out fenced code-block content (a
- * guide may legitimately quote an existing `// TODO` from the codebase it
- * describes — that is not an unresolved placeholder authored by the guide),
+ * document may legitimately quote an existing `// TODO` from the codebase it
+ * describes — that is not an unresolved placeholder authored by the document),
  * then scans the remaining text for a whole-word match of TBD/TODO/FIXME/XXX.
  * A missing/unreadable file, or any match, fails loud with the filename,
  * matched token, and offending line — never a silent pass. Sibling to
- * checkOutcomeGate; same failure shape, same call site.
+ * checkOutcomeGate; same failure shape, same call site. No shipped node declares
+ * `noPlaceholders` today (its only users, the define/reproduce guides, were
+ * removed — DECISIONS.md § plan-is-the-guide); the primitive stays generic.
  */
 export function checkNoPlaceholders(
   runDir: string,

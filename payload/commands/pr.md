@@ -30,14 +30,13 @@ substitute it for `<runDir>` below — see Step 0):
 
 ```bash
 cat "<runDir>/plan/plan.md" 2>/dev/null
-cat "<runDir>/define/guide.md" 2>/dev/null
-cat "<runDir>/reproduce/guide.md" 2>/dev/null
 cat "<runDir>/implement/summary.md" 2>/dev/null
+cat "<runDir>/implement/red-evidence.md" 2>/dev/null
 cat "<runDir>/review/findings.json" 2>/dev/null
 cat "<runDir>/fix/summary.md" 2>/dev/null
 ```
 
-- Guide: use `define/guide.md` if it printed something; otherwise use `reproduce/guide.md` (bugfix workflow).
+- The plan is the contract and the source of the PR's goal; `implement/red-evidence.md` is the proof that the test failed before the change and passes after it. There is no separate implementation guide.
 
 ## Step 2 — Compose the PR body
 
@@ -49,7 +48,7 @@ cat > "<artifactsDir>/body.md" << 'BODY'
 ## Description
 
 <2–4 sentences. What this PR does and why — goal and purpose only.
-Draw from guide.md and implement/summary.md. No bullet lists, no sub-headers,
+Draw from plan.md and implement/summary.md. No bullet lists, no sub-headers,
 no review/fix recap.>
 
 ## Checklist

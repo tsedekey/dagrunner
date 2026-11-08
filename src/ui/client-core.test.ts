@@ -142,14 +142,14 @@ test("mergeItems: chronological insert, id de-dupe across a reconnect, returns o
 test("gate card: absent when the view has no gate (run not paused / nothing awaiting); present with facts when it has", () => {
   assert.equal(D.gateHtml({ runId: "9-1", gate: null, nodeOrder: [], nodes: {}, defs: {} }, {}), "");
   const v = hostileView({ runId: "9-1" });
-  v.gate = { nodeId: "fix", reason: "r", since: null, revision: "b04f.19", openedAt: null, round: 1, iteration: 0, maxIterations: 5, actions: ["approve", "amend", "hold"], amendTargets: ["fix"], approveContinuesTo: ["fix", "pr"], evidence: [{ name: "summary.md", sha: "d28f372f55cd" }], validation: [{ nodeId: "reproduce", check: "noPlaceholders", ok: true }], upstream: ["review"], companion: { sessionId: "53374b27-5801", status: "ok", reconstructed: false, cwd: "/Users/me/dev/x" }, decisions: 2 };
+  v.gate = { nodeId: "fix", reason: "r", since: null, revision: "b04f.19", openedAt: null, round: 1, iteration: 0, maxIterations: 5, actions: ["approve", "amend", "hold"], amendTargets: ["fix"], approveContinuesTo: ["fix", "pr"], evidence: [{ name: "summary.md", sha: "d28f372f55cd" }], validation: [{ nodeId: "implement", check: "outcomeGate", ok: true }], upstream: ["review"], companion: { sessionId: "53374b27-5801", status: "ok", reconstructed: false, cwd: "/Users/me/dev/x" }, decisions: 2 };
   const html = D.gateHtml(v, {}) as string;
   assert.match(html, /Waiting for a decision at fix/);
   assert.match(html, /1 of 5 allowed <span class="muted">\(state\.json iteration 0\)<\/span>/);
   assert.match(html, /<b>amend<\/b> \(fix\)/);
   assert.match(html, /<span>fix<\/span><i>→<\/i><span>pr<\/span>/);
   assert.match(html, /summary\.md<\/code> <span class="muted">d28f372f55cd/);
-  assert.match(html, /✓ reproduce\/noPlaceholders/);
+  assert.match(html, /✓ implement\/outcomeGate/);
   assert.match(html, /upstream: review/);
   assert.match(html, /started in <code>~\/dev\/x<\/code>/);
   assert.match(html, /dagrun gate show 9-1/);

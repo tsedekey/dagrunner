@@ -28,13 +28,6 @@ function setup(workflow: "bugfix" | "feature", over: Partial<RunState> = {}) {
     branch: "b",
     sourcePlanPath: "/p",
     nodes: {
-      reproduce: {
-        status: "done",
-        artifacts: [],
-        iteration: 1,
-        cost: 0.1,
-        gateHistory: [],
-      },
       implement: {
         status: "done",
         artifacts: [],
@@ -91,7 +84,7 @@ test("node order follows the feature workflow when state.workflow is feature", (
 test("total cost sums every node's cost", () => {
   const { home } = setup("bugfix");
   const snap = buildRunSnapshot(home, "9-1");
-  assert.equal(snap.totalCost, 0.1 + 0.2 + 0.05 + 0.3);
+  assert.equal(snap.totalCost, 0.2 + 0.05 + 0.3);
 });
 
 test("per-node gateHistory is carried through, decisionId and all", () => {
@@ -134,7 +127,7 @@ test("a torn/garbled gate.json degrades to null instead of throwing", () => {
 test("an unknown workflow name falls back to state.json's own node insertion order", () => {
   const { home } = setup("bugfix", { workflow: "mystery" });
   const snap = buildRunSnapshot(home, "9-1");
-  assert.deepEqual(snap.nodeOrder, ["reproduce", "implement", "review", "fix"]);
+  assert.deepEqual(snap.nodeOrder, ["implement", "review", "fix"]);
 });
 
 // ---------------------------------------------------------------------------
@@ -171,7 +164,7 @@ test("gate card: shown ONLY when run status is paused AND a node is awaiting-gat
     schema: 1, runId: "9-1", workflow: "bugfix", gateNodeId: "fix", iteration: 0, revision: "r.1",
     gateArtifacts: [{ path: "/x/fix/summary.md", sha256: "d28f372f55cdabcdef" }],
     upstreamArtifacts: [{ nodeId: "review", files: [] }],
-    validation: [{ nodeId: "reproduce", check: "noPlaceholders", ok: true }],
+    validation: [{ nodeId: "implement", check: "outcomeGate", ok: true }],
     companion: { sessionId: "sess-1", reconstructed: false, status: "ok", resume: { sessionId: "sess-1", configDir: "/c", cwd: "/home/u/proj", prompt: "p" } },
     pendingDecision: { actions: ["approve", "amend", "hold"], amendTargets: ["fix"], approveContinuesTo: ["pr"] },
   };
@@ -215,28 +208,30 @@ test("gate card without a persisted brief is still shown (lighter), and a brief 
 
   const b = setup("bugfix");
   mkdirSync(join(b.runDir, "fix"), { recursive: true });
-  writeFileSync(join(b.runDir, "fix", "gate.json"), JSON.stringify({ gateNodeId: "reproduce", revision: "STALE", iteration: 0 }));
+  writeFileSync(join(b.runDir, "fix", "gate.json"), JSON.stringify({ gateNodeId: "pr", revision: "STALE", iteration: 0 }));
   assert.equal(buildRunSnapshot(b.home, "9-1").gate?.revision, null);
 });
 
 test("skipped reason: a workflow-defined skipped node is explained by its `when`/optional; a node the workflow no longer defines has none", () => {
   const base = (over: Record<string, unknown> = {}) =>
     ({ status: "skipped", artifacts: [], iteration: 0, cost: 0, gateHistory: [], ...over }) as RunState["nodes"][string];
-  const s = setup("bugfix", { status: "running", nodes: { implement: base(), verify: base() } });
+  const s = setup("bugfix", { status: "running", nodes: { implement: base(), verify: base(), reproduce: base() } });
   const snap = buildRunSnapshot(s.home, "9-1");
   assert.equal(snap.nodes["implement"]?.skipReason, "when");
   assert.equal(snap.nodes["verify"]?.skipReason, null, "legacy verify node: no definition, no reason, no throw");
-  assert.equal(snap.nodes["reproduce"]?.skipReason, null);
+  assert.equal(snap.nodes["reproduce"]?.skipReason, null, "legacy reproduce node: no definition, no reason, no throw");
 });
 
-test("workflow node definitions are exposed serializably (no `when` function), with gate.maxIterations defaulting to 10", () => {
+test("workflow node definitions are exposed serializably (no `when` function); gate.maxIterations comes from the gate config", () => {
   const { home } = setup("bugfix");
   const snap = buildRunSnapshot(home, "9-1");
   assert.equal(snap.defs["verify"], undefined, "the verify node no longer exists");
   assert.deepEqual(snap.defs["pr"]?.dependsOn, ["fix"]);
   assert.equal(snap.defs["fix"]?.gate?.maxIterations, 5);
-  assert.equal(snap.defs["reproduce"]?.gate?.maxIterations, 10);
-  assert.equal(snap.defs["implement"]?.gate, null);
+  assert.equal(snap.defs["reproduce"], undefined, "the reproduce node no longer exists");
+  assert.equal(snap.defs["define"], undefined, "the define node no longer exists");
+  assert.equal(snap.defs["implement"]?.gate, null, "implement is the (ungated) root");
+  assert.deepEqual(snap.defs["implement"]?.dependsOn, []);
   assert.doesNotThrow(() => JSON.stringify(snap));
 });
 
@@ -249,6 +244,8 @@ test("nodes in state.json that the current workflow no longer defines (legacy di
   });
   const snap = buildRunSnapshot(home, "9-1");
   assert.equal(snap.nodeOrder.at(-1), "digest");
+  assert.ok(snap.nodeOrder.includes("reproduce"), "a leftover reproduce node stays visible");
+  assert.equal(snap.defs["reproduce"], undefined);
   assert.ok(snap.nodeOrder.includes("pr"));
   assert.equal(snap.nodes["pr"]?.status, "pending");
   assert.equal(snap.nodes["digest"]?.status, "done");
@@ -271,7 +268,7 @@ test("per-node files: registered + extra from disk, plus bookkeeping files (gate
   assert.equal(byName["summary.md"]?.registered, false);
 });
 
-test("OLD RUN (pre-removal state.json with a done verify node, a fix gate decision and a verify/ dir) snapshots without throwing and keeps the legacy node visible", () => {
+test("OLD RUN (pre-removal state.json with done reproduce + verify nodes, a fix gate decision and a verify/ dir) snapshots without throwing and keeps the legacy node visible", () => {
   const { home, runDir } = setup("bugfix", {
     status: "done",
     nodes: {
@@ -294,5 +291,7 @@ test("OLD RUN (pre-removal state.json with a done verify node, a fix gate decisi
   assert.equal(snap.nodeOrder.at(-1), "verify");
   assert.equal(snap.nodes["verify"]?.status, "done");
   assert.equal(snap.defs["verify"], undefined);
+  assert.equal(snap.nodes["reproduce"]?.status, "done", "a pre-plan-is-the-guide run keeps its done reproduce node visible");
+  assert.equal(snap.defs["reproduce"], undefined);
   assert.doesNotThrow(() => JSON.stringify(snap));
 });

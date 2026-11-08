@@ -2,10 +2,14 @@
  * bugfix-workflow.ts — bug fix pipeline workflow definition.
  *
  * Pipeline shape:
- *   reproduce (Gate 1) -> implement -> review -> fix (Gate 2) -> pr (Gate 3, pre-PR)
+ *   implement -> review -> fix (gate) -> pr (gate, pre-PR)
  *
- * There is no verify node (removed — DECISIONS.md § verify-node-removed): the
- * runtime hand-off it provisioned was skipped at the fix gate in practice.
+ * The plan is the guide (DECISIONS.md § plan-is-the-guide): the plan stage happens
+ * upstream in a planning session whose approved plan file is the run's input
+ * (<runDir>/plan/plan.md), so there is no reproduce node and no gate before
+ * implement. `implement` takes over the one useful thing reproduce did — it proves
+ * RED first and fails the run loudly (outcomeGate on red.json) when it cannot.
+ * There is no verify node either (removed — DECISIONS.md § verify-node-removed).
  *
  * base_branch is read from plan frontmatter and stored in state.json;
  * run-engine wires it into the worktree start-point and the gh pr create call.
@@ -15,25 +19,21 @@ import type { Workflow } from "../core/types.js";
 
 export const bugfixWorkflow: Workflow = {
   name: "bugfix",
-  // Every gate (reproduce, fix, pr) returns to the originating planning companion
+  // Every gate (fix, pr) returns to the originating planning companion
   // via `dagrun gate show|decide` — see DECISIONS.md § companion-gates.
   companionGates: true,
   nodes: [
     {
-      id: "reproduce",
-      command: "/reproduce",
-      model: "opus",
-      produces: ["guide.md"],
-      noPlaceholders: ["guide.md"],
-      gate: { maxIterations: 10, onReject: "revise-self" },
-    },
-    {
       id: "implement",
-      dependsOn: ["reproduce"],
       command: "/implement",
       model: "sonnet",
       effort: "medium",
-      produces: ["summary.md"],
+      // red.json is produced AND outcome-gated: produces runs first (a node that
+      // wrote nothing is a contract violation), then the gate fails the node with
+      // the precise `red = "not-reproduced"` error. implement therefore writes all
+      // three files even when RED cannot be proven (see payload/commands/implement.md).
+      produces: ["summary.md", "red-evidence.md", "red.json"],
+      outcomeGate: { file: "red.json", field: "red", passValues: ["confirmed"] },
       formatCommand: "./mvnw spotless:apply --no-transfer-progress",
     },
     {

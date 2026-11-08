@@ -35,13 +35,6 @@ function tempHomeWithRun(runId: string, over: Partial<RunState> = {}): string {
     branch: "b",
     sourcePlanPath: "/p",
     nodes: {
-      reproduce: {
-        status: "done",
-        artifacts: [],
-        iteration: 0,
-        cost: 0.05,
-        gateHistory: [],
-      },
       implement: {
         status: "running",
         artifacts: [],
@@ -313,7 +306,6 @@ test("LIVE: an events.jsonl append and the matching state change push a feed fra
 test("LIVE: a node that starts running AFTER the client connected is tailed (transcript did not exist at connect time)", async () => {
   const home = tempHomeWithRun("9-1", {
     nodes: {
-      reproduce: { status: "done", artifacts: [], iteration: 0, cost: 0, gateHistory: [] },
       implement: { status: "pending", artifacts: [], iteration: 0, cost: 0, gateHistory: [] },
     },
   });

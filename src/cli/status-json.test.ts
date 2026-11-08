@@ -21,8 +21,8 @@ function setup(over: Partial<RunState> = {}) {
     runId: "9-1", workflow: "bugfix", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:10:00.000Z",
     status: "running", worktreePath: "/w", branch: "b", sourcePlanPath: "/p",
     nodes: {
-      reproduce: { status: "done", artifacts: ["/a/r.md"], iteration: 1, cost: 0.25, gateHistory: [], startedAt: "2026-01-01T00:00:00.000Z", endedAt: "2026-01-01T00:01:30.000Z" },
-      implement: { status: "running", artifacts: [], iteration: 0, cost: 0, gateHistory: [], startedAt: "2026-01-01T00:02:00.000Z" },
+      implement: { status: "done", artifacts: ["/a/r.md"], iteration: 1, cost: 0.25, gateHistory: [], startedAt: "2026-01-01T00:00:00.000Z", endedAt: "2026-01-01T00:01:30.000Z" },
+      review: { status: "running", artifacts: [], iteration: 0, cost: 0, gateHistory: [], startedAt: "2026-01-01T00:02:00.000Z" },
       fix: { status: "pending", artifacts: [], iteration: 0, cost: 0, gateHistory: [] },
     },
     ...over,
@@ -42,13 +42,13 @@ test("running run with a live driver: stale=false, currentNodes, per-node timing
   const j = buildStatusJson(home, "9-1");
   assert.equal(j.status, "running");
   assert.equal(j.stale, false);
-  assert.deepEqual(j.currentNodes, ["implement"]);
+  assert.deepEqual(j.currentNodes, ["review"]);
   assert.equal(j.awaitingGate, null);
   assert.equal(j.companion, null);
-  assert.equal(j.nodes["reproduce"]?.durationMs, 90000);
-  assert.equal(j.nodes["reproduce"]?.cost, 0.25);
-  assert.deepEqual(j.nodes["reproduce"]?.artifacts, [{ path: "/a/r.md", registered: true, size: null, mtime: null }]);
-  assert.equal(j.nodes["implement"]?.durationMs, null);
+  assert.equal(j.nodes["implement"]?.durationMs, 90000);
+  assert.equal(j.nodes["implement"]?.cost, 0.25);
+  assert.deepEqual(j.nodes["implement"]?.artifacts, [{ path: "/a/r.md", registered: true, size: null, mtime: null }]);
+  assert.equal(j.nodes["review"]?.durationMs, null);
   assert.equal(j.lastEventAt, "2026-01-01T00:10:00.000Z", "no events.jsonl: falls back to updatedAt");
   assert.equal(j.driver?.pid, process.ppid);
 });
@@ -63,17 +63,17 @@ test("running run whose lock holder is dead (or missing) is stale", () => {
 
 test("paused run is not stale; awaiting-gate reports node, revision, since from events", () => {
   const { home, runDir, state } = setup({ status: "paused", companion: { sessionId: "S1", associatedAt: "T", source: "handoff", reconstructed: false } });
-  state.nodes["implement"] = { status: "awaiting-gate", artifacts: [], iteration: 1, cost: 0, gateHistory: [], endedAt: "2026-01-01T00:05:00.000Z" };
+  state.nodes["fix"] = { status: "awaiting-gate", artifacts: [], iteration: 1, cost: 0, gateHistory: [], endedAt: "2026-01-01T00:05:00.000Z" };
   writeFileSync(join(runDir, "state.json"), JSON.stringify(state));
   writeFileSync(
     join(runDir, "events.jsonl"),
-    JSON.stringify({ ts: "2026-01-01T00:05:01.000Z", type: "gate.opened", node: "implement", detail: { revision: "abc.def" } }) + "\n",
+    JSON.stringify({ ts: "2026-01-01T00:05:01.000Z", type: "gate.opened", node: "fix", detail: { revision: "abc.def" } }) + "\n",
   );
   const j = buildStatusJson(home, "9-1");
   assert.equal(j.status, "awaiting-gate");
   assert.equal(j.stale, false);
   assert.deepEqual(j.awaitingGate && { nodeId: j.awaitingGate.nodeId, revision: j.awaitingGate.revision, since: j.awaitingGate.since }, {
-    nodeId: "implement", revision: "abc.def", since: "2026-01-01T00:05:01.000Z",
+    nodeId: "fix", revision: "abc.def", since: "2026-01-01T00:05:01.000Z",
   });
   assert.ok(typeof j.awaitingGate?.reason === "string" && j.awaitingGate.reason.length > 0);
   assert.deepEqual(j.companion, { sessionId: "S1" });
@@ -114,4 +114,18 @@ test("per-node artifacts include unregistered on-disk files (registered first), 
   assert.deepEqual(a.map((f) => [f.path.split("/").at(-1), f.registered]), [["summary.md", true], ["changes.diff", false]]);
   assert.equal(a[0]?.size, 3);
   assert.match(a[1]?.mtime ?? "", /^\d{4}-/);
+});
+
+test("a failed node's error is reported per node (an outcome-gate failure is otherwise invisible to a driver polling status --json)", () => {
+  const { home, runDir, state } = setup({ status: "failed" });
+  state.nodes["implement"] = {
+    ...state.nodes["implement"]!,
+    status: "failed",
+    error: 'outcome gate failed — red = "not-reproduced", expected one of: confirmed',
+  };
+  writeFileSync(join(runDir, "state.json"), JSON.stringify(state));
+  const j = buildStatusJson(home, "9-1");
+  assert.equal(j.status, "failed");
+  assert.equal(j.nodes["implement"]?.error, 'outcome gate failed — red = "not-reproduced", expected one of: confirmed');
+  assert.equal(j.nodes["review"]?.error, null, "nodes without an error report null");
 });

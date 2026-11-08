@@ -239,8 +239,8 @@ test("readSessionCwd reads the session's directory from the transcript head; nul
 });
 
 test("gateResumePrompt tells a resumed conversation a gate is waiting, defers facts to `gate show`, and forbids deciding", () => {
-  const p = gateResumePrompt("59478-2", "reproduce");
-  assert.match(p, /run 59478-2 is paused at its "reproduce" gate/);
+  const p = gateResumePrompt("59478-2", "fix");
+  assert.match(p, /run 59478-2 is paused at its "fix" gate/);
   assert.match(p, /dagrun gate show 59478-2/);
   assert.match(p, /bug-fix-companion/);
   assert.match(
@@ -312,7 +312,6 @@ test("findAppliedDecision detects a repeat on any node's history", () => {
 test("amend targets: gate itself + declared gated ancestors only", () => {
   assert.deepEqual(amendTargets(bugfixWorkflow, "pr"), ["pr", "fix"]);
   assert.deepEqual(amendTargets(bugfixWorkflow, "fix"), ["fix"]);
-  assert.deepEqual(amendTargets(bugfixWorkflow, "reproduce"), ["reproduce"]);
   const s = makeState({}, "pr");
   const b = brief(s, "pr");
   assert.equal(
@@ -323,7 +322,7 @@ test("amend targets: gate itself + declared gated ancestors only", () => {
         req(b, {
           action: "amend",
           comment: "c",
-          target: "reproduce",
+          target: "implement",
         }),
       ) as { code?: string }
     ).code,
@@ -351,7 +350,7 @@ test("amending fix from the pre-PR gate invalidates pr", () => {
     revise: "pr",
     reset: [],
   });
-  assert.ok(downstreamOf(bugfixWorkflow, "reproduce").includes("pr"));
+  assert.deepEqual(downstreamOf(bugfixWorkflow, "implement"), ["review", "fix", "pr"]);
   assert.deepEqual(approveContinuesTo(bugfixWorkflow, "fix"), ["pr"]);
 });
 
@@ -363,7 +362,6 @@ test("amending fix from the pre-PR gate invalidates pr", () => {
 test("featureWorkflow: amend targets: gate itself + declared gated ancestors only", () => {
   assert.deepEqual(amendTargets(featureWorkflow, "pr"), ["pr", "fix"]);
   assert.deepEqual(amendTargets(featureWorkflow, "fix"), ["fix"]);
-  assert.deepEqual(amendTargets(featureWorkflow, "define"), ["define"]);
 });
 
 test("featureWorkflow: amending fix from the pre-PR gate invalidates pr", () => {
@@ -374,7 +372,7 @@ test("featureWorkflow: amending fix from the pre-PR gate invalidates pr", () => 
     revise: "pr",
     reset: [],
   });
-  assert.ok(downstreamOf(featureWorkflow, "define").includes("pr"));
+  assert.deepEqual(downstreamOf(featureWorkflow, "implement"), ["review", "fix", "pr"]);
   assert.deepEqual(approveContinuesTo(featureWorkflow, "fix"), ["pr"]);
 });
 

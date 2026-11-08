@@ -144,7 +144,7 @@ export type Node = {
   /**
    * Filenames (relative to the node's artifact dir) to mechanically scan for
    * unresolved placeholder markers (`TBD`, `TODO`, `FIXME`, `XXX`, whole-word,
-   * case-sensitive) after fenced code blocks are stripped (a guide may
+   * case-sensitive) after fenced code blocks are stripped (a document may
    * legitimately quote an existing `// TODO` from the codebase it's
    * describing). Checked after the produces-existence and outcomeGate checks
    * pass; any match fails the node loud. See `checkNoPlaceholders` in dag.ts.

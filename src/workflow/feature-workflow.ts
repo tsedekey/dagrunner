@@ -2,10 +2,16 @@
  * feature-workflow.ts — feature pipeline workflow definition.
  *
  * Pipeline shape:
- *   define (Gate 1) -> implement -> review -> fix (Gate 2) -> pr (Gate 3, pre-PR)
+ *   implement -> review -> fix (gate) -> pr (gate, pre-PR)
+ *
+ * The plan is the guide (DECISIONS.md § plan-is-the-guide): the plan stage happens
+ * upstream in a planning session whose approved plan file is the run's input
+ * (<runDir>/plan/plan.md), so there is no define node and no gate before implement.
+ * `implement` proves RED first and fails the run loudly (outcomeGate on red.json)
+ * when it cannot.
  *
  * Parity with bugfix-workflow.ts (DECISIONS.md § feature-companion-gates-parity):
- * every gate (define, fix, pr) returns to the originating planning companion via
+ * every gate (fix, pr) returns to the originating planning companion via
  * `dagrun gate show|decide` (`companionGates: true`). There is no verify node
  * (removed — DECISIONS.md § verify-node-removed).
  *
@@ -103,26 +109,19 @@ export const FINDINGS_SCHEMA = {
 
 export const featureWorkflow: Workflow = {
   name: "feature",
-  // Every gate (define, fix, pr) returns to the originating planning companion
+  // Every gate (fix, pr) returns to the originating planning companion
   // via `dagrun gate show|decide` — see DECISIONS.md § companion-gates and
   // § feature-companion-gates-parity.
   companionGates: true,
   nodes: [
     {
-      id: "define",
-      command: "/define",
-      model: "opus",
-      produces: ["guide.md"],
-      noPlaceholders: ["guide.md"],
-      gate: { maxIterations: 10, onReject: "revise-self" },
-    },
-    {
       id: "implement",
-      dependsOn: ["define"],
       command: "/implement",
       model: "sonnet",
       effort: "medium",
-      produces: ["summary.md", "red-evidence.md"],
+      // See bugfix-workflow.ts: red.json is produced and outcome-gated.
+      produces: ["summary.md", "red-evidence.md", "red.json"],
+      outcomeGate: { file: "red.json", field: "red", passValues: ["confirmed"] },
       formatCommand: "./mvnw spotless:apply --no-transfer-progress",
     },
     {

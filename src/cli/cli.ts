@@ -123,7 +123,7 @@ async function orFailAdoption<T>(fn: () => T | Promise<T>): Promise<T> {
 }
 
 /**
- * TEST-ONLY seam: DAGRUN_MOCK_SCENARIOS='{"reproduce":"gate-pause",...}' swaps the
+ * TEST-ONLY seam: DAGRUN_MOCK_SCENARIOS='{"fix":"gate-pause",...}' swaps the
  * SDK runner for the mock executor, so smoke tests can drive the REAL CLI (and
  * `--detach` children) without any API call. Loud on stderr; never set in real use.
  */

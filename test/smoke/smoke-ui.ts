@@ -3,7 +3,7 @@
  * smoke-ui.ts — in-process smoke test for `dagrun ui`'s HTTP server.
  *
  * Drives two real (mock-executor) bugfix runs into a temp DAGRUNNER_HOME (one
- * paused at its "reproduce" gate, one driven to `done`), starts the real
+ * paused at its first (fix) gate, one driven to `done`), starts the real
  * `startUiServer` on an ephemeral port against that home, hits every JSON/SSE
  * endpoint and the HTML page, and proves the server never wrote to either run
  * directory. Does NOT touch `~/.local/share/dagrunner` or run `59478-2` — see
@@ -60,7 +60,6 @@ function makePlanPath(homeDir: string, issueNum: number): string {
 
 const bugfixMockFactory = () =>
   createMockExecutor({
-    reproduce: "gate-pause",
     implement: "success",
     review: "success",
     fix: "gate-pause",
@@ -78,7 +77,7 @@ function readState(runDir: string): RunState {
 }
 
 // ---------------------------------------------------------------------------
-// RUN 1 — paused at the "reproduce" gate (exercises the awaiting-gate banner).
+// RUN 1 — paused at the fix gate, the first gate of a run (exercises the awaiting-gate banner).
 // ---------------------------------------------------------------------------
 
 const PLAN_1 = makePlanPath(HOME, BASE_TS);
@@ -97,9 +96,9 @@ const RUN_ID_1 = readdirSync(join(HOME, "runs")).find((d) =>
 assert.ok(RUN_ID_1 !== undefined, "run 1 must exist after startRun");
 {
   const state = readState(join(HOME, "runs", RUN_ID_1 as string));
-  assert.equal(state.nodes["reproduce"]?.status, "awaiting-gate");
+  assert.equal(state.nodes["fix"]?.status, "awaiting-gate");
 }
-console.log(`smoke-ui: run 1 (${RUN_ID_1}) paused at "reproduce" gate`);
+console.log(`smoke-ui: run 1 (${RUN_ID_1}) paused at "fix" gate`);
 
 // ---------------------------------------------------------------------------
 // RUN 2 — driven to `done` (exercises a completed run in the list/detail).
@@ -119,13 +118,6 @@ const RUN_ID_2 = readdirSync(join(HOME, "runs")).find(
   (d) => d !== RUN_ID_1 && existsSync(join(HOME, "runs", d, "state.json")),
 );
 assert.ok(RUN_ID_2 !== undefined, "run 2 must exist after startRun");
-await resumeRun({
-  runId: RUN_ID_2 as string,
-  homeDir: HOME,
-  config,
-  approve: true,
-  executorFactory: bugfixMockFactory,
-});
 await resumeRun({
   runId: RUN_ID_2 as string,
   homeDir: HOME,
@@ -201,9 +193,9 @@ try {
     runStatus: string;
     gate: { nodeId: string; actions: string[] } | null;
   };
-  assert.equal(snap1.awaitingGate?.nodeId, "reproduce");
+  assert.equal(snap1.awaitingGate?.nodeId, "fix");
   assert.equal(snap1.runStatus, "paused");
-  assert.equal(snap1.gate?.nodeId, "reproduce", "paused + awaiting-gate -> the gate card is present");
+  assert.equal(snap1.gate?.nodeId, "fix", "paused + awaiting-gate -> the gate card is present");
   assert.deepEqual(
     snap1.nodeOrder,
     bugfixWorkflow.nodes.map((n) => n.id),

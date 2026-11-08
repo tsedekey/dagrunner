@@ -261,7 +261,11 @@ test("payload/commands no longer tell nodes a literal path is unobtainable or to
     /Do not try to print or discover the literal value/i,
     /a literal path you don't have/i,
   ];
-  const nodeCommands = ["define", "reproduce", "implement", "review", "fix", "pr"];
+  const nodeCommands = ["implement", "review", "fix", "pr"];
+  // define/reproduce were removed (the plan is the guide) — nothing may ship them back by accident.
+  for (const gone of ["define.md", "reproduce.md"]) {
+    assert.ok(!readdirSync(dir).includes(gone), `payload/commands/${gone} must not exist`);
+  }
   for (const name of readdirSync(dir)) {
     const text = readFileSync(join(dir, name), "utf8");
     for (const re of banned) {

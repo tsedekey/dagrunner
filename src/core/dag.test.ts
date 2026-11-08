@@ -42,7 +42,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, unlinkSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -1078,8 +1078,8 @@ test("outcomeGate: missing declared file degrades to failed via the existing pro
 
 // ---------------------------------------------------------------------------
 // noPlaceholders — mechanical scan for unresolved placeholder markers
-// (item 4 of the "structural upgrades" build: define/reproduce guide.md
-// mechanically scanned for TBD/TODO/FIXME/XXX after fenced code is stripped)
+// (generic primitive — no shipped node uses it since define/reproduce were removed,
+// DECISIONS.md § plan-is-the-guide; kept like when/optional/outcomeGate)
 // ---------------------------------------------------------------------------
 
 test("checkNoPlaceholders: clean file with no markers passes", async () => {
@@ -1092,23 +1092,23 @@ test("checkNoPlaceholders: clean file with no markers passes", async () => {
   };
 
   const tmpDir = mkdtempSync(join(tmpdir(), "dr-no-placeholders-clean-"));
-  const nodeDir = join(tmpDir, "define");
+  const nodeDir = join(tmpDir, "doc");
   const { mkdirSync } = await import("node:fs");
   mkdirSync(nodeDir, { recursive: true });
   writeFileSync(
-    join(nodeDir, "guide.md"),
-    "# Guide\n\nEverything here is fully specified. No open items remain.\n",
+    join(nodeDir, "doc.md"),
+    "# Doc\n\nEverything here is fully specified. No open items remain.\n",
     "utf8",
   );
 
   const node: Node = {
-    id: "define",
-    command: "/define",
-    produces: ["guide.md"],
-    noPlaceholders: ["guide.md"],
+    id: "doc",
+    command: "/doc",
+    produces: ["doc.md"],
+    noPlaceholders: ["doc.md"],
   };
 
-  const result = checkNoPlaceholders(tmpDir, "define", node);
+  const result = checkNoPlaceholders(tmpDir, "doc", node);
   assert.deepEqual(result, { ok: true });
 });
 
@@ -1122,15 +1122,15 @@ test("checkNoPlaceholders: a TODO quoted inside a fenced code block is NOT a fal
   };
 
   const tmpDir = mkdtempSync(join(tmpdir(), "dr-no-placeholders-fenced-"));
-  const nodeDir = join(tmpDir, "define");
+  const nodeDir = join(tmpDir, "doc");
   const { mkdirSync } = await import("node:fs");
   mkdirSync(nodeDir, { recursive: true });
   writeFileSync(
-    join(nodeDir, "guide.md"),
+    join(nodeDir, "doc.md"),
     [
-      "# Guide",
+      "# Doc",
       "",
-      "The existing handler already has this comment, unrelated to this guide:",
+      "The existing handler already has this comment, unrelated to this document:",
       "",
       "```java",
       "// TODO: revisit this once the v2 API ships",
@@ -1144,13 +1144,13 @@ test("checkNoPlaceholders: a TODO quoted inside a fenced code block is NOT a fal
   );
 
   const node: Node = {
-    id: "define",
-    command: "/define",
-    produces: ["guide.md"],
-    noPlaceholders: ["guide.md"],
+    id: "doc",
+    command: "/doc",
+    produces: ["doc.md"],
+    noPlaceholders: ["doc.md"],
   };
 
-  const result = checkNoPlaceholders(tmpDir, "define", node);
+  const result = checkNoPlaceholders(tmpDir, "doc", node);
   assert.deepEqual(
     result,
     { ok: true },
@@ -1168,13 +1168,13 @@ test("checkNoPlaceholders: a real placeholder in prose fails with the token and 
   };
 
   const tmpDir = mkdtempSync(join(tmpdir(), "dr-no-placeholders-real-"));
-  const nodeDir = join(tmpDir, "define");
+  const nodeDir = join(tmpDir, "doc");
   const { mkdirSync } = await import("node:fs");
   mkdirSync(nodeDir, { recursive: true });
   writeFileSync(
-    join(nodeDir, "guide.md"),
+    join(nodeDir, "doc.md"),
     [
-      "# Guide",
+      "# Doc",
       "",
       "## Validation commands",
       "",
@@ -1185,17 +1185,17 @@ test("checkNoPlaceholders: a real placeholder in prose fails with the token and 
   );
 
   const node: Node = {
-    id: "define",
-    command: "/define",
-    produces: ["guide.md"],
-    noPlaceholders: ["guide.md"],
+    id: "doc",
+    command: "/doc",
+    produces: ["doc.md"],
+    noPlaceholders: ["doc.md"],
   };
 
-  const result = checkNoPlaceholders(tmpDir, "define", node);
+  const result = checkNoPlaceholders(tmpDir, "doc", node);
   assert.equal(result.ok, false);
   if (!result.ok) {
     assert.ok(
-      result.error.includes("guide.md"),
+      result.error.includes("doc.md"),
       `expected filename in error, got: ${result.error}`,
     );
     assert.ok(
@@ -1220,12 +1220,12 @@ test("checkNoPlaceholders: absent when node.noPlaceholders is undefined (no expe
 
   const tmpDir = mkdtempSync(join(tmpdir(), "dr-no-placeholders-absent-"));
   const node: Node = {
-    id: "define",
-    command: "/define",
-    produces: ["guide.md"],
+    id: "doc",
+    command: "/doc",
+    produces: ["doc.md"],
   };
 
-  const result = checkNoPlaceholders(tmpDir, "define", node);
+  const result = checkNoPlaceholders(tmpDir, "doc", node);
   assert.deepEqual(result, { ok: true });
 });
 
@@ -1241,10 +1241,10 @@ test("checkNoPlaceholders: wired end-to-end through runDag — a placeholder fai
 
   const tmpDir = mkdtempSync(join(tmpdir(), "dr-no-placeholders-rundag-"));
   const node: Node = {
-    id: "define",
-    command: "/define",
-    produces: ["guide.md"],
-    noPlaceholders: ["guide.md"],
+    id: "doc",
+    command: "/doc",
+    produces: ["doc.md"],
+    noPlaceholders: ["doc.md"],
   };
   const stateFile = join(tmpDir, "state.json");
   const executor: NodeExecutor = async (_id, n, ctx) => {
@@ -1253,7 +1253,7 @@ test("checkNoPlaceholders: wired end-to-end through runDag — a placeholder fai
     for (const f of n.produces ?? []) {
       wfs(
         join(ctx.artifactsDir, f),
-        "# Guide\n\nFIXME: not done yet.\n",
+        "# Doc\n\nFIXME: not done yet.\n",
         "utf8",
       );
     }
@@ -1271,21 +1271,145 @@ test("checkNoPlaceholders: wired end-to-end through runDag — a placeholder fai
     read: () => "",
     dir: (id) => join(tmpDir, id),
   };
-  // makeOutcomeGateState seeds a "checked" node id by default — override to "define".
-  const stateWithDefine: RunState = {
+  // makeOutcomeGateState seeds a "checked" node id by default — override to "doc".
+  const stateWithDoc: RunState = {
     ...state,
-    nodes: { define: makeNodeState({ status: "pending" }) },
+    nodes: { doc: makeNodeState({ status: "pending" }) },
   };
 
-  const result = await runDag(workflow, executor, stateWithDefine, {
+  const result = await runDag(workflow, executor, stateWithDoc, {
     ctx,
     stateFile,
   });
 
   assert.equal(result.status, "failed");
-  assert.equal(result.nodes["define"]?.status, "failed");
+  assert.equal(result.nodes["doc"]?.status, "failed");
   assert.ok(
-    (result.nodes["define"]?.error ?? "").includes("FIXME"),
-    `expected FIXME token in error, got: ${result.nodes["define"]?.error}`,
+    (result.nodes["doc"]?.error ?? "").includes("FIXME"),
+    `expected FIXME token in error, got: ${result.nodes["doc"]?.error}`,
   );
 });
+
+// ---------------------------------------------------------------------------
+// The shipped pipelines: implement -> review -> fix (gate) -> pr (gate)
+// (DECISIONS.md § plan-is-the-guide). implement proves RED first: red.json is
+// outcome-gated, so a run whose RED could not be proven fails LOUDLY at
+// implement and review never runs; a confirmed RED reaches the fix gate first.
+// ---------------------------------------------------------------------------
+
+import { bugfixWorkflow } from "../workflow/bugfix-workflow.js";
+import { featureWorkflow } from "../workflow/feature-workflow.js";
+import { runDag as runDagDirect } from "./dag.js";
+
+function shippedPipelineState(workflow: Workflow, tmpDir: string): RunState {
+  const nodes: Record<string, NodeState> = {};
+  for (const n of workflow.nodes) nodes[n.id] = makeNodeState({ status: "pending" });
+  return {
+    runId: `shipped-${workflow.name}`,
+    workflow: workflow.name,
+    createdAt: "2026-11-08T00:00:00.000Z",
+    updatedAt: "2026-11-08T00:00:00.000Z",
+    status: "running",
+    worktreePath: tmpDir,
+    branch: "fix/shipped",
+    sourcePlanPath: "/tmp/plan.md",
+    nodes,
+  };
+}
+
+function shippedCtx(tmpDir: string): Ctx {
+  return { json: () => ({}), read: () => "", dir: (id) => join(tmpDir, id) };
+}
+
+for (const workflow of [bugfixWorkflow, featureWorkflow]) {
+  test(`${workflow.name}: implement writes red.json 'not-reproduced' -> node fails with the precise outcome-gate message and review/fix/pr never run`, async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), `dr-red-fail-${workflow.name}-`));
+    const called: string[] = [];
+    const executor: NodeExecutor = async (id, n, ctx) => {
+      called.push(id);
+      const { mkdirSync } = await import("node:fs");
+      mkdirSync(ctx.artifactsDir, { recursive: true });
+      // The prompt contract for the not-reproduced case: ALL declared files are
+      // still written (summary.md + red-evidence.md explain what was tried).
+      for (const f of n.produces ?? []) {
+        writeFileSync(
+          join(ctx.artifactsDir, f),
+          f === "red.json"
+            ? JSON.stringify({ red: "not-reproduced", reason: "the reproducing test already passes on this branch" })
+            : `# ${f}\nTried the reproducing command; it passed.\n`,
+          "utf8",
+        );
+      }
+      return { status: "done", artifacts: [], cost: 0, sessionId: "mock-session-abc123" };
+    };
+    const stateFile = join(tmpDir, "state.json");
+    const result = await runDagDirect(workflow, executor, shippedPipelineState(workflow, tmpDir), {
+      ctx: shippedCtx(tmpDir),
+      stateFile,
+    });
+
+    assert.equal(result.status, "failed");
+    assert.deepEqual(called, ["implement"], "only implement ran — review/fix/pr never started");
+    assert.equal(result.nodes["implement"]?.status, "failed");
+    assert.equal(
+      result.nodes["implement"]?.error,
+      'outcome gate failed — red = "not-reproduced", expected one of: confirmed',
+    );
+    for (const id of ["review", "fix", "pr"]) {
+      assert.equal(result.nodes[id]?.status, "skipped", `${id} is blocked, never executed`);
+    }
+    // The failure reason survives on disk, in the failed run's state.json.
+    assert.equal(readState(stateFile).nodes["implement"]?.status, "failed");
+  });
+
+  test(`${workflow.name}: if implement skips summary.md/red-evidence.md the generic produces error wins over the outcome gate (why the prompt demands all three files)`, async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), `dr-red-fail-order-${workflow.name}-`));
+    const executor: NodeExecutor = async (_id, _n, ctx) => {
+      const { mkdirSync } = await import("node:fs");
+      mkdirSync(ctx.artifactsDir, { recursive: true });
+      writeFileSync(join(ctx.artifactsDir, "red.json"), JSON.stringify({ red: "not-reproduced" }), "utf8");
+      return { status: "done", artifacts: [], cost: 0, sessionId: "mock-session-abc123" };
+    };
+    const result = await runDagDirect(workflow, executor, shippedPipelineState(workflow, tmpDir), {
+      ctx: shippedCtx(tmpDir),
+      stateFile: join(tmpDir, "state.json"),
+    });
+    assert.equal(result.nodes["implement"]?.status, "failed");
+    assert.match(
+      result.nodes["implement"]?.error ?? "",
+      /^produces contract violated — missing: summary\.md, red-evidence\.md$/,
+    );
+  });
+
+  test(`${workflow.name}: confirmed RED -> implement and review complete and the FIRST pause is the fix gate`, async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), `dr-red-ok-${workflow.name}-`));
+    const called: string[] = [];
+    const base = createMockExecutor({ fix: "gate-pause", pr: "gate-pause" });
+    const executor: NodeExecutor = async (id, n, ctx) => {
+      called.push(id);
+      return base(id, n, ctx);
+    };
+    const stateFile = join(tmpDir, "state.json");
+    const result = await runDagDirect(workflow, executor, shippedPipelineState(workflow, tmpDir), {
+      ctx: shippedCtx(tmpDir),
+      stateFile,
+    });
+
+    assert.equal(result.status, "paused");
+    assert.deepEqual(called, ["implement", "review", "fix"]);
+    assert.equal(result.nodes["implement"]?.status, "done");
+    assert.equal(result.nodes["review"]?.status, "done");
+    assert.equal(result.nodes["fix"]?.status, "awaiting-gate");
+    assert.equal(result.nodes["pr"]?.status, "pending");
+    // The mock writes red.json with the gate's first passValue, so the outcome gate passed.
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(tmpDir, "implement", "red.json"), "utf8")),
+      { red: "confirmed" },
+    );
+    assert.deepEqual(
+      Object.entries(result.nodes).filter(([, ns]) => ns.status === "awaiting-gate").map(([id]) => id),
+      ["fix"],
+      "fix is the only (and first) node a run can pause at",
+    );
+  });
+}

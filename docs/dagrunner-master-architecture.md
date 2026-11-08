@@ -1,14 +1,14 @@
 # dagrunner — Master Architecture (Source of Truth)
 
 Status: Canonical, reconciled with the built code through Phase 5 (bugfix workflow shipped; siblings run on any branch). Each sibling build also gets its own implementation plan.
-Last updated: 2026-11-08 (runs ADOPT an existing worktree instead of creating one — §4 "Worktree adoption", DECISIONS.md § worktree-adoption). Previously 2026-11-03 (verify node removed from both workflows — §3d, DECISIONS.md § verify-node-removed). Previously 2026-07-03 (docs consolidation: retired the v1-build scaffold, docs/archive/, the chat-architect handoff apparatus, and the file-based plan/status-tracking workflow — docs/changes/, docs/STATUS.md, docs/dagrunner-architect-charter.md, and the build-queue/bundle scripts are gone; self-changes are now agreed in conversation and history lives in git log. See CLAUDE.md § "How self-changes happen".)
+Last updated: 2026-11-08 (the plan is the guide: the define and reproduce nodes and their gates are removed, `implement` proves RED first and the first gate of a run is `fix` — §3, §3c, §3e, DECISIONS.md § plan-is-the-guide; runs ADOPT an existing worktree instead of creating one — §4 "Worktree adoption", DECISIONS.md § worktree-adoption). Previously 2026-11-03 (verify node removed from both workflows — §3d, DECISIONS.md § verify-node-removed). Previously 2026-07-03 (docs consolidation: retired the v1-build scaffold, docs/archive/, the chat-architect handoff apparatus, and the file-based plan/status-tracking workflow — docs/changes/, docs/STATUS.md, docs/dagrunner-architect-charter.md, and the build-queue/bundle scripts are gone; self-changes are now agreed in conversation and history lives in git log. See CLAUDE.md § "How self-changes happen".)
 Owner: Eddie Tsedeke
 
 ---
 
 ## 1. What dagrunner is
 
-A thin, static TypeScript orchestrator that walks a feature change through a fixed, gated pipeline — define|reproduce -> implement -> review -> fix -> pr — pausing at defined human gates and checkpointing to disk so it survives process exit. Each node is a Claude Code session spawned via the Agent SDK in the git worktree the run was started in — dagrunner ADOPTS an existing linked worktree of DEVHARNESS_SRC (created by `wm add` / `git worktree add`) and never creates or, for adopted runs, removes one (§4). dagrunner owns only what Claude Code cannot do across separate sessions: the dependency graph, checkpoint-and-resume, worktree isolation (via adoption), artifact hand-off, gates, and cost discipline.
+A thin, static TypeScript orchestrator that walks a change through a fixed, gated pipeline — implement -> review -> fix -> pr, starting from an approved plan that was authored upstream — pausing at defined human gates (the fix gate and the pre-PR gate) and checkpointing to disk so it survives process exit. Each node is a Claude Code session spawned via the Agent SDK in the git worktree the run was started in — dagrunner ADOPTS an existing linked worktree of DEVHARNESS_SRC (created by `wm add` / `git worktree add`) and never creates or, for adopted runs, removes one (§4). dagrunner owns only what Claude Code cannot do across separate sessions: the dependency graph, checkpoint-and-resume, worktree isolation (via adoption), artifact hand-off, gates, and cost discipline.
 
 Core principle: **code coordinates, model judges.** TS orchestration is free; node sessions cost. Reuse Claude Code primitives; build only cross-process/worktree gaps.
 
@@ -20,44 +20,49 @@ North star: **strip everything predictive out of the front of the pipeline; deci
 
 | #   | Component                                | Runs where                                           | Role                                                                                                                                                                                                                                                 |
 | --- | ---------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | **Glean Agent (Feature Task Companion)** | Glean                                                | Ingests a GitHub task; emits a directional implementation plan (INTENT/why). dagrunner's expand writes the code-level HOW and critically evaluates the plan's proposed implementation. The plan is dagrunner's inbox input — no GitHub issue needed. |
+| 1   | **Glean Agent (Feature Task Companion)** | Glean                                                | Ingests a GitHub task and (together with the Copilot planning session that follows it) produces the approved plan — INTENT and the code-level HOW. The approved plan file is dagrunner's inbox input and the contract of the run; no node re-derives it. No GitHub issue needed. |
 | 2   | **dagrunner (static feature pipeline)**  | local machine                                        | The gated feature pipeline. The heart of the system.                                                                                                                                                                                                 |
 | 3   | **Three Phase-3 siblings**               | Camunda monorepo private `.claude/`, run in worktree | Interactive human-driven commands acting on Camunda: `/seed-data` (c8ctl seeding of a human-started OC), `ci-babysit`, `pr-triage`. See §9.                                                                                                          |
 
 Phase 3 is three LOCAL siblings (/seed-data + ci-babysit + pr-triage) — one substrate, enterprise subscription locally. `/pr-review` is NOT a dagrunner sibling: it stays a private standalone command for reviewing OTHERS' PRs (see §9). gh-aw and dynamic-workflows-in-pipeline are not used (see §9 rationale).
 
-**Feature-task plan authoring guidance:** Plans should faithfully capture the requirement, intent, and acceptance criteria — including the source issue's prescribed solution path when one exists. Keep implementation **directional**; detailed implementation is expand's job, not the plan's. Over-specifying implementation in the plan risks divergence from the issue and reduces expand's ability to find a better path.
+**Plan authoring guidance (since v0.1.82 — the plan is the guide):** the plan is the contract `implement` works from; there is no define/reproduce node that elaborates or challenges it. So it must be implementable as written: the requirement, intent and acceptance criteria — including the source issue's prescribed solution path when one exists — plus, for a bug, the reported symptom, the root-cause hypothesis and the reproducing test or validation command, because `implement` must prove RED from them (§3e). When the plan turns out to be wrong, the run stops (an unprovable RED fails the run; a flagged `## Concerns / plan challenges` pauses `--night`) and the human goes back to the planning session for a revised plan — a new revision and a new run.
 
 ---
 
 ## 3. The feature pipeline (fully static)
 
-> **Since v0.1.64** feature has a third gate (pre-PR, on `pr`, `amendTargets: ["fix"]`) and
-> `companionGates: true` — every gate (define, fix, pr) returns to the originating companion,
-> matching bugfix exactly — see §3g, § feature-companion-gates-parity. `expand` below was later
-> renamed `define`. **Since v0.1.79 there is no `verify` node** (§3d): the pipeline is
-> define -> implement -> review -> fix -> pr, and the diagram below reflects that. The night-mode
-> description below is otherwise historical.
+> **Since v0.1.82 the plan is the guide** (DECISIONS.md § plan-is-the-guide): the plan stage happens
+> upstream in a Copilot planning session whose approved plan file is the run's input, so the
+> `define` (feature) and `reproduce` (bugfix) nodes — two opus nodes that turned that plan into a
+> guide — and their human gates are gone. The first human gate of a run is the **fix gate**
+> (after implement and review), then the **pre-PR gate** on `pr`; both return to the originating
+> companion (`companionGates: true`, §3g). `implement` took over the one useful thing those nodes
+> did: it proves RED first (§3e). History: v0.1.64 gave feature its pre-PR gate and
+> `companionGates: true` (§3g, § feature-companion-gates-parity); `expand` was later renamed
+> `define`; v0.1.79 removed `verify` (§3d). The night-mode description below is otherwise historical.
 
 ```
-[Glean directional plan in inbox]
+[approved plan in inbox — authored upstream, e.g. in a Copilot planning session]
    [PREFLIGHT] (not a node; runs before the graph)
         |
-  expand (unpinned)   ★ GATE 1: review the guide (conversation-led)
-                        → elaborates a usable implementation guide AND critically evaluates the plan's proposed
-                          implementation; surfaces a "Concerns / plan challenges" section in guide.md when the
-                          plan over-specifies, diverges from the source issue, or is incomplete (advisory — no
-                          hard block; human reviews at Gate 1)
-  implement (unpinned)
+  implement (sonnet, medium)  — reads <runDir>/plan/plan.md (the plan IS the guide).
+                        PROVES RED FIRST: runs the plan's reproducing test (bugfix) or writes the failing
+                        test the acceptance criteria imply (feature), watches it fail for the right reason,
+                        implements, reruns GREEN; writes red-evidence.md + red.json.
+                        outcomeGate on red.json: anything but red="confirmed" FAILS THE RUN here (no gate,
+                        no "continue and flag") and review never starts. If RED is proven but the plan's
+                        assumptions differ, implement continues and adds "## Concerns / plan challenges"
+                        to its summary.md.
   review (static node):
      - diff-triage first step (haiku): read diff -> touches_* flags
      - fan-out selected reviewer subagents (read-only, isolated context)
      - synthesize
      - adversarial verifier ONLY if findings count > N (default 3)
         |  -> review/findings.json
-  fix (consumes findings, mutates worktree, self-verifies)  ★ GATE 2: accept/reject fixes
-  pr (haiku)   ★ GATE 3 (pre-PR) -> composes the PR body; the push / draft-PR happen outside the agent's
-                              session after the gate is approved (see §3g, §6)
+  fix (consumes findings, mutates worktree, self-verifies)  ★ FIRST GATE (the "fix gate"): accept/reject fixes
+  pr (haiku)   ★ PRE-PR GATE (the "pr gate") -> composes the PR body; the push / draft-PR happen outside the
+                              agent's session after the gate is approved (see §3g, §6)
                               [TERMINAL — run ends here]
                               Each node may write reflections.md; the SessionEnd hook captures it to store
 ```
@@ -80,28 +85,32 @@ Reviewer selection (from diff-triage): correctness + test-adequacy always; api-s
 
 **Gates:** all checkpoint-and-exit, single-awaiting-gate invariant. Human review via a fresh interactive `claude` session (SDK session IDs are not resumable from the CLI — two stores don't share state); `/gate-review` + `/gate-conclude` write a `gate-decision.md` handshake file. Author-agent revision still resumes the same SDK session (via `options.resume` + `feedback-N.md`) so it revises with memory. Gates live ONLY on static nodes.
 
-**Night-mode (`dagrun start feature --night`):** unattended overnight execution. One rule — agent-decidable gates (Gate 1 = expand, Gate 2 = fix) are auto-approved when no "Concerns / plan challenges" heading is present in the gate artifact. A flagged concern or an unreadable/missing artifact also pauses (fail toward the human). Every auto-decision is logged to `gateHistory` with `mode: "night"` and `basis: "no concerns flagged"` for morning audit. `agentDecidable(nodeId)` is the exported predicate; `hasConcerns(content)` is the exported concern check (both pure, unit-tested). A clean night-mode run proceeds `fix` → `pr` fully unattended; there is no election or hand-off step anywhere in the pipeline (§3d).
+**Night-mode (`dagrun start feature --night`):** unattended overnight execution. One rule — agent-decidable gates (the fix gate and the pre-PR `pr` gate) are auto-approved when no "Concerns / plan challenges" heading is present. The scan (`nightConcernsFlagged`, exported and unit-tested) covers the gate node's own primary artifact AND the primary artifact of every DONE ancestor: `implement` raises the heading in ITS `summary.md` (RED proven, plan assumptions differ), while the first gate is `fix`, whose own `summary.md` would not repeat it — scanning only the gate's artifact would auto-approve past a flagged plan challenge. A flagged concern, an unreadable/missing artifact, or a leftover gate id the workflow no longer defines also pauses (fail toward the human). Every auto-decision is logged to `gateHistory` with `mode: "night"` and `basis: "no concerns flagged"` for morning audit. `agentDecidable(nodeId)` (`fix`, `pr`) is the exported predicate; `hasConcerns(content)` is the exported heading check (both pure, unit-tested). A clean night-mode run proceeds `implement` → `review` → `fix` → `pr` fully unattended; there is no election or hand-off step anywhere in the pipeline (§3d).
 
 ---
 
 ## 3c. The bugfix pipeline
 
-> **Since v0.1.50** the diagram below has a third gate (pre-PR, on `pr`) and every gate returns to
-> the originating companion — see §3g. **Since v0.1.79 there is no `verify` node** (§3d).
+> **Since v0.1.50** the diagram below has a pre-PR gate (on `pr`) and every gate returns to
+> the originating companion — see §3g. **Since v0.1.79 there is no `verify` node** (§3d). **Since
+> v0.1.82 there is no `reproduce` node and no gate before `implement`** (§3): the plan is the guide,
+> and the bugfix `implement` takes over reproduce's RED proof.
 
 ```
 [Bug fix plan in inbox — YAML frontmatter: base_branch, severity, issue URL]
    [PREFLIGHT] (same as feature)
         |
-  reproduce (unpinned)  ★ GATE 1: review the reproduction guide
-                          → confirms bug is real (reproducing test currently fails),
-                            validates root cause, documents fix approach in guide.md.
-                            Surfaces "Concerns / plan challenges" when: cannot reproduce,
-                            root cause differs from plan, or change surface is broader.
-  implement (unpinned)   — reuses /implement command (reads guide.md from reproduce/)
+  implement (sonnet, medium) — reuses /implement (reads <runDir>/plan/plan.md)
+                            → runs the plan's reproducing test/validation command and confirms it FAILS
+                              for the reported symptom (no named test: writes the smallest one that
+                              demonstrates it); implements; reruns GREEN; red-evidence.md + red.json.
+                              Cannot reproduce (already fixed / test missing or flaky / env unavailable /
+                              root cause plainly differs) -> red.json "not-reproduced" -> the run FAILS here.
+                              RED proven but root cause / change surface differ from the plan ->
+                              continues, with "## Concerns / plan challenges" in summary.md.
   review    (same as feature — reuses /review + FINDINGS_SCHEMA)
-  fix       (unpinned)  ★ GATE 2: accept/reject fixes
-  pr        (haiku)     ★ GATE 3 (pre-PR) — reuses /pr command
+  fix       (sonnet, medium) ★ FIRST GATE: accept/reject fixes
+  pr        (haiku)     ★ PRE-PR GATE — reuses /pr command
                             [TERMINAL — run ends here]
 ```
 
@@ -111,14 +120,14 @@ Reviewer selection (from diff-triage): correctness + test-adequacy always; api-s
 
 **Frontmatter fields stored in state:** `baseBranch`, `severity`, `issueUrl` are optional fields on `RunState`. They survive resume. Only `baseBranch` is stored when non-"main" (avoids cluttering state for feature runs). None are exported as env vars — they are consumed by engine TS code from state, not by node prompts.
 
-**Command reuse:** `/implement` and `/pr` are workflow-tolerant: they check `define/guide.md` first, then fall back to `reproduce/guide.md`. No workflow-specific command forks — single copies, no smoke:live cost increase.
+**Command reuse:** `/implement`, `/review` and `/pr` are shared by both workflows and read the same inputs — `<runDir>/plan/plan.md` (the plan, copied in at start) plus `implement/red-evidence.md` — so there is no per-workflow guide path to resolve any more. `implement.md` tells the two cases apart from the plan itself (a plan that reports a defect is the bugfix case, one that describes new behaviour is the feature case): the run-environment block carries no workflow name, and both cases end in the same `red.json`. No workflow-specific command forks — single copies. The two workflows now differ only in name (branch/PR-title prefix) and the findings schema; merging them into one is a possible later cleanup, not done here.
 
 ---
 
 ## 3d. Content-level node checks (`outcomeGate`, `noPlaceholders`) — and the REMOVED verify node
 
-**verify was removed (v0.1.79 — DECISIONS.md § verify-node-removed).** The pipeline is
-define|reproduce -> implement -> review -> fix -> pr. verify went through three shapes — an
+**verify was removed (v0.1.79 — DECISIONS.md § verify-node-removed).** The pipeline was then
+define|reproduce -> implement -> review -> fix -> pr (since v0.1.82: implement -> review -> fix -> pr, §3). verify went through three shapes — an
 autonomous `@MultiDbTest` author/runner/judge, an optional provision-and-hand-off of a
 local runtime for manual testing chosen at the fix gate (v0.1.50/v0.1.57), and finally nothing.
 Eddie's use of the optional hand-off showed it was skipped at the fix-gate decision on nearly every
@@ -133,7 +142,7 @@ its outcome names or evidence types exist any more.
 
 What a human wants from "see it work" is still available without a pipeline node: the
 `/manual-smoke` sibling (§10.4) generates a manual-test walkthrough on demand from any run's
-artifacts, and the reproducing/regression test that `reproduce`/`implement`/`fix` already write is
+artifacts, and the RED→GREEN test that `implement` writes (and `fix` keeps green) is
 the pipeline's own behavioral proof. CI reruns the full build/test/acceptance matrix on the PR.
 
 **What the removal took with it, and what it deliberately left.**
@@ -149,8 +158,9 @@ the pipeline's own behavioral proof. CI reruns the full build/test/acceptance ma
   `gitHead` (the gate revision's worktree-HEAD component) moved into `core/gate.ts` unchanged.
 - Left on purpose (generic engine, not verify-specific): `Node.when` and `Node.optional` — the
   conditional-skip / optional-degradation primitives CLAUDE.md names as core — and `outcomeGate`
-  below. No shipped node uses them today; they stay unit-tested in `dag.test.ts` and `outcomeGate`
-  stays covered end-to-end by `smoke:mock` Run F through a tiny custom workflow.
+  below. `when`/`optional` have no shipped user; they stay unit-tested in `dag.test.ts`. `outcomeGate`
+  has one again since v0.1.82 (`implement`'s `red.json`, §3e) and stays covered end-to-end by
+  `smoke:mock` Runs F/F2.
 - Left on purpose (not verify's): the `Bash(docker *)` allowance in the seeded settings
   (`fix.md` runs `docker info` before the first `*IT.java` execution), the manual-smoke sibling,
   its `verify-guide/` output directory and `seeding-spec.json`, and the seed-data sibling that
@@ -163,6 +173,15 @@ the pipeline's own behavioral proof. CI reruns the full build/test/acceptance ma
   provisioned verify environment from such a run is simply left behind. There is no migration
   code. Any already-provisioned verify docker resources can no longer be torn down by dagrunner
   and must be removed by hand.
+- **Old runs, again (v0.1.82 — define/reproduce).** A run created before the plan-is-the-guide change
+  still has a `define` (feature) or `reproduce` (bugfix) node — gated, usually `done` — and a
+  `<node>/guide.md`. Same contract: read-only commands tolerate it (pinned by
+  `old-run-tolerance.test.ts`, which also covers a run paused AT the old first gate and a failed
+  leftover node); resuming is **unsupported** and was measured, not changed: a leftover node that is
+  `pending`/`running`/`skipped`/`done` is ignored (`pending` and a reset-from-`running` end `skipped`),
+  a leftover `failed` node still ends the run `failed` (`anyFailed`) even if every current node
+  finished, and a run paused AT the old gate has that gate auto-skipped as a "stale gate" so `implement`
+  runs for the first time without the guide's approval. See DECISIONS.md § plan-is-the-guide.
 
 **The engine mechanism — `outcomeGate`:** node status in dagrunner was originally derived only
 from SDK success/failure + `produces` file-existence — nothing read the CONTENT of a produced
@@ -172,8 +191,14 @@ not duplicated — with `src/runtime/run-engine.ts`'s `rerunNode`) immediately a
 produces-file-existence check passes: it reads `field` out of the named JSON artifact and, if the
 value isn't in `passValues`, marks the node `"failed"` with a clear message instead of `"done"` —
 identical halt semantics to a produces violation (node fails, run halts, dependents never run). Any
-failure to locate/parse the file also fails loud, never a silent pass. verify was its only user;
-the mechanism stays because it is the general "content, not just existence" check.
+failure to locate/parse the file also fails loud, never a silent pass. verify was its first user and
+took the shipped use with it; since v0.1.82 `implement` uses it again (`file: red.json`, `field: red`,
+`passValues: ["confirmed"]`, §3e). **Order matters:** the produces-existence check runs FIRST, so a
+node that skipped any declared file fails with the generic `produces contract violated` error and the
+outcome gate never reads its content — which is why `implement` lists `red.json` in `produces` AND its
+prompt demands `summary.md`, `red-evidence.md` and `red.json` even when RED is not proven (pinned by
+`dag.test.ts`). A failed node's reason is visible in `dagrun status --json` (`nodes.<id>.error`), in
+`dagrun gate show` on a failed run, in the report and in the UI snapshot.
 
 **Sibling mechanism — `noPlaceholders` (added by the structural-upgrades change, 2026-07-09 — see
 `DECISIONS.md § structural-upgrades-2026-07-09`):** a second content-level check, `noPlaceholders:
@@ -181,16 +206,19 @@ string[]` (`src/core/types.ts`), lists produced filenames to mechanically scan f
 `TBD`/`TODO`/`FIXME`/`XXX` markers (whole-word, case-sensitive) after fenced code blocks are blanked
 (a guide may legitimately quote an existing `// TODO` from the codebase it describes — that is not
 an authored placeholder). Checked by `src/core/dag.ts`'s `checkNoPlaceholders`, immediately after
-`checkOutcomeGate`, same failure shape (`"failed"` with a clear message, never a silent pass). Wired
+`checkOutcomeGate`, same failure shape (`"failed"` with a clear message, never a silent pass). Was wired
 as `noPlaceholders: ["guide.md"]` on `define` (feature) and `reproduce` (bugfix) — Eddie chose the
 mechanical check over a prompt self-check specifically because it is verifiable, unlike the
-RED-evidence declaration below.
+RED-evidence declaration below. **Since v0.1.82 no shipped node declares it** (the guides it scanned
+are gone; `plan.md` is not scanned): the primitive and its four wiring sites stay as generic engine,
+flagged for a possible later cleanup, and stay covered by `dag.test.ts` and `smoke:mock` Runs G/H
+through a tiny custom gated workflow.
 
-**Why this check needed FOUR wiring sites, not one:** `define`/`reproduce` are gated nodes, and
+**Why this check needed FOUR wiring sites, not one:** the nodes it targeted (`define`/`reproduce`) were gated, and
 `sdk-runner.ts` guarantees a gated node's executor call ALWAYS returns `awaiting-gate`, never
 `done` — so `runDag`'s own done-branch (where `checkOutcomeGate` already lived, and where the
-originating brief for this change said to add the sibling check) is never actually reached by the
-two nodes `noPlaceholders` targets. The only two places a gated node's status ever flips to `done`
+originating brief for this change said to add the sibling check) is never actually reached by a
+gated node. The only two places a gated node's status ever flips to `done`
 are `run-engine.ts`'s two gate-approve transitions: `resumeRun`'s manual `--approve` branch and
 `startRun`'s night-mode auto-approve loop. `checkNoPlaceholders` is wired into all four done-
 transition sites (`runDag`, `rerunNode` — mirroring `checkOutcomeGate`'s existing dual-wiring — plus
@@ -199,10 +227,10 @@ still recorded in `gateHistory` (it genuinely happened) but the node's `status` 
 with the check's error instead of `"done"` — the mechanical check overrides the approval outcome,
 not the audit trail of what was decided. Proven end-to-end (not just via the pure-function unit
 tests) by `smoke:mock` Run G: a `gate-pause-with-placeholder` mock-executor scenario writes an
-unresolved `TODO` into `define/guide.md`, then the real `startRun`/`resumeRun` approve path is
-exercised and asserted to end `define` `"failed"` (not `"done"`), block `implement`, and fail the
+unresolved `TODO` into a custom gated node's `summary.md`, then the real `startRun`/`resumeRun` approve path is
+exercised (`resumeRun` takes a test-only `workflow` seam for the custom workflow) and asserted to end the node `"failed"` (not `"done"`), block its dependent, and fail the
 run — the wiring gap the advisor's review caught before this shipped, and the thing a `runDag`-only
-wiring would have made invisible (the mock guide.md content contains no placeholder token, so
+wiring would have made invisible (the mock content contains no placeholder token, so
 "check passed" and "check never ran" would have looked identical on the happy path alone).
 
 **One-shot session vs. auto-backgrounded long commands (run `54177-1`):** a Bash command running
@@ -219,26 +247,45 @@ verify-specific and was not superseded by the node's removal.
 ## 3e. Verified-RED TDD, the 3-failed-fix-rounds escalation, and red-flag tables
 
 Three prompt-level hardening changes landed together (2026-07-09, alongside the `noPlaceholders`
-engine change in §3d — see `DECISIONS.md § structural-upgrades-2026-07-09` for the full log):
+engine change in §3d — see `DECISIONS.md § structural-upgrades-2026-07-09` for the full log; the RED
+change below was broadened to both workflows in v0.1.82):
 
-**Verified-RED TDD on feature `implement` (feature workflow only):** `payload/commands/implement.md`
-is shared by both workflows, but the RED-proof gap it closes is real only on the feature side —
-`reproduce.md` Step 2 already proves red at the bug-symptom level (runs the reproducing
-test/validation command, confirms it currently fails) before any guide is written. `implement.md`
-now has a step, gated on which guide.md path was read (`define/guide.md` vs `reproduce/guide.md`), that on the feature path: identifies
-the unit/integration test(s) the guide's acceptance criteria imply (explicitly NOT an `@MultiDbTest`
-acceptance test), writes that test
-first, runs it, confirms it fails for the right reason (captures the output), only then writes the
-implementation, reruns to confirm GREEN, and writes `$DAGRUN_ARTIFACTS/red-evidence.md` with the
-test identity, captured RED output, and GREEN confirmation. `red-evidence.md` is declared in
-`implement`'s `produces` array in `feature-workflow.ts` ONLY (not `bugfix-workflow.ts`'s `implement`
-node) — this reuses the existing produces-contract engine mechanism (`dag.ts`'s
-`missing = (node.produces ?? []).filter(...)`) rather than any new hook; `.claude/hooks/
+**Verified-RED first on `implement` (both workflows, since v0.1.82 — it began feature-only in the
+2026-07-09 change):** `payload/commands/implement.md` is shared by both workflows. Before this change
+the bugfix side proved red in `reproduce.md` Step 2 and the feature side in `implement.md`; with
+`define`/`reproduce` gone (§3) `implement` owns the proof for both. It reads
+`<runDir>/plan/plan.md` and, before writing any implementation code: **bugfix** — runs the
+reproducing test/validation command the plan names and confirms it fails for the reported symptom
+(no named test: writes the smallest one that demonstrates it); **feature** — identifies the
+unit/integration test(s) the acceptance criteria imply (explicitly NOT an `@MultiDbTest` acceptance
+test) and writes that test first. Either way it runs the test, confirms it fails **for the right
+reason** (not a compile error, typo or wrong import; captures the output), only then implements,
+reruns to confirm GREEN, and writes `<artifactsDir>/red-evidence.md` (test identity, captured RED
+output, GREEN confirmation) and `<artifactsDir>/red.json`.
+
+`red.json` is the machine-readable verdict: `{"red":"confirmed","test":"<file#case>","command":"<cmd>"}`
+or `{"red":"not-reproduced","reason":"<what was tried and observed>"}`. Both workflows' `implement`
+declare `produces: ["summary.md", "red-evidence.md", "red.json"]` and
+`outcomeGate: { file: "red.json", field: "red", passValues: ["confirmed"] }` (§3d). **Unprovable RED
+fails the run loudly** — Eddie's decision: bug already fixed, test missing/unrunnable, flaky,
+environment unavailable, or the plan's reproduction does not demonstrate the symptom. `implement` then
+writes no implementation code and stages nothing, but still writes all three files (so the
+produces check, which runs first, does not mask the reason), the outcome gate fails the node, `review`
+never starts, and the run ends `failed` with `outcome gate failed — red = "not-reproduced", expected
+one of: confirmed`. No new gate, no escalation gate, no "continue and flag"; the driver reports the
+reason and the human returns to the planning session for a revised plan (a new revision, a new run —
+the plan is the contract). When RED IS proven but the plan's assumptions differ (root cause is not the
+one stated, change surface broader than expected), `implement` continues and adds a short
+`## Concerns / plan challenges` section to its `summary.md` (ported from `reproduce.md` Step 4);
+`--night` treats that heading as a flagged concern at the next gate (§3 night-mode).
+`red-evidence.md`/`red.json` are plain `produces` entries: this reuses the existing
+produces-contract and outcome-gate mechanisms rather than any new hook; `.claude/hooks/
 session-end.sh` was explicitly considered and rejected for this because it is fail-soft/
-observability-only and cannot enforce anything. **Known, accepted ceiling:** this proves existence +
-a plausible RED→GREEN narrative, not a cryptographically-verified ordering — an agent could still
-fabricate `red-evidence.md`'s content. That is intentional; over-engineering around it was
-explicitly rejected.
+observability-only and cannot enforce anything. They also reach the fix gate as evidence (the brief's
+`upstreamArtifacts` and an `outcomeGate` validation row). **Known, accepted ceiling:** this proves
+existence + a plausible RED→GREEN narrative, not a cryptographically-verified ordering — an agent
+could still fabricate `red-evidence.md`'s content or `red.json`'s `confirmed`. That is intentional;
+over-engineering around it was explicitly rejected.
 
 **3-failed-fix-rounds escalation (`fix.md`, shared by both workflows — one edit covers both):** `fix`
 already checkpoint-exits to a human gate on every round, and `run-engine.ts`'s gate-context builder
@@ -255,8 +302,7 @@ self-verification; read back at the start of Step 3 to count consecutive trailin
 `fix` itself, never meant to reach the worktree or PR. When a round's build/test check fails for the
 3rd consecutive time, `fix.md` writes a mandatory `## ⚠️ Architecture in question` section into
 `summary.md` (which finding/test has failed 3 rounds running, a per-round reconstruction pulled from
-`fix-history.log` + `feedback-*.md`, and an explicit recommendation to reject and send the run back
-to `/define`/`/reproduce` for a revised guide rather than requesting a 4th fix attempt). A `PASS`
+`fix-history.log` + `feedback-*.md`, and an explicit recommendation to reject rather than request a 4th fix attempt — and, when the plan itself is what is wrong, to say so and stop so the driver can send the human back to the planning session for a revised plan, i.e. a new run). A `PASS`
 resets the streak to 0 regardless of a later human rejection for unrelated reasons (style, scope) —
 the streak measures build/test convergence, not human satisfaction. `gate-review.md` is untouched —
 its existing "present the full artifact content, do not truncate" instruction already surfaces the
@@ -264,7 +310,7 @@ new section with no edit needed.
 
 **Red-flag / rationalization tables** were added to `implement.md` and `fix.md` (and, until its removal, `verify.md`) — a
 short (5-8 row) two-column table per node ("red flag phrase" → "what to do instead"), each tailored
-to that node's actual failure modes (skipping the new RED step, scope creep, and leaving work
+to that node's actual failure modes (skipping the RED step or implementing without a proven RED, scope creep, and leaving work
 half-done for `implement`; scope creep beyond the cited finding, dismissing a still-failing test as
 "probably flaky" without rerunning, and talking oneself out of the round-3 escalation for `fix`).
 These are deliberately cheap, skimmable red-flag recognition aids, not new procedural steps.
@@ -308,8 +354,8 @@ feature-companion-gates-parity).** Eddie plans in one local companion
 conversation. `dagrun start <workflow> … --companion-session <id>` records that conversation's
 `CLAUDE_CODE_SESSION_ID` in `state.companion` (or `--no-companion` explicitly opts into the legacy
 fresh-session gates; no silent default; `--night` is incompatible — a `--night` feature run now
-also needs `--no-companion`, same as bugfix already did). At every gate (`reproduce`/`define`, `fix`,
-and the new pre-PR gate on `pr`) the run pauses and dagrunner spawns **nothing**: it writes
+also needs `--no-companion`, same as bugfix already did). At every gate (`fix` — the first gate of a run
+since v0.1.82 — and the pre-PR gate on `pr`) the run pauses and dagrunner spawns **nothing**: it writes
 `<gate>/gate.json` (run, gate, iteration, `revision`, plan sha, worktree HEAD, evidence hashes,
 mechanical validation, pending decision) and `gate-context.md`, and prints how to return: `dagrun resume <run>` (no flags, in a
 terminal) or `dagrun gate open <run>` resumes the recorded session from its original directory with an opening prompt that tells it a gate is
@@ -352,7 +398,7 @@ references (`~/.claude/skills/bug-fix-companion/references/dagrunner-gates.md` a
 repo) now make this explicit rather than leaving it implicit: at the `fix` gate, the companion names
 which findings `fix` explicitly deferred (dimension/severity/reason) alongside the findings it
 addressed; at the `pr` gate it surfaces the open questions a reviewer would likely ask (design
-tradeoffs, scope boundaries the guide drew). This repo's bugfix-only mirror of that doc is `docs/bug-fix-companion-gate-addition.md`.
+tradeoffs, scope boundaries the plan drew). This repo's bugfix-only mirror of that doc is `docs/bug-fix-companion-gate-addition.md`.
 
 **Lesson promotion — `dagrun reflect` gets its first real caller (v0.1.65, same change).** `dagrun
 reflect --source <node> --body "<text>" [--run-id <id>]` (§8b) existed as dead code — no file under
@@ -519,7 +565,7 @@ port already in use fails loud with the exact retry command — it never silentl
   matches (`gate.json` keeps `pendingDecision` after approval); `issueUrl` is stored with literal quotes
   (stripped; non-http dropped); a `skipped` node's reason (decision / optional / condition) comes from the
   deciding gate's `next-node-decision.json`; files are listed from disk (registered/extra, plus
-  gate.json/burn.json/gate-context.md as bookkeeping chips); state-only legacy nodes (digest, expand…) are
+  gate.json/burn.json/gate-context.md as bookkeeping chips); state-only legacy nodes (digest, expand, define, reproduce…) are
   appended to the pipeline; serializable node definitions (no `when` fn) feed row meta and "Round N of M".
 - **SSE + live tail** (`sse.ts`, `feed.ts`, `transcript.ts`, `live.ts`): `events.jsonl` holds state
   transitions only — a running node's activity (assistant text, tool calls) exists only in
@@ -598,9 +644,9 @@ the gate.)
 
 `npm run verify-baseline` = `npm ci && typecheck && unit tests && smoke:mock`. The standing gate: run on every plan change.
 
-**smoke:mock** (`test/smoke/smoke-mock.ts`) drives both gated workflows in-process using the mock executor — zero API calls, deterministic. Asserts: gate pauses, produces-contract at every relevant node, state transitions (awaiting-gate → paused → done), night-mode auto-approvals. Since v0.1.64 every `startRun` call here against `featureWorkflow` passes `noCompanion: true` (the legacy fresh-session path, same as bugfix's run B already did) — `featureWorkflow` now has `companionGates: true` and requires an explicit `--companion-session`/`--no-companion` choice (DECISIONS.md § feature-companion-gates-parity); the `pr` mock scenario stays `"success"` (not `"gate-pause"`) so these runs still bypass `pr`'s own gate pause exactly as before — proving that path is `smoke-gates-feature.ts`'s job, not this file's. Runs: **A** (feature workflow, full happy path — define/fix gates approved, `pr` runs straight after `fix`, run done; asserts there is no `verify` node/dir and no `fix/next-node-decision.json`); **B** (bugfix workflow, same shape and the same absences); **C** (night-mode, clean plan — Gate 1 + Gate 2 auto-approved, the run completes fully unattended with no park); **D** (night-mode, seeded concern → parked at Gate 1, unchanged); **E** (stale gate from a prior workflow version auto-skipped on resume; the stale run also carries a legacy DONE `verify` node that the resume leaves untouched); **F** (`outcomeGate`, proven end-to-end through the real `startRun`/`runDag` path via a tiny custom two-node workflow since no shipped node declares one any more: a non-`PASS` outcome fails the node and blocks its dependent, with `startRun`'s intentional `process.exit(1)` on a failed run temporarily intercepted so the in-process smoke script can inspect the resulting `state.json`); **G** (added by the structural-upgrades change — `noPlaceholders`: `define`'s `guide.md` contains an unresolved `TODO`, manually approved at Gate 1 via `resumeRun`'s `--approve` path, and the mechanical scan fails the node on the gate-approve transition itself — not `runDag`'s done-branch, since a gated node never reaches `done` there — blocking `implement` and failing the run); **H** (the same `noPlaceholders` proof through the OTHER gate-approve site — `startRun`'s night-mode auto-approve loop, using a placeholder-laden `guide.md` with no "Concerns / plan challenges" heading so it auto-approves rather than parking; needed a new `startRunCapturingExit` smoke helper mirroring `resumeRunCapturingExit` since `startRun`'s own night-mode loop also calls `process.exit(1)` on a failed run). **I** (`rerunNode` archives a failed required node's attempt — a bugfix run whose `review` fails — to `review-attempts/attempt-1/` before wiping); **J** (`resumeRun` archives an interrupted node's partial artifacts before the retry). G and H together are the load-bearing proof that `checkNoPlaceholders` is wired at BOTH places a gated node's status actually flips to `done`, not just where the analogous `checkOutcomeGate` happens to already live. Does NOT assert model output quality or exact session IDs. `npm run smoke:mock` chains four scripts: `smoke-mock.ts` (above) `&& smoke-gates.ts` (companion-gate routing/authorization on bugfix, §3g) `&& smoke-gates-feature.ts` (added v0.1.64: the same companion-gate path — define/fix/pr gates, a plain fix-gate approve straight to the pre-PR gate, amend-at-pr-targets-fix, and the publication-timing proof that approving fix no longer auto-publishes — exercised end to end on `featureWorkflow`; a separate file from `smoke-gates.ts` because that one hardcodes `bugfixWorkflow`/`"reproduce"` throughout, while the detach/session-recovery mechanics it also proves are workflow-agnostic and already generic) `&& smoke-ui.ts` (`dagrun ui`'s HTTP surface: drives two mock bugfix runs into a temp home, hits every JSON/SSE endpoint (gate card present only for the paused run, feed history, the initial `snapshot` + `feed` SSE frames) and the static page shell against the real server, and asserts neither run directory changed at all). The live-update behaviour itself is proven by `src/ui/server.test.ts` (SSE client connects, THEN transcript/events/state are appended) and, in a real browser, by the manual CDP pass recorded in DECISIONS.md § ui-mockup-port-and-live-tail.
+**smoke:mock** (`test/smoke/smoke-mock.ts`) drives both gated workflows in-process using the mock executor — zero API calls, deterministic. Asserts: gate pauses, produces-contract at every relevant node, state transitions (awaiting-gate → paused → done), night-mode auto-approvals. Since v0.1.64 every `startRun` call here against `featureWorkflow` passes `noCompanion: true` (the legacy fresh-session path, same as bugfix's run B already did) — `featureWorkflow` now has `companionGates: true` and requires an explicit `--companion-session`/`--no-companion` choice (DECISIONS.md § feature-companion-gates-parity); the `pr` mock scenario stays `"success"` (not `"gate-pause"`) so these runs still bypass `pr`'s own gate pause exactly as before — proving that path is `smoke-gates-feature.ts`'s job, not this file's. Runs: **A** (feature workflow, full happy path — `startRun` runs `implement` (RED proven: `red.json` confirmed + `red-evidence.md`) → `review` → pauses at the **fix gate, the FIRST pause**; reject re-pauses fix; approve → `pr` runs straight after `fix`, run done; asserts there is no `define`/`reproduce`/`verify` node/dir and no `fix/next-node-decision.json`); **B** (bugfix workflow, same shape and the same absences); **C** (night-mode, clean plan — the fix gate auto-approved, the run completes fully unattended with no park); **D** (night-mode, seeded concern RAISED BY `implement` — its `summary.md` carries the heading while `fix/summary.md` is clean → parked at the fix gate, proving the ancestor scan) and **D2** (the concern in the gate's own artifact still parks it); **E** (stale gate from a prior workflow version auto-skipped on resume; the stale run also carries legacy DONE `define` and `verify` nodes that the resume leaves untouched); **F** (`outcomeGate`, proven end-to-end through the real `startRun`/`runDag` path via a tiny custom two-node workflow: a non-`PASS` outcome fails the node and blocks its dependent, with `startRun`'s intentional `process.exit(1)` on a failed run temporarily intercepted so the in-process smoke script can inspect the resulting `state.json`); **F2** (the SHIPPED bugfix pipeline when RED is not proven — the mock `outcome-gate-fail` scenario writes a non-`confirmed` `red.json`: `implement` fails with the outcome-gate error, `review`/`fix`/`pr` never execute, run `failed`); **G** (added by the structural-upgrades change — `noPlaceholders`: a custom gated node's `summary.md` contains an unresolved `TODO`, manually approved via `resumeRun`'s `--approve` path (which takes a test-only `workflow` seam for the custom workflow), and the mechanical scan fails the node on the gate-approve transition itself — not `runDag`'s done-branch, since a gated node never reaches `done` there — blocking its dependent and failing the run); **H** (the same `noPlaceholders` proof through the OTHER gate-approve site — `startRun`'s night-mode auto-approve loop, using a placeholder-laden `summary.md` with no "Concerns / plan challenges" heading so it auto-approves rather than parking; needed a new `startRunCapturingExit` smoke helper mirroring `resumeRunCapturingExit` since `startRun`'s own night-mode loop also calls `process.exit(1)` on a failed run; the custom gated node is named `fix` because night-mode only auto-approves agent-decidable ids). **I** (`rerunNode` archives a failed required node's attempt — a bugfix run whose `review` fails — to `review-attempts/attempt-1/` before wiping); **J** (`resumeRun` archives an interrupted node's partial artifacts before the retry); **K** (worktree adoption lifecycle). G and H together are the load-bearing proof that `checkNoPlaceholders` is wired at BOTH places a gated node's status actually flips to `done`, not just where the analogous `checkOutcomeGate` happens to already live (no shipped node uses it now — §3d). Does NOT assert model output quality or exact session IDs. `npm run smoke:mock` chains four scripts: `smoke-mock.ts` (above) `&& smoke-gates.ts` (companion-gate routing/authorization on bugfix, §3g) `&& smoke-gates-feature.ts` (added v0.1.64: the same companion-gate path — the fix and pr gates (fix first), a plain fix-gate approve straight to the pre-PR gate, amend-at-pr-targets-fix, and the publication-timing proof that approving fix no longer auto-publishes — exercised end to end on `featureWorkflow`; a separate file from `smoke-gates.ts` because that one hardcodes `bugfixWorkflow` throughout, while the detach/session-recovery mechanics it also proves are workflow-agnostic and already generic; `smoke-gates.ts` also pins the RED-first failure: step 12b — `implement` fails with the outcome-gate error and `status --json`/`gate show` carry the reason) `&& smoke-ui.ts` (`dagrun ui`'s HTTP surface: drives two mock bugfix runs (one paused at the fix gate, one done) into a temp home, hits every JSON/SSE endpoint (gate card present only for the paused run, feed history, the initial `snapshot` + `feed` SSE frames) and the static page shell against the real server, and asserts neither run directory changed at all). The live-update behaviour itself is proven by `src/ui/server.test.ts` (SSE client connects, THEN transcript/events/state are appended) and, in a real browser, by the manual CDP pass recorded in DECISIONS.md § ui-mockup-port-and-live-tail.
 
-**smoke:live** (`test/smoke/smoke.ts`) runs the real 8-step pipeline with the SDK — requires `ANTHROPIC_API_KEY`, ~35 min. Proves API auth, real session-resume, structured output from live model, worktree diff. Run when node prompts change (`payload/commands/*.md`) or when `sdk-runner.ts` changes. A bad prompt that passes mock but breaks model behaviour won't surface until the next smoke:live — that is the accepted tradeoff. **Reflection wiring (step 6):** smoke seeds a known `reflections.md` into `pr/` before the resume call so the SessionEnd hook has a deterministic file to capture — this proves hook wiring + env propagation in a real session without gating on spontaneous model output. The hook logic is separately proven by the unit test (`src/hooks/session-end.test.ts`).
+**smoke:live** (`test/smoke/smoke.ts`) runs the real 6-step pipeline with the SDK (step 2: `implement` proves RED → `review` → `fix`, pausing at the fix gate — the longest step; step 5 approves it and lets `pr` compose). **Not run for the v0.1.82 change** (it rewrote `implement.md`/`review.md`/`pr.md`/`fix.md` prompts and deleted two, so a live pass is owed — Eddie decides when; the toy plan gained a `## Validation` line so RED can be proven on the plain-Node toy repo, unverified) — requires `ANTHROPIC_API_KEY`, ~35 min. Proves API auth, real session-resume, structured output from live model, worktree diff. Run when node prompts change (`payload/commands/*.md`) or when `sdk-runner.ts` changes. A bad prompt that passes mock but breaks model behaviour won't surface until the next smoke:live — that is the accepted tradeoff. **Reflection wiring (step 5):** smoke seeds a known `reflections.md` into `pr/` before the resume call so the SessionEnd hook has a deterministic file to capture — this proves hook wiring + env propagation in a real session without gating on spontaneous model output. The hook logic is separately proven by the unit test (`src/hooks/session-end.test.ts`).
 
 **Executor-factory injection seam:** `startRun`, `resumeRun`, `rerunNode` all accept an optional `executorFactory` parameter (defaults to `makeSDKRunner`). This is the seam that lets smoke:mock swap in `createMockExecutor` without touching engine logic. See DECISIONS.md § split-smoke-mock-gate-live-occasional.
 
@@ -609,6 +655,7 @@ the gate.)
 - _Tier A (core)_: `dag.test.ts`, `state.test.ts`, `lock.test.ts`, `workflow.test.ts`, `settings-seed.test.ts` — DAG topology, state I/O, lock discipline, loadWorkflow, settings-seed merge rules.
 - _Tier B (exported helpers)_: `xdg.test.ts` (`computeHomePath`, `resolveHome`, `resolveConfig`, `initHome`), `preflight.test.ts` (`getAgentContext`, `formatAgentContext`, fixture-able `runPreflight` predicates), `hooks/session-end.test.ts` (invokes `.claude/hooks/session-end.sh` directly in a temp env — proves reflection capture, best-effort no-op on absent/empty file, run_id field, friction.jsonl write).
 - _Golden_: `report.test.ts` (HTML output of `generateReport` → `report.golden.snap`); `settings-seed.test.ts` extension (`buildSeededSettings` JSON → `settings-seed.golden.json`); `preflight.test.ts` (`formatAgentContext` text → `preflight.golden.txt`). Stored in `.snap`/`.txt`/`.json` to avoid Prettier hook reformatting (`.html` is in scope, those are not). `UPDATE_SNAPSHOTS=1` regenerates — a deliberate act.
+- _Workflow shape_: `bugfix-workflow.test.ts`/`feature-workflow.test.ts` pin implement as the sole root, fix and pr as the only gated nodes, the `red.json` outcome gate and the `produces` of `implement`; `dag.test.ts` runs the SHIPPED workflows through `runDag` for the unprovable-RED and confirmed-RED paths.
 - _Schema-contract_: `feature-workflow.test.ts` — well-formedness of `CLASSIFY_SCHEMA`/`FINDINGS_SCHEMA`, conforming+nonconforming fixtures (hand-rolled validator, no ajv), `featureWorkflow` passes `loadWorkflow`.
 - _Tier C (orchestration)_ owned by smoke (never unit-tested).
 
@@ -625,7 +672,7 @@ the gate.)
 - `produces` contract: a node is `done` only if it wrote its declared artifact(s); missing => failed.
 - XDG home: `~/.local/share/dagrunner/` (runs, inbox, store, config.json; `worktrees/` is legacy-only — it holds the worktrees of pre-adoption runs and is still created by `dagrun init`), `~/.cache/dagrunner/`, `~/.local/bin/dagrun`, override DAGRUNNER_HOME, fail-loud no-cwd-fallback.
 - Hooks: SessionStart sync (private files), PostToolUse format (**TS/JS/CSS/HTML only** — Java/YAML excluded after a YAML-coercion incident), Stop friction/gates, SessionEnd cost.
-- `dagrun rerun` re-seeds the worktree `.claude/` from `payload/` (runtime-only: 10 pipeline commands + 7 reviewer agents). Hooks always come from `.claude/hooks/` (genuinely shared). `.claude/{commands,agents}` are build-harness-only and are never seeded into worktrees — this is the split that prevents build tools from polluting Camunda worktrees.
+- `dagrun rerun` re-seeds the worktree `.claude/` from `payload/` (runtime-only: the 6 pipeline commands in `payload/commands/` — implement, review, fix, pr, gate-review, gate-conclude — plus 7 reviewer agents). Hooks always come from `.claude/hooks/` (genuinely shared). `.claude/{commands,agents}` are build-harness-only and are never seeded into worktrees — this is the split that prevents build tools from polluting Camunda worktrees.
 - `dagrun scaffold <node-id> [--worktree <path>] [--mocks <dir>]` creates a scaffold run in an ADOPTED worktree (same `--worktree` default and validation as `start`; there is no `--branch` any more — scaffold neither creates a branch nor a worktree, and `--branch` fails loud pointing at `--worktree`): state.json with all transitive deps pre-marked done and the target node pending. Lets a developer run a single node in isolation via `dagrun rerun` without executing the full pipeline. No lock acquired; no agent launched by scaffold itself. A scaffold run is written `paused` (non-terminal), so it keeps its worktree claimed — a later `dagrun start` there is refused until `dagrun abort <scaffold-run>`. Its base branch is `main` (a scaffold has no plan, hence no `base_branch`).
 - Failure: 4-class taxonomy (transient->retry, contract->fail, convergence-exhaustion->gate, budget->checkpoint-exit). Node failure != run failure; isolate-and-continue.
 - **CLI exit codes:** `dagrun start`/`resume` exit 0 on `done`/`paused`; exit 1 when the run ends `failed`. Callers (night queue, CI) must treat non-zero as a genuine failure — do not swallow it. The run engine owns the final status; the CLI layer propagates it.
@@ -648,7 +695,7 @@ the gate.)
 
 - (i) `wm rm --gone` / `wm rm --all` can remove an adopted run's worktree out from under its `state.json`; the run then points at a path that no longer exists (`resume`/`rerun` fail on it; `cleanup --all` counts it as skipped). dagrunner does not guard against this — the worktree is the owner's.
 - (ii) The Claude driver session is expected to run with `--setting-sources user` (verified 2026-11-08 in a scratch project: that flag stops the project's hooks, permission mode, commands and CLAUDE.md from loading), so the node settings dagrunner seeds into the worktree (Stop/SessionStart hooks, `acceptEdits`, deny rules) apply to node sessions only and not to the driver that happens to share the directory.
-- (iii) Merging the feature and bugfix workflows (dropping the define/reproduce nodes, TDD-style implement) is a SEPARATE later change and is not part of adoption.
+- (iii) Merging the feature and bugfix workflows was a SEPARATE later change from adoption. Its first half has since landed (v0.1.82, §3): define/reproduce are dropped and implement is TDD-style (RED first) in both. The two workflow names and their node lists still exist side by side; collapsing them into one is not done.
 
 ---
 
@@ -725,7 +772,7 @@ node, once terminal-adjacent in parallel with `pr`, is itself removed — see §
 
 ## 9. Cost & model tiering
 
-Per-node tiering in the validated workflow-def (load-time model-string validation). expand unpinned; review diff-triage haiku; reviewers mixed (correctness/distributed-systems/performance unpinned; test-adequacy/api-stability/migration-safety sonnet); adversarial verifier strong tier; fix sonnet; verify sonnet; pr haiku. Budget: per-node `maxBudget` is passed to the SDK per session (`maxBudgetUsd`); the run-level `--max-budget-usd` CLI flag is parsed but NOT enforced anywhere today (nothing compares node costs against it). Cost capture: SDK `total_cost_usd` (cumulative per session — see below); `dagrun status` shows the per-node and total cost.
+Per-node tiering in the validated workflow-def (load-time model-string validation). implement sonnet (effort medium); review opus (diff-triage haiku); reviewers mixed (correctness/distributed-systems/performance unpinned; test-adequacy/api-stability/migration-safety sonnet); adversarial verifier strong tier; fix sonnet; verify sonnet; pr haiku. Budget: per-node `maxBudget` is passed to the SDK per session (`maxBudgetUsd`); the run-level `--max-budget-usd` CLI flag is parsed but NOT enforced anywhere today (nothing compares node costs against it). Cost capture: SDK `total_cost_usd` (cumulative per session — see below); `dagrun status` shows the per-node and total cost.
 
 **Cost semantics (what `cost` means — and why it is not a running sum).** The SDK's `result.total_cost_usd` (and `modelUsage`) is CUMULATIVE for a session; a gate reject/amend resumes the SAME `sessionId` (`options.resume`), so each round reports a bigger total than the last (real run `51496-1`, `fix`: 3.82 → 6.49 → 12.14 → 13.23). `NodeState.cost` is therefore the sum, over DISTINCT sessions that executed the node, of each session's LATEST cumulative figure — `accrueSessionCost` (`core/state.ts`): an execution that resumed its own session (`result.sessionId === ctx.sessionId`) REPLACES that session's contribution, anything else (fresh start, `dagrun rerun`, an amend reset that dropped `sessionId`) ADDS. The only extra state is `NodeState.priorSessionsCost` (what the OTHER sessions contributed), so no history is replayed. `attempts[].cost` is the delta each attempt added, so `sum(attempts) == node.cost`. Every writer goes through this one function (`runDag` done + gate paths, `rerunNode`); consumers (`dagrun status`, report, `status --json`, the UI snapshot/discover totals, `node.finished` events) only ever sum `node.cost` across nodes. `friction.jsonl` `costUsd` is deliberately left as the raw per-session cumulative truth — never sum its entries; take the latest per `sessionId`. Legacy `state.json` (no `priorSessionsCost`) is not rewritten; on a resume it is treated as a single session (base 0), which corrects the inflated figure on the next round. Executions that end `failed` do not accrue (their spend is only in `friction.jsonl`). The run-level `--max-budget-usd` flag is parsed but not enforced anywhere (nothing reads node costs against it); per-node `maxBudget` is handed to the SDK per session.
 
@@ -735,7 +782,7 @@ Per-node tiering in the validated workflow-def (load-time model-string validatio
 
 **Declared deliverables + the pre-PR advisory (v0.1.72).** `pr` stages only paths in `implement/deliverables.txt` ∪ `fix/deliverables.txt` (§ worktree hygiene; never `git add -A`). `fix.md` now carries the same contract `implement.md` has — write/extend `fix/deliverables.txt` with every path added or changed (running union across gate rounds) and verify it against `git` before finishing — because an undeclared fix-added test file was silently left out of the first commit in run `51496-1` and cost an extra gate round. Mechanical backstop (`core/deliverables.ts`, wired into `buildGateBrief` for the `pr` gate only): the brief gains `validation` entries `pr/deliverables-unlisted` (changed paths not in the union — each named) and `pr/deliverables-unchanged` (manifest paths with no change), or one `pr/deliverables-manifest` ok entry. "Changed" is what `changes.diff` shows (diff vs the merge-base of the base branch + untracked non-ignored files; `target/` and `node_modules` excluded; skip-worktree `.tool-versions` is already invisible to `git diff <tree>`). It is an ADVISORY by design: validation entries never block a decision and are not in the revision hash, because unrelated pre-existing dirt can be legitimate. No manifests at all (legacy/mocked runs) → no entries; an uncomputable comparison (no base ref) is a visible failed entry, never a silent pass.
 
-**Effort tuning (orthogonal to model tier):** `Node.effort?: EffortLevel` (`"low" | "medium" | "high" | "xhigh" | "max"`, `src/core/types.ts`) passes through to the SDK's `Options.effort`, validated at load time exactly like `model` (`workflow.ts`, same "typed at load" pattern — a bad value is a load error, never a silent runtime default). Omitted = the SDK's own model-specific default (on Sonnet 5 this is `"high"` with adaptive thinking on, per the SDK's `sdk.d.ts`). `implement` and `fix` in both `feature-workflow.ts` and `bugfix-workflow.ts` pin `effort: "medium"` — real burn-instrumentation evidence (run `54177-1`) showed these two `claude-sonnet-5` nodes as the run's dominant cost (`implement` $38.37, `fix` $5.82), and neither had ever deliberately set `thinking`/`effort`; per Sonnet 5's own migration documentation, `"medium"` is comparable in intelligence to the prior generation's `"high"`, making it a documented, low-risk step down rather than a guess. `verify`/`review`/`define`/`reproduce`/`pr` are deliberately excluded from this first cut — see DECISIONS.md § effort-tuning-implement-fix for the full rationale and why full `thinking: disabled` was rejected. The per-node option mapping (model/allowedTools/maxBudget/outputSchema/effort) lives in the pure, unit-tested `applyNodeOptions` (`sdk-runner.ts`), extracted alongside `buildBaseQueryOptions` so it's testable without mocking the SDK's `query()`.
+**Effort tuning (orthogonal to model tier):** `Node.effort?: EffortLevel` (`"low" | "medium" | "high" | "xhigh" | "max"`, `src/core/types.ts`) passes through to the SDK's `Options.effort`, validated at load time exactly like `model` (`workflow.ts`, same "typed at load" pattern — a bad value is a load error, never a silent runtime default). Omitted = the SDK's own model-specific default (on Sonnet 5 this is `"high"` with adaptive thinking on, per the SDK's `sdk.d.ts`). `implement` and `fix` in both `feature-workflow.ts` and `bugfix-workflow.ts` pin `effort: "medium"` — real burn-instrumentation evidence (run `54177-1`) showed these two `claude-sonnet-5` nodes as the run's dominant cost (`implement` $38.37, `fix` $5.82), and neither had ever deliberately set `thinking`/`effort`; per Sonnet 5's own migration documentation, `"medium"` is comparable in intelligence to the prior generation's `"high"`, making it a documented, low-risk step down rather than a guess. `review`/`pr` (and the since-removed `verify`/`define`/`reproduce`) were deliberately excluded from this first cut — see DECISIONS.md § effort-tuning-implement-fix for the full rationale and why full `thinking: disabled` was rejected. The per-node option mapping (model/allowedTools/maxBudget/outputSchema/effort) lives in the pure, unit-tested `applyNodeOptions` (`sdk-runner.ts`), extracted alongside `buildBaseQueryOptions` so it's testable without mocking the SDK's `query()`.
 
 **Burn capture (per-node `burn.json`, Deliverable 1 of the Burn Monitor):** the SDK's terminal `result` message carries `modelUsage: Record<string, ModelUsage>` (per-model input/output/cache-read/cache-creation tokens + cost, free alongside `total_cost_usd`) — dagrunner previously discarded this, keeping only the aggregate cost. `sdk-runner.ts` now captures it at the same single write-site as `friction.jsonl` (right after the SDK message loop, before all early returns — failed/awaiting-gate/done all pass through it) and writes `$DAGRUN_ARTIFACTS/burn.json` via the pure, unit-tested `buildBurn()` (`src/runtime/burn.ts`). `friction.jsonl` gains an additive `modelUsage` field (existing `costUsd` consumers — `cli.ts`, `report.ts` — are unaffected; they treat friction lines as opaque strings). **This cannot be captured from the SessionEnd hook** — `.claude/hooks/session-end.sh`'s payload is `{session_id, transcript_path, cwd, hook_event_name, reason}` only, no cost/usage fields; the SDK result message is the only carrier, and `sdk-runner.ts` is the only place that sees it.
 
@@ -839,13 +886,13 @@ this becomes team-scale, multi-repo, no-single-human-gate infra.
 
 `payload/siblings/commands/manual-smoke.md`. Generates a human-readable `manual-test.md` — plus
 `seeding-spec.json`, only when a live cluster is actually needed — for a completed (or
-past-Gate-1) run, replacing the fixed `seeding-spec.json` + `manual-test.md` pair the pipeline's
+gate-paused) run, replacing the fixed `seeding-spec.json` + `manual-test.md` pair the pipeline's
 `verify` node used to write — relocated here rather than deleted, since the manual-walkthrough
 value didn't disappear, only the reason to gate on it did (`DECISIONS.md §
 verify-autonomy-remove-election`; the verify node itself was later removed entirely, §3d).
 
-- **Invocation:** `/manual-smoke [run-id]`, run on demand against any completed (or past-Gate-1)
-  run's existing artifacts — bootstrap logic (run/worktree/guide resolution) lives in
+- **Invocation:** `/manual-smoke [run-id]`, run on demand against any completed (or gate-paused)
+  run's existing artifacts — bootstrap logic (run/worktree/plan resolution) lives in
   `payload/siblings/scripts/manual-smoke/phase-0-bootstrap.sh`.
 - **Read-only from the worktree, and never executes anything against a live cluster or locally** —
   never modifies worktree files, never runs Maven/Docker/`curl`/`zdb`/cluster commands itself, only
@@ -853,8 +900,8 @@ verify-autonomy-remove-election`; the verify node itself was later removed entir
   including against a failed run, without disturbing pipeline state).
 - **Gates nothing.** This sibling has no pipeline effect —
   it exists purely for a human who wants a walkthrough of a run.
-- Reads the same input priority order the old verify-guide used: run artifacts (`plan.md`,
-  `define/guide.md` or `reproduce/guide.md`, `implement`/`review` outputs) → git log → git diff →
+- Reads the same input priority order the old verify-guide used: run artifacts (`plan/plan.md` — the plan
+  is the guide since v0.1.82, `implement/summary.md`/`red-evidence.md`, `review` outputs) → git log → git diff →
   OpenAPI spec (only actually read if the REST API is a chosen surface, see below).
 - **Analyzes the diff to choose a verification method before writing anything (`verify-manual-smoke-method-analysis`,
   DECISIONS.md).** The old version always assumed a live cluster reachable via REST API/Postman,
@@ -890,8 +937,10 @@ verify-autonomy-remove-election`; the verify node itself was later removed entir
 | **2a** | (1) Preflight + runtime permission/sandbox/network model [FIRST]; (2) review node (diff-triage self-select + fan-out + finding-count-gated verifier -> findings schema); (3) fix node (gated, self-verifying). Built, fixture-passed, post-fixture restructure (classify removal etc.) applied.                               | ✅ DONE            | —           |
 | **2b** | verify-election + verify (doc-only; cluster automation REMOVED, see §9) + Gate 3; pr node (terminal); pure-capture reflection via dagrun reflect-append; rerun command; PR post-process outside sandbox.                                                                                                                      | ✅ DONE            | 2a complete |
 | **3**  | Three interactive siblings, in order: (1) /seed-data [c8ctl, assumes human-started OC], (2) ci-babysit, (3) pr-triage. All local, human-driven.                                                                                                                                                                               | ✅ DONE            | —           |
-| **5**  | Bug fix workflow (`dagrun start bugfix`). New `reproduce` node (Gate 1: confirms bug is real, validates root cause); shorter pipeline — no verify node (regression test runs in implement/fix). `base_branch` from plan YAML frontmatter (hotfix branch support). Severity-aware night-mode (critical/blocker always pauses). | ✅ DONE            | —           |
+| **5**  | Bug fix workflow (`dagrun start bugfix`). New `reproduce` node (Gate 1: confirms bug is real, validates root cause — removed in v0.1.82, `implement` proves RED now, §3e); shorter pipeline — no verify node (regression test runs in implement/fix). `base_branch` from plan YAML frontmatter (hotfix branch support). Severity-aware night-mode (critical/blocker always pauses). | ✅ DONE            | —           |
 | **6**  | Live `dagrun ui` (Node-http + SSE + vanilla HTML, localhost-only, scrubbed)                                                                                                                                                                                                                                                   | shipped (§3g)      | —           |
+
+Note: the phase rows above are history. Since v0.1.82 the pipeline is implement -> review -> fix (gate) -> pr (gate) in both workflows (§3); `expand`/`define`/`reproduce` and `verify` no longer exist.
 
 Key insight: Phases 1, 2, 3, and 5 are complete. Phase 6 remains future work.
 
@@ -907,7 +956,7 @@ Open items: confirm Agent SDK credit pool covers volume; some preflight checks (
   dagrunner-managed worktree. When `DAGRUN_RUN_ID` IS set (dagrunner-managed worktree), persist
   the worktree until the PR is done (adopted worktrees are removed by their owner, not dagrunner).
 - `gh`/network mutations in the pipeline (the `pr` node) run via Node.js outside the agent's own session, not via an in-session `gh` call (see §6).
-- Unattended pipeline runs: never auto-approve a gate **unless `--night` is active and no concern is flagged** (see §3 night-mode). The one-rule policy: agent-decidable gates (Gate 1, Gate 2) auto-approve when `guide.md`/`summary.md` contains no "Concerns / plan challenges" heading. A clean night-mode run proceeds `fix` → `pr` fully unattended with no park anywhere (there is no verify election or hand-off step — §3d). Subagents never end a turn with a question.
+- Unattended pipeline runs: never auto-approve a gate **unless `--night` is active and no concern is flagged** (see §3 night-mode). The one-rule policy: agent-decidable gates (the fix gate and the pr gate) auto-approve when neither the gate's own artifact nor a done ancestor's (notably `implement/summary.md`) contains a "Concerns / plan challenges" heading. A clean night-mode run proceeds `fix` → `pr` fully unattended with no park anywhere (there is no verify election or hand-off step — §3d). Subagents never end a turn with a question.
 - Schema is single-source-of-truth, owned by dagrunner, never duplicated.
 - Each sibling plan front-loads a tool-introspection spike (c8ctl for /seed-data; the `gh` CI-status surface for ci-babysit; the `gh` review-comment surface for pr-triage) — verify the installed surface, don't assume from docs.
 - ci-babysit and pr-triage share a worktree but have hard domain separation: ci-babysit owns git mutations (rebase, fix, commit, push); pr-triage owns the comment conversation (never calls git push, never edits source files, never stages/commits).

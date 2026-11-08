@@ -35,6 +35,7 @@ import type { DagrunnerConfig } from "../config/xdg.js";
 import { accrueSessionCost, readState, writeState } from "../core/state.js";
 import { appendEvent } from "../core/events.js";
 import {
+  ancestorsOf,
   findSessionConfigDir,
   planAmend,
   validateGateRequest,
@@ -112,13 +113,14 @@ export function parseGateDecision(
   return { decision: value, body };
 }
 
-/** Node IDs that night-mode may auto-approve (Gate 1 + Gate 2 on both workflows; "pr" = the pre-PR gate on both feature and bugfix — see DECISIONS.md § feature-companion-gates-parity). */
-const AGENT_DECIDABLE_GATES = new Set(["define", "reproduce", "fix", "pr"]);
+/** Node IDs that night-mode may auto-approve: the fix gate (the first gate of a run) and the pre-PR gate ("pr"), on both feature and bugfix — see DECISIONS.md § plan-is-the-guide and § feature-companion-gates-parity. */
+const AGENT_DECIDABLE_GATES = new Set(["fix", "pr"]);
 
 /**
  * True when night-mode may auto-decide the gate for nodeId.
- * Define/reproduce (Gate 1), fix (Gate 2) and pr (Gate 3) are agent-decidable;
- * all others are human-only. Exported for unit testing.
+ * fix (the first gate) and pr (the pre-PR gate) are agent-decidable;
+ * all others — including a leftover id from a removed node — are human-only.
+ * Exported for unit testing.
  */
 export function agentDecidable(nodeId: string): boolean {
   return AGENT_DECIDABLE_GATES.has(nodeId);
@@ -131,6 +133,52 @@ export function agentDecidable(nodeId: string): boolean {
  */
 export function hasConcerns(content: string): boolean {
   return /^#{1,6}\s+Concerns\s*\/\s*plan challenges/im.test(content);
+}
+
+/**
+ * Night-mode's "no concerns flagged" test for a gate. True (= pause for a human)
+ * when the gate node's primary artifact (`produces[0]`) OR the primary artifact of
+ * any DONE ancestor carries a "Concerns / plan challenges" heading.
+ *
+ * Ancestors matter because the plan is the guide (DECISIONS.md § plan-is-the-guide):
+ * `implement` is the first node and raises the heading in ITS summary.md when RED
+ * was proven but the plan's assumptions differ, while the first gate a run reaches
+ * is `fix`, whose own summary.md does not repeat it. Checking only the gate's own
+ * artifact would auto-approve past a flagged plan challenge.
+ *
+ * Safe default throughout: a gate id that is not in the workflow (a leftover node
+ * of a removed shape), or a missing/unreadable artifact on the gate or on a done
+ * ancestor, counts as concerns — never as a silent pass. Exported for unit testing.
+ */
+export function nightConcernsFlagged(
+  runDir: string,
+  state: RunState,
+  workflow: Workflow,
+  gateNodeId: string,
+): boolean {
+  const gateNode = workflow.nodes.find((n) => n.id === gateNodeId);
+  if (gateNode === undefined) return true;
+  const ids = [
+    gateNodeId,
+    ...ancestorsOf(workflow, gateNodeId).filter(
+      (id) => state.nodes[id]?.status === "done",
+    ),
+  ];
+  for (const id of ids) {
+    const primary = workflow.nodes.find((n) => n.id === id)?.produces?.[0];
+    if (primary === undefined) {
+      if (id === gateNodeId) return true;
+      continue;
+    }
+    const artifactPath = join(runDir, id, primary);
+    try {
+      if (!existsSync(artifactPath)) return true;
+      if (hasConcerns(readFileSync(artifactPath, "utf8"))) return true;
+    } catch {
+      return true; // unreadable -> pause
+    }
+  }
+  return false;
 }
 
 /**
@@ -1091,7 +1139,8 @@ export async function startRun(opts: {
   // Night-mode: auto-resolve agent-decidable gates in a loop.
   if (opts.nightMode === true && result.status === "paused") {
     let nightState = readState(stateFile);
-    // Safety cap: max 20 iterations (each pipeline has 3 decidable gates: define/reproduce, fix, pr).
+    // Safety cap: max 20 iterations (each pipeline has 2 decidable gates: fix, pr — so a
+    // clean run needs 2; the cap leaves room for gate-revise rounds before falling through).
     for (let loops = 0; loops < 20; loops++) {
       const gateEntry = Object.entries(nightState.nodes).find(
         ([, ns]) => ns.status === "awaiting-gate",
@@ -1119,21 +1168,10 @@ export async function startRun(opts: {
         return;
       }
 
-      // Read the primary artifact and check for a concerns heading.
+      // Check the gate's artifact and its done ancestors' for a concerns heading
+      // (safe default: pause when an artifact is missing/unreadable).
       const gateNode = workflow.nodes.find((n) => n.id === gateNodeId);
-      const primaryFile = gateNode?.produces?.[0];
-      // Safe default: pause when artifact is missing/unreadable.
-      let concerns = true;
-      if (primaryFile !== undefined) {
-        const artifactPath = join(runDir, gateNodeId, primaryFile);
-        try {
-          if (existsSync(artifactPath)) {
-            concerns = hasConcerns(readFileSync(artifactPath, "utf8"));
-          }
-        } catch {
-          // unreadable → concerns stays true → pause
-        }
-      }
+      const concerns = nightConcernsFlagged(runDir, nightState, workflow, gateNodeId);
 
       if (concerns) {
         releaseLock(homeDir);
@@ -1146,11 +1184,11 @@ export async function startRun(opts: {
 
       // Auto-approve: log to gateHistory with night-mode basis. A mechanical
       // noPlaceholders violation still fails the node even after auto-approval
-      // — gated nodes (define/reproduce) always return awaiting-gate, never
-      // 'done', from the executor itself (sdk-runner.ts), so this approve
-      // transition — not runDag's done-branch — is the only place their
-      // noPlaceholders check is ever reachable. See DECISIONS.md
-      // § no-placeholders-gate-approve-wiring.
+      // — gated nodes always return awaiting-gate, never 'done', from the
+      // executor itself (sdk-runner.ts), so this approve transition — not
+      // runDag's done-branch — is the only place a gated node's noPlaceholders
+      // check is ever reachable (no shipped node declares one today; the
+      // wiring is generic). See DECISIONS.md § no-placeholders-gate-approve-wiring.
       const autoTs = new Date().toISOString();
       const basis = "no concerns flagged";
       const nightArtifacts = (gateNode?.produces ?? [])
@@ -1262,6 +1300,12 @@ export async function resumeRun(opts: {
   /** Test seam: config dirs searched for the companion's transcript. */
   sessionConfigDirs?: string[];
   executorFactory?: ExecutorFactory;
+  /**
+   * TEST seam (smoke): resolve the run against this workflow instead of the shipped one
+   * named by state.workflow — lets smoke-mock exercise a generic engine primitive
+   * (noPlaceholders on a gate) that no shipped node uses. Real callers never pass it.
+   */
+  workflow?: Workflow;
 }): Promise<void> {
   const { runId, homeDir, config } = opts;
   const runDir = join(homeDir, "runs", runId);
@@ -1287,7 +1331,7 @@ export async function resumeRun(opts: {
   acquireLock(homeDir, runId);
   writeState(stateFile, state);
 
-  const workflow = workflowFromState(state);
+  const workflow = opts.workflow ?? workflowFromState(state);
 
   // Any node that was running when the process was interrupted is marked
   // failed by reconcileRunningNodes. Reset interrupted nodes to pending up
@@ -1570,11 +1614,12 @@ export async function resumeRun(opts: {
       } else if (approveNow) {
         // Approve: mark done, collect artifacts from disk, continue. A
         // mechanical noPlaceholders violation still fails the node even after
-        // human approval — gated nodes (define/reproduce) always return
-        // awaiting-gate, never 'done', from the executor itself
-        // (sdk-runner.ts), so this approve transition — not runDag's
-        // done-branch — is the only place their noPlaceholders check is ever
-        // reachable. See DECISIONS.md § no-placeholders-gate-approve-wiring.
+        // human approval — gated nodes always return awaiting-gate, never
+        // 'done', from the executor itself (sdk-runner.ts), so this approve
+        // transition — not runDag's done-branch — is the only place a gated
+        // node's noPlaceholders check is ever reachable (no shipped node
+        // declares one today; the wiring is generic). See DECISIONS.md
+        // § no-placeholders-gate-approve-wiring.
         const approvedArtifacts = [
           ...(gateNode?.produces ?? []),
           CHANGES_DIFF_FILE,

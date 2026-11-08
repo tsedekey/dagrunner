@@ -8,9 +8,10 @@ Claude Code for everything else. See `CLAUDE.md` for the reuse law and engineeri
 
 ## What it does
 
-Walks a feature or bugfix change through a fixed, gated pipeline (e.g.
-`reproduce|define → implement → review → fix → pr`), pausing at human gates and checkpointing to
-disk so it survives process exit. Each node is a Claude Code session spawned via the Agent SDK in
+Walks a feature or bugfix change — starting from an approved plan authored upstream, which is the
+guide — through a fixed, gated pipeline (`implement → review → fix → pr`; `implement` proves RED
+first), pausing at the fix gate and the pre-PR gate and checkpointing to disk so it survives
+process exit. Each node is a Claude Code session spawned via the Agent SDK in
 the git worktree the run was started in (`dagrun start` adopts an existing worktree — it never
 creates one; see the master doc §4 "Worktree adoption"). Three human-driven sibling commands (`ci-babysit`, `pr-triage`,
 `/seed-data`) run outside the pipeline against a live PR/cluster.
@@ -42,7 +43,7 @@ npm run dagrun -- <command>   # run from source (tsx), or use the built dist/cli
 ```
 
 `npm run verify-baseline` (`npm ci && typecheck && unit tests && smoke:mock`) is the standing
-gate — run it before any commit. `npm run smoke:live` runs the real 8-step SDK pipeline
+gate — run it before any commit. `npm run smoke:live` runs the real 6-step SDK pipeline
 (requires `ANTHROPIC_API_KEY`, ~35 min) — run by hand when `payload/commands/*.md` changes.
 
 Machine setup (XDG home, `DEVHARNESS_SRC`, secrets) is documented in `CLAUDE.md`.

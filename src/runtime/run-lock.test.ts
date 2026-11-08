@@ -19,7 +19,7 @@ test("resumeRun refuses a run whose lock is held by a live process, leaving stat
   const state = {
     runId: "7-1", workflow: "bugfix", createdAt: "T", updatedAt: "T", status: "running",
     worktreePath: join(home, "wt"), branch: "b", sourcePlanPath: "/p",
-    nodes: { reproduce: { status: "running", artifacts: [], iteration: 0, cost: 0, gateHistory: [] } },
+    nodes: { implement: { status: "running", artifacts: [], iteration: 0, cost: 0, gateHistory: [] } },
   };
   writeFileSync(join(runDir, "state.json"), JSON.stringify(state, null, 2));
   const before = readFileSync(join(runDir, "state.json"), "utf8");

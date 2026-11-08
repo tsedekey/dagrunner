@@ -57,7 +57,13 @@ export function gateShow(args: {
   if (r === null) return err(`run "${args.runId}" not found`);
   const gate = awaitingGateId(r.state);
   if (gate === undefined) {
-    process.stdout.write(`dagrun gate: run "${args.runId}" is not paused at a gate (status: ${r.state.status})\n`);
+    // A failed node has no gate to show, but its reason (e.g. implement's `outcome gate failed — red = ...`)
+    // is exactly what the person asking needs — print it rather than only the bare status.
+    const failures = Object.entries(r.state.nodes)
+      .filter(([, ns]) => ns.status === "failed" && ns.error !== undefined)
+      .map(([id, ns]) => `\n  ${id}: ${ns.error ?? ""}`)
+      .join("");
+    process.stdout.write(`dagrun gate: run "${args.runId}" is not paused at a gate (status: ${r.state.status})${failures}\n`);
     return 0;
   }
   const brief = emitGateBrief({

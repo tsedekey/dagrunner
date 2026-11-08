@@ -6,13 +6,14 @@
  * feature-companion-gates-parity): featureWorkflow gained `companionGates: true`
  * and a pre-PR gate on `pr` (gate.amendTargets: ["fix"]), mirroring bugfix exactly.
  * This is a separate file (not an extension of smoke-gates.ts) because that file
- * hardcodes the bugfix node id "reproduce" and `bugfixWorkflow` throughout, and the
- * docker-teardown / detach / session-recovery mechanics it proves are workflow-
- * agnostic (already proven generic there — `ancestorsOf`/`node.gate` keyed, never
- * on workflow name). This file proves only what is NEW for feature: the full gate
- * path end to end (define -> implement -> review -> fix -> pr -> done), the publication-timing behavior change (approving the fix gate no
- * longer auto-publishes — only the pr gate's approval does), and one
- * amend-at-pr-targets-fix case.
+ * hardcodes `bugfixWorkflow` throughout, and the detach / session-recovery
+ * mechanics it proves are workflow-agnostic (already proven generic there —
+ * `ancestorsOf`/`node.gate` keyed, never on workflow name). This file proves only
+ * what is NEW for feature: the full gate path end to end (implement -> review ->
+ * fix gate -> pr gate -> done; the plan is the guide, so the FIRST pause is the fix
+ * gate — DECISIONS.md § plan-is-the-guide), the publication-timing behavior change
+ * (approving the fix gate no longer auto-publishes — only the pr gate's approval
+ * does), and one amend-at-pr-targets-fix case.
  */
 
 import assert from "node:assert/strict";
@@ -274,37 +275,25 @@ function createBrief(h: { home: string; runId: string }): GateBrief {
 }
 
 // ===========================================================================
-// 2-6. Full companion-gate lifecycle: define -> fix -> pr -> done
+// 2-6. Full companion-gate lifecycle: (implement -> review) -> fix -> pr -> done
 // ===========================================================================
 const R = await newRun();
 {
   const s = stateOf(R.runDir);
   assert.equal(s.status, "paused");
-  assert.equal(s.nodes["define"]?.status, "awaiting-gate");
+  assert.equal(s.nodes["fix"]?.status, "awaiting-gate", "the first pause is the fix gate");
+  assert.equal(s.nodes["implement"]?.status, "done");
+  assert.equal(s.nodes["review"]?.status, "done");
+  assert.deepEqual(JSON.parse(readFileSync(join(R.runDir, "implement", "red.json"), "utf8")), { red: "confirmed" });
+  assert.ok(existsSync(join(R.runDir, "implement", "red-evidence.md")));
+  for (const gone of ["define", "reproduce", "verify"]) assert.equal(s.nodes[gone], undefined, `there is no ${gone} node`);
   assert.equal(s.companion?.sessionId, SESSION);
   const b = createBrief(R); // exercises the real `gateShow` CLI path once
   assert.equal(b.companion.status, "ok");
-  assert.deepEqual(b.pendingDecision.approveContinuesTo, [
-    "implement",
-    "review",
-    "fix",
-    "pr",
-  ]);
+  assert.deepEqual(b.pendingDecision.approveContinuesTo, ["pr"]);
   say(
-    "2 passed: define gate pauses with a companion brief, exactly like bugfix's reproduce gate",
+    "2 passed: implement (RED confirmed) -> review -> the fix gate pauses first with a companion brief, exactly like bugfix",
   );
-}
-
-{
-  const b = briefOf(R.runDir, "define");
-  const id = await propose(R, b, {});
-  assert.equal(await decide(R, b, { confirm: id }), 0);
-  const s = stateOf(R.runDir);
-  assert.equal(s.nodes["define"]?.status, "done");
-  assert.equal(s.nodes["implement"]?.status, "done");
-  assert.equal(s.nodes["review"]?.status, "done");
-  assert.equal(s.nodes["fix"]?.status, "awaiting-gate");
-  say("3 passed: approve define -> implement -> review -> fix gate-pause");
 }
 
 {
@@ -376,8 +365,6 @@ const R = await newRun();
 // ===========================================================================
 {
   const V = await newRun();
-  const b1 = briefOf(V.runDir, "define");
-  await decide(V, b1, { confirm: await propose(V, b1, {}) });
   const b2 = briefOf(V.runDir, "fix");
   const o2 = { comment: "looks right; ship it" };
   const id2 = await propose(V, b2, o2);
@@ -406,8 +393,6 @@ const R = await newRun();
 // ===========================================================================
 {
   const A = await newRun();
-  const b1 = briefOf(A.runDir, "define");
-  await decide(A, b1, { confirm: await propose(A, b1, {}) });
   const b2 = briefOf(A.runDir, "fix");
   const id2 = await propose(A, b2, {});
   await decide(A, b2, { confirm: id2 });
@@ -415,7 +400,7 @@ const R = await newRun();
   const b3 = briefOf(A.runDir, "pr");
   assert.deepEqual(b3.pendingDecision.amendTargets, ["pr", "fix"]);
   assert.equal(
-    await decide(A, b3, { action: "amend", target: "define", comment: "redo" }),
+    await decide(A, b3, { action: "amend", target: "implement", comment: "redo" }),
     1,
     "undeclared target refused",
   );
@@ -496,8 +481,6 @@ const R = await newRun();
       };
     };
   const X = await newRun({}, strayFactory);
-  const bd = briefOf(X.runDir, "define");
-  await decide(X, bd, { confirm: await propose(X, bd, {}) }, {}, strayFactory);
   const bf = briefOf(X.runDir, "fix");
   const idf = await propose(X, bf, {});
   await decide(X, bf, { confirm: idf }, {}, strayFactory);

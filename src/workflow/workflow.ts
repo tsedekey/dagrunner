@@ -358,7 +358,7 @@ export const FIXTURE_BAD_NO_PLACEHOLDERS: Workflow = {
     {
       id: "step-a",
       command: "/step-a",
-      produces: ["guide.md"],
+      produces: ["doc.md"],
       noPlaceholders: [],
     },
   ],

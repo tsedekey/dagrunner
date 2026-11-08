@@ -288,7 +288,7 @@ function createScenarioExecutor(scenarios: ScenarioMap): NodeExecutor {
       case "gate-pause-with-placeholder": {
         // Same as gate-pause but the first artifact contains an unresolved
         // "TODO" placeholder marker outside any fenced code block — models a
-        // guide.md that was never finished, so checkNoPlaceholders must fail
+        // document that was never finished, so checkNoPlaceholders must fail
         // this node on the gate-approve transition (it never reaches 'done'
         // via runDag's own done-branch — see run-engine.ts's approve paths).
         if (node.produces !== undefined) {

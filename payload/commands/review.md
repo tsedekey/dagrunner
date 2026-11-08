@@ -25,8 +25,11 @@ Read via `cat`:
 
 ```bash
 cat "<runDir>/plan/plan.md"
-cat "<runDir>/define/guide.md"
+cat "<runDir>/implement/red-evidence.md"
 ```
+
+The plan is the contract — there is no separate implementation guide. `red-evidence.md` names the
+test that `implement` proved RED→GREEN; use it as context when judging test adequacy.
 
 Extract every explicitly required deliverable: new files, new test classes, new modules, and any
 item phrased as "must", "required", or listed under "Key implementation steps" or "Acceptance
@@ -46,9 +49,9 @@ your final findings.json:
   "reviewer_dimension": "test-adequacy",
   "severity": "blocker",
   "confidence": "high",
-  "file": "<expected file path from the guide>",
+  "file": "<expected file path from the plan>",
   "line": 1,
-  "claim": "Required deliverable '<name>' is absent from the diff — it was specified in the guide but no matching file was staged.",
+  "claim": "Required deliverable '<name>' is absent from the diff — it was specified in the plan but no matching file was staged.",
   "grounded": true
 }
 ```
@@ -168,7 +171,7 @@ future implementations in this code area avoid the same class of issue. Good can
   omits null-check on the entity arg — callers must guard upstream").
 - A module invariant that was violated and is easy to miss.
 - A finding dimension (e.g. migration-safety) that fired here but would not be obvious from
-  reading the code — worth flagging to future define and implement runs.
+  reading the code — worth flagging to future implement runs.
 
 **Absence is fine.** Only write reflections.md if there is something genuinely non-obvious that
 reduces friction for future runs in this code area. Do not summarise the findings themselves —

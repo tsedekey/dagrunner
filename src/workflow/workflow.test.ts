@@ -195,8 +195,8 @@ test("loadWorkflow: a valid noPlaceholders does not throw", () => {
       {
         id: "step-a",
         command: "/step-a",
-        produces: ["guide.md"],
-        noPlaceholders: ["guide.md"],
+        produces: ["doc.md"],
+        noPlaceholders: ["doc.md"],
       },
     ],
   };

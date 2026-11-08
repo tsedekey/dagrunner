@@ -31,6 +31,11 @@ export type StatusJson = {
       endedAt: string | null;
       durationMs: number | null;
       cost: number;
+      /**
+       * Why the node failed (produces-contract / outcome-gate / executor error), else null.
+       * Without it a failed `implement` (e.g. `red = "not-reproduced"`) shows only status "failed".
+       */
+      error: string | null;
       /** Registered artifacts first, then unregistered on-disk files (registered:false). */
       artifacts: NodeFile[];
       attempts: NodeAttempt[];
@@ -98,6 +103,7 @@ export function buildStatusJson(homeDir: string, runId: string): StatusJson {
       endedAt: ns.endedAt ?? null,
       durationMs: Number.isNaN(dur) ? null : dur,
       cost: ns.cost,
+      error: ns.error ?? null,
       artifacts: listNodeFiles(runDir, id, ns.artifacts),
       attempts: ns.attempts ?? [],
     };

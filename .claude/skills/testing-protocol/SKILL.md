@@ -64,14 +64,18 @@ the mock executor. Zero API calls. Runs in ~150 ms. Deterministic by constructio
 
 Runs in one script (see the header of `test/smoke/smoke-mock.ts` for the full list):
 
-- **Run A (feature) / Run B (bugfix):** init → define|reproduce gate-pause → approve Gate 1 →
-  implement → review → fix gate-pause → approve Gate 2 → pr → done. No verify node exists.
-- **Runs C-J:** night-mode, stale-gate auto-skip (incl. a legacy `verify` node left in an old
-  run's state), outcomeGate end-to-end, noPlaceholders, rerun/interrupt artifact archiving.
+- **Run A (feature) / Run B (bugfix):** init → implement (RED proven) → review → fix gate-pause
+  (the FIRST pause) → approve → pr → done. No define/reproduce/verify node exists.
+- **Runs C-K:** night-mode (incl. a concern raised by implement parking the fix gate), stale-gate
+  auto-skip (incl. legacy `define`/`verify` nodes left in an old run's state), outcomeGate
+  end-to-end (F, and F2: the shipped pipeline failing at implement when RED is not proven),
+  noPlaceholders (G/H, on a tiny custom gated workflow), rerun/interrupt artifact archiving,
+  worktree adoption.
 
 What it asserts: gate pauses, produces-contract met at every gate node, artifact channel (each
 produces file exists after its node), state transitions (awaiting-gate, paused, done), routing
-(fix → pr directly; no next-node decision is written).
+(fix → pr directly; no next-node decision is written; an unprovable RED fails implement and
+review/fix/pr never run).
 
 What it does NOT assert: model output quality (mock writes canned text), exact session IDs, JSON
 validity of findings.json (mock writes plain text there).
@@ -80,7 +84,7 @@ validity of findings.json (mock writes plain text there).
 
 ## smoke:live — the real-SDK integration test (occasional)
 
-`npm run smoke:live` (`test/smoke/smoke.ts`) drives the full 7-step pipeline with real Claude Code
+`npm run smoke:live` (`test/smoke/smoke.ts`) drives the full 6-step pipeline with real Claude Code
 sessions. Requires `ANTHROPIC_API_KEY` or claude.ai subscription. ~35 min, real tokens,
 non-deterministic on model output.
 
@@ -97,28 +101,28 @@ structured output, format hook fires, worktree diff exists.
 slip past the per-plan gate until the next `smoke:live`. The mitigation is the guideline above —
 prompt changes trigger a live run.
 
-## The 7-step smoke:live test (Block 9, now called smoke:live)
+## The 6-step smoke:live test (Block 9, now called smoke:live)
 
 A runnable script driving the real thin slice end to end with non-interactive flags, asserting each
 step, capturing a transcript.
 
 1. `dagrun init` → XDG home tree created (assert dirs exist).
-2. `dagrun start feature --plan toy-plan.md` → `expand` runs (Gate 1), checkpoints, process exits.
-3. `dagrun status` shows `expand: awaiting-gate`, a cost figure.
-4. `dagrun resume --reject "..."` → expand revises in the same session, feedback-1.md written,
+2. `dagrun start feature --plan toy-plan.md` → `implement` proves RED first (red.json confirmed,
+   red-evidence.md), `review` (findings.json, valid JSON with required keys), `fix` hits the fix
+   gate (the first pause), checkpoints, process exits.
+3. `dagrun status` shows `fix: awaiting-gate`, a cost figure.
+4. `dagrun resume --reject "..."` → fix revises in the same session, feedback-1.md written,
    re-pauses.
-5. `dagrun resume --approve` → Gate 1 approved → implement → review (findings.json, valid JSON with
-   required keys) → fix hits Gate 2, re-pauses.
-6. `dagrun resume --approve` → Gate 2 approved → pr composes its body and pauses at the pre-PR
+5. `dagrun resume --approve` → fix gate approved → pr composes its body and pauses at the pre-PR
    gate. Check `store/reflection-log.jsonl` has the seeded reflection (SessionEnd hook wiring).
-7. Synthetic reconcile test (no API call): inject a state with `interruptRetries: 99`, resume →
+6. Synthetic reconcile test (no API call): inject a state with `interruptRetries: 99`, resume →
    retry cap hit → run stays failed, exit 1.
 
-Passing all seven = v1 real-SDK integration confirmed.
+Passing all six = v1 real-SDK integration confirmed.
 
 ## What is explicitly NOT tested in v1
 
-- Model output QUALITY (is the guide good?) — human judgment, not a CI assertion. Do not try.
+- Model output QUALITY (is the RED proof honest? is the plan followed?) — human judgment, not a CI assertion. Do not try.
 - Load / concurrency (one-run-at-a-time).
 - A live 6-way reviewer fan-out — those nodes are phase-2 config; validate the join logic with tier-1
   mock tests instead.
