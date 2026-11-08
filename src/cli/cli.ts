@@ -34,13 +34,13 @@ import { generateReport } from "./report.js";
 import type { BurnDoc } from "../runtime/burn.js";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
-import { execSync } from "node:child_process";
 import { assertAuth } from "../runtime/launcher.js";
 import { featureWorkflow } from "../workflow/feature-workflow.js";
 import { bugfixWorkflow } from "../workflow/bugfix-workflow.js";
 import {
   startRun,
   makeRunId,
+  parseFrontmatter,
   validateStartOptions,
   resumeRun,
   rerunNode,
@@ -50,6 +50,12 @@ import {
   seedWorktreeSiblings,
 } from "../runtime/run-engine.js";
 import { readState, writeState } from "../core/state.js";
+import { cleanupAll, cleanupRun } from "../runtime/cleanup.js";
+import {
+  resolveWorktreeArg,
+  validateAdoptedWorktree,
+  WorktreeAdoptionError,
+} from "../runtime/worktree.js";
 import { defaultExec, suggestReviewers } from "../runtime/reviewers-cli.js";
 import { parseReviewersConfig } from "../config/reviewers-config.js";
 import {
@@ -64,6 +70,7 @@ import {
   selfInvocation,
   spawnDetached,
   withoutFlag,
+  withoutFlagAndValue,
 } from "../runtime/detach.js";
 import { buildStatusJson } from "./status-json.js";
 import {
@@ -97,6 +104,22 @@ function flagValue(argv: string[], flag: string): string | undefined {
 /** Return true if `flag` is present in argv. */
 function hasFlag(argv: string[], flag: string): boolean {
   return argv.includes(flag);
+}
+
+/**
+ * Run `fn`; a WorktreeAdoptionError (a refusal the user can act on) prints its
+ * message and exits 1 with no stack trace. Anything else propagates.
+ */
+async function orFailAdoption<T>(fn: () => T | Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof WorktreeAdoptionError) {
+      process.stderr.write(`${err.message}\n`);
+      process.exit(1);
+    }
+    throw err;
+  }
 }
 
 /**
@@ -183,7 +206,7 @@ async function cmdStart(argv: string[]): Promise<void> {
   if (workflowName === undefined || workflowName.startsWith("--")) {
     process.stderr.write(
       `dagrun start: missing <workflow> argument.\n` +
-        `Usage: dagrun start <workflow> --plan <file> [--max-budget-usd <n>] [--force] [--night] [--companion-session <id> | --no-companion] [--detach]\n`,
+        `Usage: dagrun start <workflow> --plan <file> [--worktree <path>] [--max-budget-usd <n>] [--force] [--night] [--companion-session <id> | --no-companion] [--detach]\n`,
     );
     process.exit(1);
   }
@@ -207,6 +230,12 @@ async function cmdStart(argv: string[]): Promise<void> {
   const configFlag = flagValue(argv, "--config");
   const companionSession = flagValue(argv, "--companion-session");
   const noCompanion = hasFlag(argv, "--no-companion");
+
+  // The run ADOPTS an existing worktree: --worktree <path>, default = the git
+  // toplevel of cwd (fails loud outside a git repo). The engine never reads cwd.
+  const worktreePath = await orFailAdoption(() =>
+    resolveWorktreeArg(flagValue(argv, "--worktree"), process.cwd()),
+  );
 
   // Resolve home (fails loud if missing).
   const homeDir = resolveHome();
@@ -258,31 +287,53 @@ async function cmdStart(argv: string[]): Promise<void> {
         : {}),
       ...(noCompanion ? { noCompanion: true } : {}),
     });
+    // Same for the worktree: adoption is refused here, synchronously, not in the child.
+    const { worktreePath: adoptedPath } = await orFailAdoption(() =>
+      validateAdoptedWorktree({
+        worktreePath,
+        devharnessSrc: config.DEVHARNESS_SRC,
+        baseBranch:
+          parseFrontmatter(readFileSync(planFile, "utf8"))["base_branch"] ??
+          "main",
+        homeDir,
+      }),
+    );
     const runsDir = join(homeDir, "runs");
     mkdirSync(runsDir, { recursive: true });
     const runId = makeRunId(planFile, runsDir);
     if (!force) assertLockAvailable(homeDir, runId);
     // Claim the id (non-recursive: fails if it appeared meanwhile) so driver.log has a home.
     mkdirSync(join(runsDir, runId));
-    detachSelf(homeDir, runId, ["start", ...argv, "--run-id", runId]);
+    // The child gets the resolved worktree explicitly — it must not depend on its own cwd.
+    detachSelf(homeDir, runId, [
+      "start",
+      ...withoutFlagAndValue(argv, "--worktree"),
+      "--worktree",
+      adoptedPath,
+      "--run-id",
+      runId,
+    ]);
     return;
   }
 
-  await startRun({
-    workflow,
-    planPath: planFile,
-    homeDir,
-    config,
-    ...(preClaimed !== undefined ? { runId: preClaimed } : {}),
-    ...(mockFactory !== undefined ? { executorFactory: mockFactory } : {}),
-    ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
-    ...(force ? { force: true } : {}),
-    ...(nightMode ? { nightMode: true } : {}),
-    ...(companionSession !== undefined
-      ? { companionSessionId: companionSession }
-      : {}),
-    ...(noCompanion ? { noCompanion: true } : {}),
-  });
+  await orFailAdoption(() =>
+    startRun({
+      workflow,
+      planPath: planFile,
+      homeDir,
+      config,
+      worktreePath,
+      ...(preClaimed !== undefined ? { runId: preClaimed } : {}),
+      ...(mockFactory !== undefined ? { executorFactory: mockFactory } : {}),
+      ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
+      ...(force ? { force: true } : {}),
+      ...(nightMode ? { nightMode: true } : {}),
+      ...(companionSession !== undefined
+        ? { companionSessionId: companionSession }
+        : {}),
+      ...(noCompanion ? { noCompanion: true } : {}),
+    }),
+  );
 }
 
 async function cmdResume(argv: string[]): Promise<void> {
@@ -638,30 +689,7 @@ function cmdCleanup(argv: string[]): void {
   const config = resolveConfig(homeDir, configFlag);
 
   if (hasFlag(argv, "--all")) {
-    const worktreeRoot = config.worktreeRoot ?? join(homeDir, "worktrees");
-    const dirs = existsSync(worktreeRoot) ? readdirSync(worktreeRoot) : [];
-    if (dirs.length === 0) {
-      process.stdout.write("dagrun: no worktrees to clean up\n");
-      return;
-    }
-    let removed = 0;
-    for (const d of dirs) {
-      const wt = join(worktreeRoot, d);
-      try {
-        execSync(`git worktree remove "${wt}" --force`, {
-          cwd: config.DEVHARNESS_SRC,
-          stdio: "inherit",
-        });
-        removed++;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        process.stderr.write(
-          `dagrun cleanup: failed to remove ${wt}: ${msg}\n`,
-        );
-      }
-    }
-    releaseLock(homeDir);
-    process.stdout.write(`dagrun: removed ${removed} worktree(s)\n`);
+    cleanupAll({ homeDir, devharnessSrc: config.DEVHARNESS_SRC });
     return;
   }
 
@@ -682,25 +710,8 @@ function cmdCleanup(argv: string[]): void {
     process.exit(1);
   }
 
-  const state = readState(stateFile);
-  const worktreePath = state.worktreePath;
-
-  try {
-    // Must run in the source repo so git can find the worktree registration.
-    execSync(`git worktree remove "${worktreePath}" --force`, {
-      cwd: config.DEVHARNESS_SRC,
-      stdio: "inherit",
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(
-      `dagrun cleanup: git worktree remove failed: ${msg}\n`,
-    );
-    // Continue — don't block lock release on git failure.
-  }
-
-  releaseLock(homeDir);
-  process.stdout.write(`dagrun: cleaned up ${runId}\n`);
+  // Adopted run: release only (the worktree is not ours). Legacy: remove it.
+  cleanupRun({ homeDir, devharnessSrc: config.DEVHARNESS_SRC, runId });
 }
 
 function cmdClear(argv: string[]): void {
@@ -965,23 +976,35 @@ function cmdSeed(argv: string[]): void {
 
 async function cmdScaffold(argv: string[]): Promise<void> {
   const nodeId = argv[0];
-  const branch = flagValue(argv, "--branch");
   const mocksDir = flagValue(argv, "--mocks");
-  if (!nodeId || nodeId.startsWith("--") || !branch) {
+  if (hasFlag(argv, "--branch")) {
     process.stderr.write(
-      "Usage: dagrun scaffold <node-id> --branch <feature-branch> [--mocks <dir>]\n",
+      "dagrun scaffold: --branch was removed — scaffold no longer creates a branch or worktree. " +
+        "Check the branch out in a worktree (`wm add <branch>` / `git worktree add`) and run from there, " +
+        "or pass --worktree <path>.\n",
     );
     process.exit(1);
   }
+  if (!nodeId || nodeId.startsWith("--")) {
+    process.stderr.write(
+      "Usage: dagrun scaffold <node-id> [--worktree <path>] [--mocks <dir>]\n",
+    );
+    process.exit(1);
+  }
+  const worktreePath = await orFailAdoption(() =>
+    resolveWorktreeArg(flagValue(argv, "--worktree"), process.cwd()),
+  );
   const homeDir = resolveHome();
   const config = resolveConfig(homeDir);
-  await scaffoldRun({
-    nodeId,
-    homeDir,
-    config,
-    branch,
-    ...(mocksDir !== undefined ? { mocksDir } : {}),
-  });
+  await orFailAdoption(() =>
+    scaffoldRun({
+      nodeId,
+      homeDir,
+      config,
+      worktreePath,
+      ...(mocksDir !== undefined ? { mocksDir } : {}),
+    }),
+  );
 }
 
 async function cmdUi(argv: string[]): Promise<void> {
@@ -1038,7 +1061,7 @@ function printHelp(): void {
       "Commands:",
       "  dagrun init [--home <path>]",
       "  dagrun preflight [--base-branch <branch>] [--config <file>]",
-      "  dagrun start <workflow> --plan <file> [--max-budget-usd <n>] [--force] [--night] [--companion-session <id> | --no-companion] [--detach]",
+      "  dagrun start <workflow> --plan <file> [--worktree <path>] [--max-budget-usd <n>] [--force] [--night] [--companion-session <id> | --no-companion] [--detach]   (adopts an existing worktree; default = git toplevel of cwd)",
       '  dagrun resume <run-id> [--approve] [--reject "<comment>"] [--detach]   (continue a run; --approve/--reject = direct-decision flags, same engine as gate decide)',
       "  dagrun gate show <run-id>                                    (companion flow: show, then propose-and-confirm decide)",
       "  dagrun gate open <run-id>                                    (resume the originating companion, with a gate prompt)",
@@ -1049,14 +1072,14 @@ function printHelp(): void {
       `  dagrun ui [--port <n>] [--open] [--home <dir>]               (read-only timeline viewer, loopback-only; default port ${DEFAULT_UI_PORT})`,
       "  dagrun list",
       "  dagrun abort <run-id>",
-      "  dagrun cleanup <run-id>",
+      "  dagrun cleanup <run-id>                                      (adopted run: releases only, the worktree is yours to remove; legacy run: removes its worktree)",
       "  dagrun cleanup --all",
       "  dagrun clear <run-id>",
       "  dagrun clear --all [--yes]",
       "  dagrun report <run-id>",
       "  dagrun logs <run-id> <node>",
       "  dagrun rerun <run-id> <node-id>",
-      "  dagrun scaffold <node-id> --branch <feature-branch> [--mocks <dir>]",
+      "  dagrun scaffold <node-id> [--worktree <path>] [--mocks <dir>]",
       "  dagrun seed <repo-path>",
       '  dagrun reflect --source <node> --body "<text>" [--run-id <id>]',
       "",

@@ -8,11 +8,10 @@ These facts are pre-verified — do not re-investigate them:
   the env prefix, not the command itself.
 - **Format hook:** the PostToolUse formatter covers frontend files only (TypeScript, JS, CSS).
   Java and Kotlin files do not need a manual format call after editing.
-- **`.tool-versions` / Java version:** the worktree lives at
-  `~/.local/share/dagrunner/worktrees/<run-id>/` — a separate directory tree from the main
-  repo. `asdf` traverses upward from the worktree and never reaches `$DEVHARNESS_SRC`, so
-  Java is not resolvable by default. If Maven fails with "No version is set for command java",
-  copy the `java` line from `$DEVHARNESS_SRC/.tool-versions` into the worktree's
+- **`.tool-versions` / Java version:** the worktree (`<worktree>`) is a separate directory tree
+  from the main repo. `asdf` traverses upward from the worktree and never reaches
+  `$DEVHARNESS_SRC`, so Java is not resolvable by default. If Maven fails with "No version is
+  set for command java", copy the `java` line from `$DEVHARNESS_SRC/.tool-versions` into the worktree's
   `.tool-versions`:
   ```bash
   grep '^java ' "$DEVHARNESS_SRC/.tool-versions" >> "<worktree>/.tool-versions"

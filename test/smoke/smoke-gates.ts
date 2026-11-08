@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { buildStatusJson } from "../../src/cli/status-json.js";
 import { readEvents } from "../../src/core/events.js";
 import { startRun, resumeRun } from "../../src/runtime/run-engine.js";
+import { addLinkedWorktree } from "./adopt.js";
 import { gateAttach, gateDecide, gateOpen, gateShow, resumeOpensCompanion } from "../../src/runtime/gate-cli.js";
 import { createMockExecutor } from "../../src/runtime/mock-executor.js";
 import { bugfixWorkflow } from "../../src/workflow/bugfix-workflow.js";
@@ -82,13 +83,13 @@ const briefOf = (runDir: string, gate: string): GateBrief => {
 };
 const stamp = Date.now();
 let seq = 0;
-function newHome(): { home: string; plan: string } {
+function newHome(): { home: string; plan: string; worktreePath: string } {
   const home = mkdtempSync(join(tmpdir(), "dagrun-gates-"));
   mkdirSync(join(home, "runs"), { recursive: true });
-  mkdirSync(join(home, "worktrees"), { recursive: true });
   const plan = join(home, `${stamp + ++seq}-toy-plan.md`);
   writeFileSync(plan, readFileSync(join(__dirname, "fixtures", "toy-plan.md"), "utf8"));
-  return { home, plan };
+  // Runs ADOPT an existing worktree: make one (a fresh branch off main of the toy repo).
+  return { home, plan, worktreePath: addLinkedWorktree(TOY_REPO, home, "g") };
 }
 // The mock executor writes nothing into the worktree; a real fix does. Model that (an UNTRACKED
 // file, which is what changes.diff must render as a new-file diff) around the mock, per fix run.
@@ -102,8 +103,8 @@ const factory = (over: Record<string, string> = {}) => () => {
 };
 
 async function newRun(over: Record<string, string> = {}, session: string | null = SESSION) {
-  const { home, plan } = newHome();
-  await quiet(() => startRun({ workflow: bugfixWorkflow, planPath: plan, homeDir: home, config, executorFactory: factory(over), ...(session !== null ? { companionSessionId: session } : { noCompanion: true }) }));
+  const { home, plan, worktreePath } = newHome();
+  await quiet(() => startRun({ workflow: bugfixWorkflow, planPath: plan, homeDir: home, worktreePath, config, executorFactory: factory(over), ...(session !== null ? { companionSessionId: session } : { noCompanion: true }) }));
   const runId = readdirSync(join(home, "runs"))[0] as string;
   return { home, runId, runDir: join(home, "runs", runId) };
 }
@@ -126,8 +127,8 @@ const say = (m: string) => console.log(`step ${m}`);
 // 1. Handoff association is explicit and fail-loud
 // ===========================================================================
 {
-  const { home, plan } = newHome();
-  const base = { workflow: bugfixWorkflow, planPath: plan, homeDir: home, config, executorFactory: factory() };
+  const { home, plan, worktreePath } = newHome();
+  const base = { workflow: bugfixWorkflow, planPath: plan, homeDir: home, worktreePath, config, executorFactory: factory() };
   await assert.rejects(() => startRun(base), /--companion-session <id>.*--no-companion/s);
   await assert.rejects(() => startRun({ ...base, companionSessionId: SESSION, noCompanion: true }), /mutually exclusive/);
   await assert.rejects(() => startRun({ ...base, companionSessionId: SESSION, nightMode: true }), /--night/);
@@ -403,7 +404,7 @@ const R = await newRun();
 //     (mock executor via DAGRUN_MOCK_SCENARIOS; no API call, no SDK).
 // ===========================================================================
 {
-  const { home, plan } = newHome();
+  const { home, plan, worktreePath } = newHome();
   for (const d of ["inbox", "store"]) mkdirSync(join(home, d), { recursive: true });
   writeFileSync(join(home, "config.json"), JSON.stringify({ DEVHARNESS_SRC: TOY_REPO }));
   const env: NodeJS.ProcessEnv = {
@@ -442,9 +443,27 @@ const R = await newRun();
     return { runId: m[1] as string, pid: Number(m[2]), log: m[3] as string };
   };
 
+  // Adoption refusals through the real CLI: exit 1, a plain message (no stack trace), nothing detached or created.
+  // (cwd here is the dagrunner checkout — a MAIN checkout, so the default --worktree is refused too.)
+  const noStack = (stderr: string): void => assert.doesNotMatch(stderr, /\n\s+at /, `no stack trace expected: ${stderr}`);
+  const refuseDefault = cli(["start", "bugfix", "--plan", plan, "--no-companion", "--detach"]);
+  assert.equal(refuseDefault.status, 1, refuseDefault.stdout);
+  assert.match(refuseDefault.stderr, /main checkout/);
+  noStack(refuseDefault.stderr);
+  const refuseMissing = cli(["start", "bugfix", "--plan", plan, "--no-companion", "--worktree", join(home, "nope"), "--detach"]);
+  assert.equal(refuseMissing.status, 1, refuseMissing.stdout);
+  assert.match(refuseMissing.stderr, /does not exist/);
+  noStack(refuseMissing.stderr);
+  const refuseBranch = cli(["scaffold", "fix", "--branch", "feat/x"]);
+  assert.equal(refuseBranch.status, 1);
+  assert.match(refuseBranch.stderr, /--branch was removed.*--worktree/s);
+  assert.equal(readdirSync(join(home, "runs")).length, 0, "refused starts create no run (and no detach dir)");
+  assert.ok(!existsSync(join(home, "active.lock")), "no lock left behind");
+
   // start --detach: returns at once (exit 0) with run id, pid, log path; nothing but the child drives.
   const t0 = Date.now();
-  const st = cli(["start", "bugfix", "--plan", plan, "--companion-session", SESSION, "--detach"]);
+  // The CLI adopts the worktree it is told about (its cwd here is the dagrunner checkout, not a worktree).
+  const st = cli(["start", "bugfix", "--plan", plan, "--worktree", worktreePath, "--companion-session", SESSION, "--detach"]);
   assert.equal(st.status, 0, `start --detach failed: ${st.stdout}${st.stderr}`);
   const d = detachedOut(st.stdout);
   assert.ok(d.log.endsWith(join("runs", d.runId, "driver.log")));

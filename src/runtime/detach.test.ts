@@ -4,11 +4,19 @@ import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { spawnDetached, withoutFlag, selfInvocation } from "./detach.js";
+import { spawnDetached, withoutFlag, withoutFlagAndValue, selfInvocation } from "./detach.js";
 import { isPidAlive } from "../core/lock.js";
 
 test("withoutFlag removes only the flag", () => {
   assert.deepEqual(withoutFlag(["a", "--detach", "--x", "y"], "--detach"), ["a", "--x", "y"]);
+});
+
+test("withoutFlagAndValue removes the flag and its value, nothing else", () => {
+  assert.deepEqual(
+    withoutFlagAndValue(["start", "feature", "--worktree", "/a/b", "--plan", "p.md"], "--worktree"),
+    ["start", "feature", "--plan", "p.md"],
+  );
+  assert.deepEqual(withoutFlagAndValue(["a", "b"], "--worktree"), ["a", "b"]);
 });
 
 test("selfInvocation carries execArgv and the entry script", () => {

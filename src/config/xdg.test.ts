@@ -163,6 +163,18 @@ test("resolveConfig: valid config.json with DEVHARNESS_SRC returns parsed config
   assert.equal(config.maxParallel, 2);
 });
 
+test("resolveConfig: an old config.json that still carries worktreeRoot loads (unknown key ignored, not parsed)", () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "dr-xdg-cfg-"));
+  writeFileSync(
+    join(homeDir, "config.json"),
+    JSON.stringify({ DEVHARNESS_SRC: "/real/src", worktreeRoot: "/old/wt/root" }),
+    "utf8",
+  );
+  const config = resolveConfig(homeDir);
+  assert.equal(config.DEVHARNESS_SRC, "/real/src");
+  assert.equal("worktreeRoot" in config, false);
+});
+
 test("resolveConfig: missing config file exits loud", () => {
   const homeDir = mkdtempSync(join(tmpdir(), "dr-xdg-cfg-"));
   // No config.json written

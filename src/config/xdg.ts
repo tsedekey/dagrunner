@@ -27,8 +27,6 @@ export type DagrunnerConfig = {
   claudeConfigDir?: string;
   maxBudgetUsd?: number;
   maxParallel?: number;
-  /** Root directory for worktrees. Default: <DAGRUNNER_HOME>/worktrees */
-  worktreeRoot?: string;
   /**
    * Validated `reviewers` block (pr-node reviewer suggestion). Undefined when
    * the block is absent — consumers fall back to parseReviewersConfig(undefined)
@@ -176,11 +174,6 @@ export function resolveConfig(
       : claudeConfigDir;
   }
 
-  const worktreeRoot = raw["worktreeRoot"];
-  if (typeof worktreeRoot === "string") {
-    config.worktreeRoot = worktreeRoot;
-  }
-
   if ("reviewers" in raw) {
     try {
       config.reviewers = parseReviewersConfig(raw["reviewers"]);
@@ -203,6 +196,9 @@ export function resolveConfig(
  * Writes a config.json template if none exists.
  *
  * Directories created: runs/, worktrees/, inbox/, store/
+ *
+ * `worktrees/` is LEGACY: new runs adopt an existing worktree and never put one
+ * here; it is still created because pre-adoption runs' worktrees live under it.
  */
 export function initHome(homeDir: string): void {
   const dirs = ["runs", "worktrees", "inbox", "store"];

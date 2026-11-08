@@ -3,7 +3,7 @@
 A thin TypeScript binary (`dagrun`) that orchestrates a DAG of Claude Code (Agent SDK) sessions
 across isolated git worktrees, with checkpoint-and-exit human gates. It owns only what has no
 native Claude Code primitive that survives across separate processes/worktrees — the DAG
-executor, conditional skip, gate checkpoints, worktree lifecycle, per-run artifacts — and reuses
+executor, conditional skip, gate checkpoints, worktree adoption, per-run artifacts — and reuses
 Claude Code for everything else. See `CLAUDE.md` for the reuse law and engineering discipline.
 
 ## What it does
@@ -11,7 +11,8 @@ Claude Code for everything else. See `CLAUDE.md` for the reuse law and engineeri
 Walks a feature or bugfix change through a fixed, gated pipeline (e.g.
 `reproduce|define → implement → review → fix → pr`), pausing at human gates and checkpointing to
 disk so it survives process exit. Each node is a Claude Code session spawned via the Agent SDK in
-its own git worktree. Three human-driven sibling commands (`ci-babysit`, `pr-triage`,
+the git worktree the run was started in (`dagrun start` adopts an existing worktree — it never
+creates one; see the master doc §4 "Worktree adoption"). Three human-driven sibling commands (`ci-babysit`, `pr-triage`,
 `/seed-data`) run outside the pipeline against a live PR/cluster.
 
 ## Repo layout

@@ -30,6 +30,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startRun } from "../../src/runtime/run-engine.js";
+import { addLinkedWorktree } from "./adopt.js";
 import { gateDecide, gateShow } from "../../src/runtime/gate-cli.js";
 import {
   createMockExecutor,
@@ -110,16 +111,16 @@ const briefOf = (runDir: string, gate: string): GateBrief =>
   ) as GateBrief;
 const stamp = Date.now();
 let seq = 0;
-function newHome(): { home: string; plan: string } {
+function newHome(): { home: string; plan: string; worktreePath: string } {
   const home = mkdtempSync(join(tmpdir(), "dagrun-gates-feature-"));
   mkdirSync(join(home, "runs"), { recursive: true });
-  mkdirSync(join(home, "worktrees"), { recursive: true });
   const plan = join(home, `${stamp + ++seq}-toy-plan.md`);
   writeFileSync(
     plan,
     readFileSync(join(__dirname, "fixtures", "toy-plan.md"), "utf8"),
   );
-  return { home, plan };
+  // Runs ADOPT an existing worktree: make one (a fresh branch off main of the toy repo).
+  return { home, plan, worktreePath: addLinkedWorktree(TOY_REPO, home, "gf") };
 }
 // The mock executor writes nothing into the worktree; a real fix does. Model that (an
 // UNTRACKED file, which is what changes.diff must render as a new-file diff) around the
@@ -163,12 +164,13 @@ async function newRun(
   over: Record<string, NodeScenario> = {},
   fx: (over?: Record<string, NodeScenario>) => () => NodeExecutor = factory,
 ) {
-  const { home, plan } = newHome();
+  const { home, plan, worktreePath } = newHome();
   await quiet(() =>
     startRun({
       workflow: featureWorkflow,
       planPath: plan,
       homeDir: home,
+      worktreePath,
       config,
       executorFactory: fx(over),
       companionSessionId: SESSION,
@@ -248,11 +250,12 @@ function createBrief(h: { home: string; runId: string }): GateBrief {
 //    not bugfix-only — see DECISIONS.md § feature-companion-gates-parity).
 // ===========================================================================
 {
-  const { home, plan } = newHome();
+  const { home, plan, worktreePath } = newHome();
   const base = {
     workflow: featureWorkflow,
     planPath: plan,
     homeDir: home,
+    worktreePath,
     config,
     executorFactory: factory(),
   };

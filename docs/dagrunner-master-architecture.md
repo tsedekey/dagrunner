@@ -1,14 +1,14 @@
 # dagrunner — Master Architecture (Source of Truth)
 
 Status: Canonical, reconciled with the built code through Phase 5 (bugfix workflow shipped; siblings run on any branch). Each sibling build also gets its own implementation plan.
-Last updated: 2026-11-03 (verify node removed from both workflows — §3d, DECISIONS.md § verify-node-removed). Previously 2026-07-03 (docs consolidation: retired the v1-build scaffold, docs/archive/, the chat-architect handoff apparatus, and the file-based plan/status-tracking workflow — docs/changes/, docs/STATUS.md, docs/dagrunner-architect-charter.md, and the build-queue/bundle scripts are gone; self-changes are now agreed in conversation and history lives in git log. See CLAUDE.md § "How self-changes happen".)
+Last updated: 2026-11-08 (runs ADOPT an existing worktree instead of creating one — §4 "Worktree adoption", DECISIONS.md § worktree-adoption). Previously 2026-11-03 (verify node removed from both workflows — §3d, DECISIONS.md § verify-node-removed). Previously 2026-07-03 (docs consolidation: retired the v1-build scaffold, docs/archive/, the chat-architect handoff apparatus, and the file-based plan/status-tracking workflow — docs/changes/, docs/STATUS.md, docs/dagrunner-architect-charter.md, and the build-queue/bundle scripts are gone; self-changes are now agreed in conversation and history lives in git log. See CLAUDE.md § "How self-changes happen".)
 Owner: Eddie Tsedeke
 
 ---
 
 ## 1. What dagrunner is
 
-A thin, static TypeScript orchestrator that walks a feature change through a fixed, gated pipeline — define|reproduce -> implement -> review -> fix -> pr — pausing at defined human gates and checkpointing to disk so it survives process exit. Each node is a Claude Code session spawned via the Agent SDK in an isolated git worktree. dagrunner owns only what Claude Code cannot do across separate sessions: the dependency graph, checkpoint-and-resume, worktree isolation, artifact hand-off, gates, and cost discipline.
+A thin, static TypeScript orchestrator that walks a feature change through a fixed, gated pipeline — define|reproduce -> implement -> review -> fix -> pr — pausing at defined human gates and checkpointing to disk so it survives process exit. Each node is a Claude Code session spawned via the Agent SDK in the git worktree the run was started in — dagrunner ADOPTS an existing linked worktree of DEVHARNESS_SRC (created by `wm add` / `git worktree add`) and never creates or, for adopted runs, removes one (§4). dagrunner owns only what Claude Code cannot do across separate sessions: the dependency graph, checkpoint-and-resume, worktree isolation (via adoption), artifact hand-off, gates, and cost discipline.
 
 Core principle: **code coordinates, model judges.** TS orchestration is free; node sessions cost. Reuse Claude Code primitives; build only cross-process/worktree gaps.
 
@@ -105,7 +105,7 @@ Reviewer selection (from diff-triage): correctness + test-adequacy always; api-s
                             [TERMINAL — run ends here]
 ```
 
-**base_branch from frontmatter:** Bug fixes often target release branches (hotfixes). The plan file may carry a YAML frontmatter block (`---` delimiters) with `base_branch: release/1.x`. Run-engine parses this with `parseFrontmatter()` (pure, exported, unit-tested) before creating the worktree. The worktree branches from `base_branch` as start-point. `runPrPostProcess` uses `state.baseBranch ?? "main"` for `gh pr create --base`. When absent, defaults to `"main"`.
+**base_branch from frontmatter:** Bug fixes often target release branches (hotfixes). The plan file may carry a YAML frontmatter block (`---` delimiters) with `base_branch: release/1.x`. Run-engine parses this with `parseFrontmatter()` (pure, exported, unit-tested) before adopting the worktree. dagrunner no longer branches from it (the worktree already exists on its own branch); `base_branch` is what the adopted branch must DIFFER from and what must resolve in DEVHARNESS_SRC (adoption checks (b) and (d), §4), and what the change diff and PR are taken against. `runPrPostProcess` uses `state.baseBranch ?? "main"` for `gh pr create --base`. When absent, defaults to `"main"`.
 
 **Severity-aware night-mode:** The same `--night` flag works for bugfix runs. Additional rule: if `state.severity` is `"critical"` or `"blocker"`, night-mode always pauses at the gate regardless of whether concerns are flagged. `severityForcesPause(severity)` is the exported predicate (pure, unit-tested). Rationale: high-stakes bugs warrant human eyes even when the agent sees no concerns.
 
@@ -616,20 +616,39 @@ the gate.)
 
 ## 4. The spine
 
-- **run-id = `<slug>-<timestamp>-<hex>`** (the built format; no issue-number injection). The three-segment id is `<plan-basename-slug>-<Date.now()>-<6-char random hex>`. The hex suffix closes the same-millisecond collision window (two starts of the same plan in the same ms produce distinct ids). `startRun` additionally asserts the target run-dir does not exist before writing into it — fail loud if it does. Branch `feature/<runId>`. `makeRunId(planPath, now, suffix?)` is exported from `src/runtime/run-engine.ts` for unit testing; the suffix is injectable for determinism in tests and defaults to `randomBytes(3).toString("hex")` in production.
-- **state.json** per run: top-level (runId, workflow, status, worktreePath, branch, sourcePlanPath, costs) + per-node (status, timestamps, artifacts, model, iteration, gateHistory, interruptRetries?). `gateHistory` entries carry optional `mode: "night"` and `basis` fields when the decision was made by night-mode automation.
+- **run-id = `<slug>-<timestamp>-<hex>`** (the built format; no issue-number injection). The three-segment id is `<plan-basename-slug>-<Date.now()>-<6-char random hex>`. The hex suffix closes the same-millisecond collision window (two starts of the same plan in the same ms produce distinct ids). `startRun` additionally asserts the target run-dir does not exist before writing into it — fail loud if it does. The run's branch is whatever branch is checked out in the adopted worktree (recorded in `state.branch`; dagrunner no longer names branches — `makeBranchName` is gone). `makeRunId(planPath, now, suffix?)` is exported from `src/runtime/run-engine.ts` for unit testing; the suffix is injectable for determinism in tests and defaults to `randomBytes(3).toString("hex")` in production.
+- **state.json** per run: top-level (runId, workflow, status, worktreePath, branch, worktreeOrigin?, sourcePlanPath, costs) + per-node (status, timestamps, artifacts, model, iteration, gateHistory, interruptRetries?). `gateHistory` entries carry optional `mode: "night"` and `basis` fields when the decision was made by night-mode automation.
 - Checkpoint-and-exit at gates; reconcile-on-resume: `reconcileRunningNodes` marks any `running` node `failed` (crash recovery), then `resetInterruptedNodes` resets interrupt-reconciled nodes to `pending` up to `MAX_INTERRUPT_RETRIES` (currently 2, i.e. 3 total attempts) before leaving them permanently `failed`. Rationale: a transient Ctrl+C shouldn't permanently fail a resumable run, but an unbounded retry would never settle a genuinely broken node — the cap bounds both risks. The retry counter (`interruptRetries` on NodeState) is distinct from the gate iteration counter; stale-lock release follows reconcile.
 - One run at a time (global lockfile). Paused runs release the lock; resume re-acquires.
-- Worktrees via `git worktree add` off DEVHARNESS_SRC; teardown deferred to explicit `dagrun cleanup` (never auto — manual test + PR-lifetime siblings need the worktree alive).
+- Worktrees are ADOPTED, not created — see "Worktree adoption" below. Teardown of an adopted worktree belongs to whoever created it (workmux); `dagrun cleanup` only releases the run (never auto — manual test + PR-lifetime siblings need the worktree alive).
 - Artifact channel: `~/.local/share/dagrunner/runs/<run-id>/<node>/` (survives teardown), passed to nodes as absolute path via env.
 - `produces` contract: a node is `done` only if it wrote its declared artifact(s); missing => failed.
-- XDG home: `~/.local/share/dagrunner/` (runs, worktrees, inbox, store, config.json), `~/.cache/dagrunner/`, `~/.local/bin/dagrun`, override DAGRUNNER_HOME, fail-loud no-cwd-fallback.
+- XDG home: `~/.local/share/dagrunner/` (runs, inbox, store, config.json; `worktrees/` is legacy-only — it holds the worktrees of pre-adoption runs and is still created by `dagrun init`), `~/.cache/dagrunner/`, `~/.local/bin/dagrun`, override DAGRUNNER_HOME, fail-loud no-cwd-fallback.
 - Hooks: SessionStart sync (private files), PostToolUse format (**TS/JS/CSS/HTML only** — Java/YAML excluded after a YAML-coercion incident), Stop friction/gates, SessionEnd cost.
 - `dagrun rerun` re-seeds the worktree `.claude/` from `payload/` (runtime-only: 10 pipeline commands + 7 reviewer agents). Hooks always come from `.claude/hooks/` (genuinely shared). `.claude/{commands,agents}` are build-harness-only and are never seeded into worktrees — this is the split that prevents build tools from polluting Camunda worktrees.
-- `dagrun scaffold <node-id> --branch <feature-branch>` creates a scaffold run: worktree from the given branch, state.json with all transitive deps pre-marked done and the target node pending. Lets a developer run a single node in isolation via `dagrun rerun` without executing the full pipeline. No lock acquired; no agent launched by scaffold itself.
+- `dagrun scaffold <node-id> [--worktree <path>] [--mocks <dir>]` creates a scaffold run in an ADOPTED worktree (same `--worktree` default and validation as `start`; there is no `--branch` any more — scaffold neither creates a branch nor a worktree, and `--branch` fails loud pointing at `--worktree`): state.json with all transitive deps pre-marked done and the target node pending. Lets a developer run a single node in isolation via `dagrun rerun` without executing the full pipeline. No lock acquired; no agent launched by scaffold itself. A scaffold run is written `paused` (non-terminal), so it keeps its worktree claimed — a later `dagrun start` there is refused until `dagrun abort <scaffold-run>`. Its base branch is `main` (a scaffold has no plan, hence no `base_branch`).
 - Failure: 4-class taxonomy (transient->retry, contract->fail, convergence-exhaustion->gate, budget->checkpoint-exit). Node failure != run failure; isolate-and-continue.
 - **CLI exit codes:** `dagrun start`/`resume` exit 0 on `done`/`paused`; exit 1 when the run ends `failed`. Callers (night queue, CI) must treat non-zero as a genuine failure — do not swallow it. The run engine owns the final status; the CLI layer propagates it.
 - `dagrun report` static HTML (built, Phase 1).
+
+### Worktree adoption (v0.1.80)
+
+**Why.** The standing workflow is: a workmux window (`wm add <branch>`) creates the git worktree, and a Claude "driver" session (skill `dagrunner-driver`) runs INSIDE it and drives dagrunner, whose nodes execute in that same worktree. Two worktree creators on one branch would fight, so dagrunner stopped creating worktrees and adopts the one it is started in. dagrunner has NO dependency on workmux: no binary check, no config key, no call — worktree creation/removal for adopted runs is workmux's job, outside dagrunner; the only trace of it is a hint string printed by `cleanup`.
+
+**Contract.**
+
+- `dagrun start` and `dagrun scaffold` take `--worktree <path>`; default = `git rev-parse --show-toplevel` of the current directory, failing loud with a clear message outside a git repo. The CLI resolves it (`resolveWorktreeArg`) and hands `startRun`/`scaffoldRun` an explicit `worktreePath` — the engine itself keeps the no-cwd-fallback rule. `start --detach` resolves AND validates in the parent (a detached parent must not report success for a run that cannot start) and passes the resolved `--worktree` to the child explicitly.
+- `validateAdoptedWorktree` (`src/runtime/worktree.ts`) is the single gate. It runs after the run lock is taken and before any other side effect; a refusal throws `WorktreeAdoptionError` (one distinct message per cause, printed without a stack trace) and the engine releases the lock. Checks: (a) the path is the root of a LINKED worktree of DEVHARNESS_SRC — same resolved `--git-common-dir`, `--git-dir` ≠ `--git-common-dir` (so the main checkout itself is refused); (b) HEAD is on a branch (detached refused) that differs from the run's base branch; (c) no tracked modifications or staged changes (`git status --porcelain --untracked-files=no` empty — untracked files are allowed because workmux may leave e.g. `.workmux/`); (d) the base branch resolves in DEVHARNESS_SRC; (e) no other run under `<home>/runs/*/state.json` in a NON-terminal status already uses the worktree (realpath compare). Terminal = `done` and `aborted`; `failed` is deliberately NOT terminal because a failed run is still recoverable in that worktree (`dagrun rerun`, `dagrun resume`), so it keeps the claim until finished or `dagrun abort`ed.
+- `state.worktreePath` = the realpath of the adopted root; `state.branch` = the branch checked out there at adoption (`git symbolic-ref --short HEAD`); `state.worktreeOrigin = "adopted"`. An absent `worktreeOrigin` means a legacy, dagrunner-created run (six exist under `~/.local/share/dagrunner/worktrees/`); `readState` reads them unchanged.
+- **Seeding is applied to an existing worktree, so every step is idempotent** (`seedRunWorktree`, pinned by `seed-run-worktree.test.ts`): the `.git/info/exclude` block is marker-guarded, `.tool-versions` entries are only added when absent (then `--skip-worktree`), node_modules symlinks are created only where nothing (not even a dangling link — `lstat`, not `existsSync`) is present, the `.claude/` payload is `cpSync`-overwritten with identical content, `settings.json` is rewritten for THIS run's runDir. Known limit: if DEVHARNESS_SRC tracks a file dagrunner seeds (e.g. `.claude/settings.json`), the seeded copy reads as a tracked modification and check (c) will refuse the NEXT adoption of that worktree until it is restored (`git checkout -- .claude`). Camunda keeps its `.claude/` private (untracked), so this does not bite there.
+- `dagrun cleanup <run-id>`: adopted run → releases the lock only and prints `dagrun: run <id> released. The worktree is yours: remove it with: wm rm <basename>`; the worktree and branch are never touched. Legacy run → `git worktree remove --force` exactly as before. `dagrun cleanup --all` iterates `<home>/runs/*/state.json` (never a directory listing of a worktree root), applies the per-run rule, skips runs whose worktree no longer exists, and reports removed / released / skipped (/ failed) counts — a path no state.json records is never touched (`src/runtime/cleanup.ts`).
+- Preflight check E is now "DEVHARNESS_SRC is the main checkout, not a linked worktree" (`--git-dir` = `--git-common-dir`); the old "not inside the worktree root" check and the `worktreeRoot` config key are gone (old config files that still carry the key keep loading — unknown keys are ignored). Preflight no longer requires `worktrees/`.
+
+**Caveats (recorded, not engineered around).**
+
+- (i) `wm rm --gone` / `wm rm --all` can remove an adopted run's worktree out from under its `state.json`; the run then points at a path that no longer exists (`resume`/`rerun` fail on it; `cleanup --all` counts it as skipped). dagrunner does not guard against this — the worktree is the owner's.
+- (ii) The Claude driver session is expected to run with `--setting-sources user` (verified 2026-11-08 in a scratch project: that flag stops the project's hooks, permission mode, commands and CLAUDE.md from loading), so the node settings dagrunner seeds into the worktree (Stop/SessionStart hooks, `acceptEdits`, deny rules) apply to node sessions only and not to the driver that happens to share the directory.
+- (iii) Merging the feature and bugfix workflows (dropping the define/reproduce nodes, TDD-style implement) is a SEPARATE later change and is not part of adoption.
 
 ---
 
@@ -638,7 +657,7 @@ the gate.)
 Node `cwd` is the worktree, so a relative write lands in the worktree and risks reaching a PR.
 Two structural guards (prompt discipline is no longer the only line of defence):
 
-- **Prevention:** at `git worktree add`, seed the worktree's `.git/info/exclude` with the node
+- **Prevention:** at adoption (every run start; idempotent), seed the repo's common `.git/info/exclude` with the node
   artifact filenames (sourced from each node's `produces`) + secondary scratch patterns
   (`*.tmp`, `*-state.json`). Leaked artifacts/scratch can't be staged or PR'd.
 - **Visibility:** before `pr`, a deterministic scan (`findWorktreeScratch`) checks `git status
@@ -665,7 +684,7 @@ Goal: free inside the worktree, read anywhere, mutation outside hard-blocked, no
 
 ## 7. Preflight ("Prepare") — not a node
 
-`dagrun preflight` runs before the graph: on expected base branch; git tree clean; DEVHARNESS_SRC resolves+is a repo; seeded settings present; ANTHROPIC_API_KEY unset; CLAUDE_CONFIG_DIR=~/.claude-work; enterprise policy doesn't block; artifact path in additionalDirectories. (No sandbox/network-allowlist check — there is no sandbox to check; see §6.)
+`dagrun preflight` runs before the graph: on expected base branch; git tree clean; DEVHARNESS_SRC resolves+is a repo AND is the main checkout, not a linked worktree (check E); seeded settings present; ANTHROPIC_API_KEY unset; CLAUDE_CONFIG_DIR=~/.claude-work; enterprise policy doesn't block; artifact path in additionalDirectories. (No sandbox/network-allowlist check — there is no sandbox to check; see §6.)
 
 **Version banner (implemented):** `dagrun preflight` and a passing `dagrun start` both print dagrunner's own package version + build date/time before any node runs — `src/config/version.ts` (`getVersionInfo`), surfaced via `formatAgentContext` (preflight) and `formatVersionBanner` (start). Compiled binaries read the compile-instant timestamp from `dist/build-meta.json` (regenerated every `npm run build` by `scripts/write-build-meta.mjs`) and fail loud if it's missing; dev mode (`tsx`) prints `(dev, unbuilt)`. This makes drift between a rebuild and the running `~/.local/bin/dagrun` binary visible instead of assumed. Every dagrunner self-change bumps this version (enforced by `dr-build`, see `.claude/agents/dr-build.md`).
 
@@ -771,7 +790,7 @@ Local: monitors CI on the open PR, rebases on base, fixes failing checks (scoped
 **Poll/trigger machinery (built here, reused by pr-triage):** ci-babysit owns the Claude Code Desktop scheduled-task / poll loop and the crev-style `--since <prior-run-id>` incremental pattern (act only on new commits/failures since the last tick; checkpoint-and-exit per tick, state on disk). pr-triage (§9.3) imports this loop rather than building a second one.
 
 Operates over the PR lifetime — in a dagrunner-managed worktree (`DAGRUN_RUN_ID` set) it must
-persist (don't `cleanup` until the PR is closed). Neither sibling requires a dagrunner worktree,
+persist (don't `cleanup` until the PR is closed; for an adopted worktree that is workmux's `wm rm`). Neither sibling requires a dagrunner worktree,
 though: Phase 0 gates only on PR discoverability (`gh pr list`/`gh pr view` for the current
 branch), not on branch naming or worktree origin — both run from any git checkout, on any branch,
 as long as a PR exists for it. `RUN_ID` falls back to the sanitized current branch name
@@ -886,7 +905,7 @@ Open items: confirm Agent SDK credit pool covers volume; some preflight checks (
 - Siblings: canonical in Camunda private `.claude/`, edit in DEVHARNESS_SRC. ci-babysit/pr-triage
   run from any git checkout on any branch with a discoverable PR — not restricted to a
   dagrunner-managed worktree. When `DAGRUN_RUN_ID` IS set (dagrunner-managed worktree), persist
-  the worktree until the PR is done.
+  the worktree until the PR is done (adopted worktrees are removed by their owner, not dagrunner).
 - `gh`/network mutations in the pipeline (the `pr` node) run via Node.js outside the agent's own session, not via an in-session `gh` call (see §6).
 - Unattended pipeline runs: never auto-approve a gate **unless `--night` is active and no concern is flagged** (see §3 night-mode). The one-rule policy: agent-decidable gates (Gate 1, Gate 2) auto-approve when `guide.md`/`summary.md` contains no "Concerns / plan challenges" heading. A clean night-mode run proceeds `fix` → `pr` fully unattended with no park anywhere (there is no verify election or hand-off step — §3d). Subagents never end a turn with a question.
 - Schema is single-source-of-truth, owned by dagrunner, never duplicated.

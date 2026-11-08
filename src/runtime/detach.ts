@@ -16,6 +16,19 @@ export function withoutFlag(argv: string[], flag: string): string[] {
   return argv.filter((a) => a !== flag);
 }
 
+/** argv with every occurrence of `flag` AND the value token right after it removed. */
+export function withoutFlagAndValue(argv: string[], flag: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === flag) {
+      i++; // skip the value too
+      continue;
+    }
+    out.push(argv[i] as string);
+  }
+  return out;
+}
+
 /** The exact command line that re-invokes this dagrun CLI with `cliArgs` (execArgv keeps `--import tsx` working). */
 export function selfInvocation(cliArgs: string[]): { command: string; args: string[] } {
   const script = process.argv[1];

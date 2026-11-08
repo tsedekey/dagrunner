@@ -1,7 +1,7 @@
 /**
  * run-engine.ts — high-level run orchestrator.
  *
- * startRun:  create run dir + git worktree, lock, run DAG, checkpoint or finish.
+ * startRun:  create run dir, lock, ADOPT an existing worktree, run DAG, checkpoint or finish.
  * resumeRun: reconcile stale state, handle gate decision, re-run DAG.
  *
  * Lock discipline (logged in DECISIONS.md block7):
@@ -22,6 +22,7 @@ import {
   existsSync,
   unlinkSync,
   symlinkSync,
+  lstatSync,
 } from "node:fs";
 
 // Mutable ref so the SIGINT handler in cli.ts can find the active run dir and
@@ -52,6 +53,7 @@ import type {
   GateHistoryEntry,
 } from "../core/state.js";
 import type { ExecutionCtx, NodeExecutor } from "./mock-executor.js";
+import { validateAdoptedWorktree, type AdoptedWorktree } from "./worktree.js";
 
 type ExecutorFactory = (
   config: DagrunnerConfig,
@@ -142,24 +144,6 @@ function issueNumFromPlanPath(planPath: string): string {
   return match ? (match[1] ?? "0") : "0";
 }
 
-/**
- * Extract the slug segment from a plan filename.
- * Strips the leading "{issueNum}-" prefix and the "-fix-plan" or "-plan" suffix.
- * e.g. "53856-null-pointer-fix-plan.md" → "null-pointer"
- * e.g. "53856-single-job-priority-update-grpc-plan.md" → "single-job-priority-update-grpc"
- * Falls back to the full filename (without extension) if no prefix/suffix found.
- */
-function slugFromPlanPath(planPath: string): string {
-  const name = basename(planPath, ".md");
-  // Strip leading "{digits}-" prefix if present.
-  const withoutPrefix = name.replace(/^\d+-/, "");
-  // Strip trailing "-fix-plan" suffix first (more specific), then "-plan".
-  const withoutSuffix = withoutPrefix
-    .replace(/-fix-plan$/, "")
-    .replace(/-plan$/, "");
-  return withoutSuffix !== "" ? withoutSuffix : name;
-}
-
 // ---------------------------------------------------------------------------
 // Frontmatter parsing
 // ---------------------------------------------------------------------------
@@ -233,7 +217,7 @@ export function makeRunId(planPath: string, runsDir: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Branch naming — Conventional Commits style
+// PR title prefix — Conventional Commits style
 // ---------------------------------------------------------------------------
 
 const WORKFLOW_TYPE_PREFIX: Record<string, string> = {
@@ -250,21 +234,6 @@ const WORKFLOW_TYPE_PREFIX: Record<string, string> = {
   style: "style",
   revert: "revert",
 };
-
-/**
- * Compute the git branch name for a new run.
- * Format: {type}/{issueNum}-{slug}
- *   e.g. feat/53856-single-job-priority-update-grpc
- *
- * The issue number makes the branch unique — no random suffix needed.
- * Exported for unit testing.
- */
-export function makeBranchName(workflowName: string, planPath: string): string {
-  const prefix = WORKFLOW_TYPE_PREFIX[workflowName] ?? "feat";
-  const issueNum = issueNumFromPlanPath(planPath);
-  const slug = slugFromPlanPath(planPath);
-  return `${prefix}/${issueNum}-${slug}`;
-}
 
 /**
  * Return the PR title prefix for a workflow: "{type}:"
@@ -503,7 +472,16 @@ function seedWorktreeNodeModules(
       if (!nmPath) continue;
       const rel = nmPath.slice(devharnessSrc.length).replace(/^\//, "");
       const dest = join(worktreePath, rel);
-      if (!existsSync(dest)) {
+      // lstat, not existsSync: a symlink left dangling by an earlier seeding
+      // reads as "absent" to existsSync, and symlinkSync would then throw EEXIST
+      // and abort the rest of the loop. An adopted worktree may carry such links.
+      let present = true;
+      try {
+        lstatSync(dest);
+      } catch {
+        present = false;
+      }
+      if (!present) {
         mkdirSync(dirname(dest), { recursive: true });
         symlinkSync(nmPath, dest);
       }
@@ -593,6 +571,108 @@ export function seedWorktreeSiblings(
     mkdirSync(join(destClaude, "scripts"), { recursive: true });
     cpSync(srcSiblingScripts, join(destClaude, "scripts"), { recursive: true });
   }
+}
+
+/**
+ * Everything startRun seeds into an ADOPTED worktree after validation: the
+ * artifact-scratch exclude, the java/maven .tool-versions entries, node_modules
+ * symlinks, the .claude/ commands + hooks + agents, the sibling commands/scripts
+ * and the node-run settings.json.
+ *
+ * The worktree already exists and may have been seeded by an earlier run (or hold
+ * its own node_modules/.claude), so every step must be IDEMPOTENT: re-applying it
+ * errors nowhere and changes nothing that was already seeded (the exclude block
+ * is marker-guarded, .tool-versions entries are only added when absent,
+ * node_modules links only where nothing is present, cpSync overwrites with the
+ * same payload, settings.json is rewritten for THIS run's runDir). Pinned by
+ * seed-run-worktree.test.ts. Fail-loud: a broken install (missing payload)
+ * throws.
+ */
+export function seedRunWorktree(opts: {
+  worktreePath: string;
+  runDir: string;
+  homeDir: string;
+  config: DagrunnerConfig;
+  dagrunnerRoot: string;
+}): void {
+  const { worktreePath, runDir, homeDir, config, dagrunnerRoot } = opts;
+
+  // Structural scratch backstop: seed the repo's .git/info/exclude so known
+  // artifact filenames can never be staged or committed even if a prompt
+  // accidentally writes to cwd instead of $DAGRUN_ARTIFACTS. Uses the common
+  // gitdir (not per-worktree) — see DECISIONS.md § worktree-exclude-location.
+  seedWorktreeExclude(worktreePath, worktreeArtifactPatterns());
+
+  // Seed java + maven into .tool-versions and mark skip-worktree so the
+  // implement node's pre-commit format hook resolves both tools without the
+  // node having to add them and accidentally committing them.
+  seedWorktreeToolVersions(worktreePath);
+
+  // Symlink node_modules from the main DEVHARNESS_SRC checkout into the
+  // worktree so the implement node can run frontend tests against the changed
+  // source without a separate npm install.
+  seedWorktreeNodeModules(worktreePath, config.DEVHARNESS_SRC);
+
+  // Seed the worktree's .claude/ with dagrunner's bundled commands + hooks + a
+  // node-run settings.json. Without this, a source repo with no .claude/commands/
+  // causes node commands to return immediately with cost=0 and no output —
+  // the SDK treats unknown slash commands as no-ops.
+  const destClaude = join(worktreePath, ".claude");
+  mkdirSync(join(destClaude, "commands"), { recursive: true });
+  mkdirSync(join(destClaude, "hooks"), { recursive: true });
+  mkdirSync(join(destClaude, "agents"), { recursive: true });
+  const srcCommands = join(dagrunnerRoot, "payload", "commands");
+  const srcHooks = join(dagrunnerRoot, ".claude", "hooks");
+  const srcAgents = join(dagrunnerRoot, "payload", "agents");
+  if (!existsSync(srcCommands)) {
+    throw new Error(
+      `dagrun: bundled commands not found at ${srcCommands} — package installation may be broken`,
+    );
+  }
+  if (!existsSync(srcHooks)) {
+    throw new Error(
+      `dagrun: bundled hooks not found at ${srcHooks} — package installation may be broken`,
+    );
+  }
+  if (!existsSync(srcAgents)) {
+    throw new Error(
+      `dagrun: bundled agents not found at ${srcAgents} — package installation may be broken`,
+    );
+  }
+  cpSync(srcCommands, join(destClaude, "commands"), { recursive: true });
+  cpSync(srcHooks, join(destClaude, "hooks"), { recursive: true });
+  cpSync(srcAgents, join(destClaude, "agents"), { recursive: true });
+
+  // Seed sibling commands + scripts (ci-babysit, pr-triage, seed-data) into the
+  // worktree. Also exports DAGRUNNER_ROOT so session-start.sh can re-apply siblings
+  // at every node session start (satisfying the env-propagation contract in CLAUDE.md).
+  // Must run AFTER pipeline commands so siblings land last and always win over
+  // any DEVHARNESS_SRC rsync that session-start.sh may have applied.
+  seedWorktreeSiblings(dagrunnerRoot, destClaude);
+
+  // Runtime settings.json: full permission model (Phase 2a D1).
+  // DISTINCT from the build-harness settings.json (bypassPermissions).
+  // buildSeededSettings is the single authoritative template (settings-seed.ts).
+  const seededSettings = buildSeededSettings({
+    runDir,
+    homeDir: homedir(),
+    tmpDir: tmpdir(),
+    passthrough: readSourcePassthrough(config.DEVHARNESS_SRC),
+    ...(config.claudeConfigDir !== undefined
+      ? { claudeConfigDir: config.claudeConfigDir }
+      : {}),
+    workProfileMcpServers: readWorkProfileMcpServers(
+      config.claudeConfigDir ?? join(homedir(), ".claude"),
+      worktreePath,
+    ),
+    devharnessSrc: config.DEVHARNESS_SRC,
+    dagrunnerHome: homeDir,
+  });
+  writeFileSync(
+    join(destClaude, "settings.json"),
+    JSON.stringify(seededSettings, null, 2),
+    "utf8",
+  );
 }
 
 /**
@@ -862,6 +942,13 @@ export async function startRun(opts: {
    * driver.log). Absent = allocate as usual.
    */
   runId?: string;
+  /**
+   * The existing git worktree this run ADOPTS (a linked worktree of
+   * DEVHARNESS_SRC, created by `wm add` / `git worktree add`). Required and
+   * explicit: the engine never falls back to cwd — the CLI resolves
+   * `--worktree` (default: git toplevel of cwd) and passes it in.
+   */
+  worktreePath: string;
 }): Promise<void> {
   const { workflow, planPath, homeDir, config, force } = opts;
 
@@ -870,7 +957,6 @@ export async function startRun(opts: {
   const runId = opts.runId ?? makeRunId(planPath, join(homeDir, "runs"));
   const runDir = join(homeDir, "runs", runId);
   const stateFile = join(runDir, "state.json");
-  const worktreePath = join(homeDir, "worktrees", runId);
 
   // Defensive backstop: the run-count scheme ensures a unique ID is computed by
   // scanning existing dirs, but we assert loudly rather than silently clobber.
@@ -893,126 +979,47 @@ export async function startRun(opts: {
   activeRun.runDir = runDir;
   activeRun.homeDir = homeDir;
 
-  // Lock BEFORE creating the worktree (advisor: avoid stray worktrees on failure).
+  // Lock BEFORE any other side effect (a failed validation below releases it).
   if (force === true) releaseLock(homeDir);
   acquireLock(homeDir, runId);
 
   // Parse frontmatter from plan to extract base_branch, severity, issueUrl.
-  // Must happen before worktree creation (base_branch determines start-point).
+  // Must happen before adoption: base_branch is what the adopted branch must differ from.
   const planContent = readFileSync(planPath, "utf8");
   const frontmatter = parseFrontmatter(planContent);
   const baseBranch = frontmatter["base_branch"] ?? "main";
   const severity = frontmatter["severity"];
   const issueUrl = frontmatter["issue"];
 
-  // Validate base branch exists in DEVHARNESS_SRC before any side effects.
-  // Fail loud — a typo in base_branch would silently branch from HEAD.
+  // Adopt the worktree: linked worktree of DEVHARNESS_SRC, on a branch other than
+  // the base, clean tracked files, base branch resolves, no other live run on it.
+  // Fail loud, before any side effect other than the lock, and release the lock.
+  let adopted: AdoptedWorktree;
   try {
-    execSync(`git rev-parse --verify --quiet "${baseBranch}"`, {
-      cwd: config.DEVHARNESS_SRC,
-      stdio: "pipe",
+    adopted = validateAdoptedWorktree({
+      worktreePath: opts.worktreePath,
+      devharnessSrc: config.DEVHARNESS_SRC,
+      baseBranch,
+      homeDir,
     });
-  } catch {
+  } catch (err) {
     releaseLock(homeDir);
-    process.stderr.write(
-      `dagrun: base_branch "${baseBranch}" not found in DEVHARNESS_SRC — fetch it first\n`,
-    );
-    process.exit(1);
+    throw err;
   }
+  const { worktreePath, branch: branchName } = adopted;
 
   // Create run directory and copy plan.
   mkdirSync(join(runDir, "plan"), { recursive: true });
   cpSync(planPath, join(runDir, "plan", "plan.md"));
 
-  const branchName = makeBranchName(workflow.name, planPath);
-
-  // Create git worktree from DEVHARNESS_SRC, branching from baseBranch start-point.
-  // For feature workflow baseBranch is always "main"; for bugfix it may be a release branch.
-  execSync(
-    `git worktree add "${worktreePath}" -b "${branchName}" "${baseBranch}"`,
-    {
-      cwd: config.DEVHARNESS_SRC,
-      stdio: "inherit",
-    },
-  );
-
-  // Structural scratch backstop: seed the repo's .git/info/exclude so known
-  // artifact filenames can never be staged or committed even if a prompt
-  // accidentally writes to cwd instead of $DAGRUN_ARTIFACTS. Uses the common
-  // gitdir (not per-worktree) — see DECISIONS.md § worktree-exclude-location.
-  seedWorktreeExclude(worktreePath, worktreeArtifactPatterns());
-
-  // Seed java + maven into .tool-versions and mark skip-worktree so the
-  // implement node's pre-commit format hook resolves both tools without the
-  // node having to add them and accidentally committing them.
-  seedWorktreeToolVersions(worktreePath);
-
-  // Symlink node_modules from the main DEVHARNESS_SRC checkout into the
-  // worktree so the implement node can run frontend tests against the changed
-  // source without a separate npm install.
-  seedWorktreeNodeModules(worktreePath, config.DEVHARNESS_SRC);
-
-  // Seed the worktree's .claude/ with dagrunner's bundled commands + hooks + a
-  // node-run settings.json. Without this, a source repo with no .claude/commands/
-  // causes node commands to return immediately with cost=0 and no output —
-  // the SDK treats unknown slash commands as no-ops.
-  const dagrunnerRoot = new URL("../../", import.meta.url).pathname;
-  const destClaude = join(worktreePath, ".claude");
-  mkdirSync(join(destClaude, "commands"), { recursive: true });
-  mkdirSync(join(destClaude, "hooks"), { recursive: true });
-  mkdirSync(join(destClaude, "agents"), { recursive: true });
-  const srcCommands = join(dagrunnerRoot, "payload", "commands");
-  const srcHooks = join(dagrunnerRoot, ".claude", "hooks");
-  const srcAgents = join(dagrunnerRoot, "payload", "agents");
-  if (!existsSync(srcCommands)) {
-    throw new Error(
-      `dagrun: bundled commands not found at ${srcCommands} — package installation may be broken`,
-    );
-  }
-  if (!existsSync(srcHooks)) {
-    throw new Error(
-      `dagrun: bundled hooks not found at ${srcHooks} — package installation may be broken`,
-    );
-  }
-  if (!existsSync(srcAgents)) {
-    throw new Error(
-      `dagrun: bundled agents not found at ${srcAgents} — package installation may be broken`,
-    );
-  }
-  cpSync(srcCommands, join(destClaude, "commands"), { recursive: true });
-  cpSync(srcHooks, join(destClaude, "hooks"), { recursive: true });
-  cpSync(srcAgents, join(destClaude, "agents"), { recursive: true });
-
-  // Seed sibling commands + scripts (ci-babysit, pr-triage, seed-data) into the
-  // worktree. Also exports DAGRUNNER_ROOT so session-start.sh can re-apply siblings
-  // at every node session start (satisfying the env-propagation contract in CLAUDE.md).
-  // Must run AFTER pipeline commands so siblings land last and always win over
-  // any DEVHARNESS_SRC rsync that session-start.sh may have applied.
-  seedWorktreeSiblings(dagrunnerRoot, destClaude);
-
-  // Runtime settings.json: full permission model (Phase 2a D1).
-  // DISTINCT from the build-harness settings.json (bypassPermissions).
-  // buildSeededSettings is the single authoritative template (settings-seed.ts).
-  const seededSettings = buildSeededSettings({
+  // Seed the adopted worktree (idempotent — see seedRunWorktree).
+  seedRunWorktree({
+    worktreePath,
     runDir,
-    homeDir: homedir(),
-    tmpDir: tmpdir(),
-    passthrough: readSourcePassthrough(config.DEVHARNESS_SRC),
-    ...(config.claudeConfigDir !== undefined
-      ? { claudeConfigDir: config.claudeConfigDir }
-      : {}),
-    workProfileMcpServers: readWorkProfileMcpServers(
-      config.claudeConfigDir ?? join(homedir(), ".claude"),
-      worktreePath,
-    ),
-    devharnessSrc: config.DEVHARNESS_SRC,
-    dagrunnerHome: homeDir,
+    homeDir,
+    config,
+    dagrunnerRoot: new URL("../../", import.meta.url).pathname,
   });
-  writeFileSync(
-    join(destClaude, "settings.json"),
-    JSON.stringify(seededSettings, null, 2),
-    "utf8",
-  );
 
   const state: RunState = {
     runId,
@@ -1022,6 +1029,7 @@ export async function startRun(opts: {
     status: "running",
     worktreePath,
     branch: branchName,
+    worktreeOrigin: "adopted",
     sourcePlanPath: planPath,
     ...(companionId !== undefined
       ? {
@@ -2272,10 +2280,15 @@ export async function rerunNode(opts: {
  * Create a scaffold run for a single DAG node in isolation.
  *
  * This lets a developer test one node without running the full pipeline:
- *   1. Creates a fresh run dir + git worktree seeded from a feature branch
+ *   1. Adopts an existing worktree (like startRun — never creates one) and
+ *      creates a fresh run dir for it
  *   2. Writes state.json with all transitive deps marked "done", target "pending"
  *   3. Optionally copies mock artifacts into dep dirs
  *   4. Prints the run ID and the `dagrun rerun` command to execute the node
+ *
+ * The scaffold run is written `paused`, which is non-terminal: it keeps the
+ * worktree claimed (a later `dagrun start` there is refused) until it is
+ * `dagrun abort`ed.
  *
  * Lock discipline: scaffoldRun does NOT acquire the run lock — like rerunNode,
  * it is a debug/developer tool. The node is run via `dagrun rerun` which also
@@ -2285,12 +2298,12 @@ export async function scaffoldRun(opts: {
   nodeId: string;
   homeDir: string;
   config: DagrunnerConfig;
-  /** Feature branch name to checkout from DEVHARNESS_SRC (creates a new scaffold branch starting there) */
-  branch: string;
+  /** The existing worktree to adopt (explicit; the CLI resolves --worktree / git toplevel of cwd). */
+  worktreePath: string;
   /** Optional dir whose contents are cpSync'd into runDir (structure: <mocksDir>/<depNodeId>/<file>) */
   mocksDir?: string;
 }): Promise<void> {
-  const { nodeId, homeDir, config, branch, mocksDir } = opts;
+  const { nodeId, homeDir, config, mocksDir } = opts;
 
   // Step 1: Load workflow and find the target node. Fail loud if not found.
   const workflow = featureWorkflow;
@@ -2304,38 +2317,21 @@ export async function scaffoldRun(opts: {
     process.exit(1);
   }
 
-  // Step 2: Validate branch exists in DEVHARNESS_SRC before any side effects.
-  try {
-    execSync(
-      `git -C "${config.DEVHARNESS_SRC}" rev-parse --verify --quiet "${branch}"`,
-      { stdio: "pipe" },
-    );
-  } catch {
-    process.stderr.write(
-      `dagrun scaffold: branch '${branch}' not found in DEVHARNESS_SRC — fetch it first\n`,
-    );
-    process.exit(1);
-  }
+  // Step 2: Adopt the worktree before any side effect. A scaffold has no plan,
+  // hence no base_branch frontmatter: the base is "main" (state.baseBranch absent).
+  const { worktreePath, branch: branchName } = validateAdoptedWorktree({
+    worktreePath: opts.worktreePath,
+    devharnessSrc: config.DEVHARNESS_SRC,
+    baseBranch: "main",
+    homeDir,
+  });
 
-  // Step 3: Generate run ID and paths. Capture timestamp ONCE so runId, branch
-  // name, and state.json all agree on the same timestamp.
-  const ts = Date.now();
-  const runId = `scaffold-${nodeId}-${ts}`;
-  const branchName = `scaffold/${nodeId}-${ts}`;
+  // Step 3: Generate run ID and paths.
+  const runId = `scaffold-${nodeId}-${Date.now()}`;
   const runDir = join(homeDir, "runs", runId);
-  const worktreePath = join(homeDir, "worktrees", runId);
 
   // Step 4: Create run dir.
   mkdirSync(runDir, { recursive: true });
-
-  // Step 5: Create worktree from the feature branch start-point.
-  execSync(
-    `git worktree add "${worktreePath}" -b "${branchName}" "${branch}"`,
-    {
-      cwd: config.DEVHARNESS_SRC,
-      stdio: "inherit",
-    },
-  );
 
   // Step 6: Seed .claude/ into the worktree (same pattern as rerunNode).
   const dagrunnerRoot = new URL("../../", import.meta.url).pathname;
@@ -2417,6 +2413,7 @@ export async function scaffoldRun(opts: {
     status: "paused",
     worktreePath,
     branch: branchName,
+    worktreeOrigin: "adopted",
     sourcePlanPath: "",
     nodes,
   };
@@ -2453,7 +2450,7 @@ export async function scaffoldRun(opts: {
 
   process.stdout.write(
     `dagrun: scaffold run created: ${runId}\n` +
-      `  Worktree: ${worktreePath}  (branch: ${branchName} from ${branch})\n` +
+      `  Worktree: ${worktreePath}  (adopted, branch: ${branchName})\n` +
       `  Artifacts dir: ${runDir}\n` +
       `\n` +
       `Dep mock locations (place files here before rerunning):\n` +

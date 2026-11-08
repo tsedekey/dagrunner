@@ -13,7 +13,10 @@
  *   ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN must be set in env.
  *
  * Advisory notes applied:
- *   1. cwd is always TOY_REPO_PATH so git worktree add operates on the toy repo.
+ *   1. cwd is always TOY_REPO_PATH (a MAIN checkout, so tsx resolves from the
+ *      project tree); the run adopts a linked worktree of it passed explicitly
+ *      with --worktree — dagrunner never creates the worktree (adopt.ts does,
+ *      with plain `git worktree add`).
  *   2. Auth guard is the first executable statement.
  *   3. toy-repo is provisioned at runtime (not committed); see .gitignore.
  */
@@ -29,6 +32,7 @@ import {
 } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { addLinkedWorktree } from "./adopt.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, "..", "..");
@@ -83,7 +87,7 @@ if (!existsSync(join(TOY_REPO_PATH, ".git"))) {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-/** Run the CLI via spawnSync with cwd=TOY_REPO_PATH so git worktree works. */
+/** Run the CLI via spawnSync with cwd=TOY_REPO_PATH (pass --worktree <linked worktree> to `start`). */
 function runCli(
   args: string[],
   env: Record<string, string | undefined>,
@@ -100,6 +104,7 @@ function runCli(
 const HOME = `/tmp/dagrun-smoke-${Date.now()}`;
 const HOME_ENV = { DAGRUNNER_HOME: HOME };
 let RUN_ID = "";
+let WORKTREE = "";
 
 // ---------------------------------------------------------------------------
 // Step 1 — dagrun init
@@ -109,6 +114,7 @@ let RUN_ID = "";
   const result = runCli(["init", "--home", HOME], {});
   assert.strictEqual(result.status, 0, `init failed: ${result.stderr}`);
   assert.ok(existsSync(join(HOME, "runs")), "runs dir must exist after init");
+  // worktrees/ is legacy-only (runs adopt an existing worktree) but init still creates it.
   assert.ok(
     existsSync(join(HOME, "worktrees")),
     "worktrees dir must exist after init",
@@ -129,8 +135,19 @@ let RUN_ID = "";
     "utf8",
   );
 
+  // The run ADOPTS a worktree created outside dagrunner (what `wm add` does).
+  WORKTREE = addLinkedWorktree(TOY_REPO_PATH, HOME, "live");
+
   const result = runCli(
-    ["start", "feature", "--plan", TOY_PLAN_PATH, "--no-companion"],
+    [
+      "start",
+      "feature",
+      "--plan",
+      TOY_PLAN_PATH,
+      "--worktree",
+      WORKTREE,
+      "--no-companion",
+    ],
     HOME_ENV,
     180_000, // 3 minutes for one real API call (define)
   );
@@ -153,6 +170,13 @@ let RUN_ID = "";
 
   RUN_ID = runs[0] as string;
   const runDir = join(HOME, "runs", RUN_ID);
+
+  // The run recorded the worktree it was handed (never created one).
+  const st2 = JSON.parse(
+    readFileSync(join(runDir, "state.json"), "utf8"),
+  ) as { worktreePath: string; worktreeOrigin?: string };
+  assert.strictEqual(st2.worktreePath, WORKTREE, "state.worktreePath is the adopted worktree");
+  assert.strictEqual(st2.worktreeOrigin, "adopted", "state.worktreeOrigin is adopted");
 
   // Confirm guide.md was produced by define.
   const guidePath = join(runDir, "define", "guide.md");

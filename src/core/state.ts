@@ -27,6 +27,14 @@ export type NodeStatus =
 
 export type RunStatus = "running" | "paused" | "done" | "failed" | "aborted";
 
+/**
+ * Run statuses that no longer hold their worktree. `failed` is deliberately NOT
+ * terminal: a failed run is still recoverable in the same worktree (`dagrun
+ * rerun`, `dagrun resume`), so it keeps blocking a second run from adopting that
+ * worktree until it is finished or `dagrun abort`ed.
+ */
+export const TERMINAL_RUN_STATUSES: readonly RunStatus[] = ["done", "aborted"];
+
 // ---------------------------------------------------------------------------
 // Gate history
 // ---------------------------------------------------------------------------
@@ -177,8 +185,17 @@ export type RunState = {
   createdAt: string;
   updatedAt: string;
   status: RunStatus;
+  /** Absolute, realpath-normalised path of the worktree this run's nodes execute in. */
   worktreePath: string;
+  /** Branch checked out in `worktreePath` when the run adopted it. */
   branch: string;
+  /**
+   * "adopted" = the run was started INSIDE a worktree someone else created (e.g.
+   * `wm add`); dagrunner never created it, so `dagrun cleanup` releases the run
+   * but leaves the worktree and branch alone. Absent = legacy: dagrunner created
+   * the worktree under `<home>/worktrees/<run-id>` and `cleanup` removes it.
+   */
+  worktreeOrigin?: "adopted";
   sourcePlanPath: string;
   /** Keyed by node id. */
   nodes: Record<string, NodeState>;

@@ -27,6 +27,9 @@
  *   Run J — resumeRun's resetInterruptedNodes path archives an interrupted
  *           node's partial artifacts before the retry re-executes, instead of
  *           silently overwriting them in place.
+ *   Run K — worktree adoption: startRun records the worktree it is handed and
+ *           never creates one; refuses a second live run on it, the main
+ *           checkout and a dirty worktree (lock released); re-adopts after abort.
  *
  * Note: mock gate-pause returns iteration:1, so a reject after the first pause writes
  * feedback-2.md (not feedback-1.md). This differs from the real SDK runner which
@@ -34,7 +37,7 @@
  */
 
 import assert from "node:assert";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -45,6 +48,7 @@ import {
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startRun } from "../../src/runtime/run-engine.js";
+import { addLinkedWorktree } from "./adopt.js";
 import { resumeRun } from "../../src/runtime/run-engine.js";
 import { rerunNode } from "../../src/runtime/run-engine.js";
 import { createMockExecutor } from "../../src/runtime/mock-executor.js";
@@ -64,8 +68,8 @@ const TOY_REPO_PATH = join(__dirname, "fixtures", "toy-repo");
 
 /**
  * Copy toy-plan.md into homeDir with a unique issue-number prefix so each
- * smoke run produces a distinct branch name (feat/<issueNum>-toy).
- * makeRunId and makeBranchName derive the issue number from the filename.
+ * smoke run produces a distinct run id (makeRunId derives the issue number from
+ * the filename). Each startRun adopts its own linked worktree (adopt.ts).
  */
 function makePlanPath(homeDir: string, issueNum: number): string {
   const dest = join(homeDir, `${issueNum}-toy-plan.md`);
@@ -159,7 +163,6 @@ const HOME_A = `/tmp/dagrun-smoke-mock-a-${BASE_TS}`;
 // acquireLock writes active.lock into homeDir — must exist before startRun.
 // startRun also calls readdirSync on runs/ — create it too.
 mkdirSync(join(HOME_A, "runs"), { recursive: true });
-mkdirSync(join(HOME_A, "worktrees"), { recursive: true });
 
 const PLAN_A = makePlanPath(HOME_A, BASE_TS);
 
@@ -172,6 +175,7 @@ await startRun({
   noCompanion: true, // legacy fresh-session gates; companion gates are covered by smoke-gates-feature.ts
   planPath: PLAN_A,
   homeDir: HOME_A,
+  worktreePath: addLinkedWorktree(TOY_REPO_PATH, HOME_A, "a"),
   config,
   executorFactory: mockFactory,
 });
@@ -357,7 +361,6 @@ console.log(
 
 const HOME_B = `/tmp/dagrun-smoke-mock-b-${BASE_TS + 1}`;
 mkdirSync(join(HOME_B, "runs"), { recursive: true });
-mkdirSync(join(HOME_B, "worktrees"), { recursive: true });
 const PLAN_B = makePlanPath(HOME_B, BASE_TS + 1);
 
 await startRun({
@@ -365,6 +368,7 @@ await startRun({
   noCompanion: true, // legacy fresh-session gates; companion gates are covered by smoke-gates.ts
   planPath: PLAN_B,
   homeDir: HOME_B,
+  worktreePath: addLinkedWorktree(TOY_REPO_PATH, HOME_B, "b"),
   config,
   executorFactory: bugfixMockFactory,
 });
@@ -451,7 +455,6 @@ console.log(
 
 const HOME_C = `/tmp/dagrun-smoke-mock-c-${BASE_TS + 2}`;
 mkdirSync(join(HOME_C, "runs"), { recursive: true });
-mkdirSync(join(HOME_C, "worktrees"), { recursive: true });
 const PLAN_C = makePlanPath(HOME_C, BASE_TS + 2);
 
 await startRun({
@@ -459,6 +462,7 @@ await startRun({
   noCompanion: true, // night-mode requires an explicit opt-out of companion gates
   planPath: PLAN_C,
   homeDir: HOME_C,
+  worktreePath: addLinkedWorktree(TOY_REPO_PATH, HOME_C, "c"),
   config,
   executorFactory: mockFactory,
   nightMode: true,
@@ -536,7 +540,6 @@ console.log(
 
 const HOME_D = `/tmp/dagrun-smoke-mock-d-${BASE_TS + 3}`;
 mkdirSync(join(HOME_D, "runs"), { recursive: true });
-mkdirSync(join(HOME_D, "worktrees"), { recursive: true });
 const PLAN_D = makePlanPath(HOME_D, BASE_TS + 3);
 
 const concernsFactory = (
@@ -559,6 +562,7 @@ await startRun({
   noCompanion: true, // night-mode requires an explicit opt-out of companion gates
   planPath: PLAN_D,
   homeDir: HOME_D,
+  worktreePath: addLinkedWorktree(TOY_REPO_PATH, HOME_D, "d"),
   config,
   executorFactory: concernsFactory,
   nightMode: true,
@@ -612,7 +616,6 @@ console.log(
 
 const HOME_E = `/tmp/dagrun-smoke-mock-e-${BASE_TS + 4}`;
 mkdirSync(join(HOME_E, "runs"), { recursive: true });
-mkdirSync(join(HOME_E, "worktrees"), { recursive: true });
 mkdirSync(join(HOME_E, "store"), { recursive: true });
 
 const STALE_RUN_ID = "old-plan-1700000000000-aaaaaa";
@@ -753,7 +756,6 @@ console.log(
 
 const HOME_F = `/tmp/dagrun-smoke-mock-f-${BASE_TS + 5}`;
 mkdirSync(join(HOME_F, "runs"), { recursive: true });
-mkdirSync(join(HOME_F, "worktrees"), { recursive: true });
 const PLAN_F = makePlanPath(HOME_F, BASE_TS + 5);
 
 const outcomeWorkflow: Workflow = {
@@ -832,6 +834,7 @@ await startRunCapturingExit({
   noCompanion: true,
   planPath: PLAN_F,
   homeDir: HOME_F,
+  worktreePath: addLinkedWorktree(TOY_REPO_PATH, HOME_F, "f"),
   config,
   executorFactory: outcomeFailFactory,
 });
@@ -887,7 +890,6 @@ console.log(
 
 const HOME_I = `/tmp/dagrun-smoke-mock-i-${BASE_TS + 8}`;
 mkdirSync(join(HOME_I, "runs"), { recursive: true });
-mkdirSync(join(HOME_I, "worktrees"), { recursive: true });
 const PLAN_I = makePlanPath(HOME_I, BASE_TS + 8);
 
 const reviewFailsFactory = (
@@ -910,6 +912,7 @@ await startRun({
   noCompanion: true,
   planPath: PLAN_I,
   homeDir: HOME_I,
+  worktreePath: addLinkedWorktree(TOY_REPO_PATH, HOME_I, "i"),
   config,
   executorFactory: reviewFailsFactory,
 });
@@ -993,7 +996,6 @@ console.log(
 
 const HOME_J = `/tmp/dagrun-smoke-mock-j-${BASE_TS + 8}`;
 mkdirSync(join(HOME_J, "runs"), { recursive: true });
-mkdirSync(join(HOME_J, "worktrees"), { recursive: true });
 mkdirSync(join(HOME_J, "store"), { recursive: true });
 
 const RUN_ID_J = "interrupt-test-1700000000000-bbbbbb";
@@ -1135,7 +1137,6 @@ console.log(
 
 const HOME_G = `/tmp/dagrun-smoke-mock-g-${BASE_TS + 6}`;
 mkdirSync(join(HOME_G, "runs"), { recursive: true });
-mkdirSync(join(HOME_G, "worktrees"), { recursive: true });
 const PLAN_G = makePlanPath(HOME_G, BASE_TS + 6);
 
 const placeholderFactory = (
@@ -1158,6 +1159,7 @@ await startRun({
   noCompanion: true, // legacy fresh-session gates; companion gates are covered by smoke-gates-feature.ts
   planPath: PLAN_G,
   homeDir: HOME_G,
+  worktreePath: addLinkedWorktree(TOY_REPO_PATH, HOME_G, "g"),
   config,
   executorFactory: placeholderFactory,
 });
@@ -1232,7 +1234,6 @@ console.log(
 
 const HOME_H = `/tmp/dagrun-smoke-mock-h-${BASE_TS + 7}`;
 mkdirSync(join(HOME_H, "runs"), { recursive: true });
-mkdirSync(join(HOME_H, "worktrees"), { recursive: true });
 const PLAN_H = makePlanPath(HOME_H, BASE_TS + 7);
 
 await startRunCapturingExit({
@@ -1240,6 +1241,7 @@ await startRunCapturingExit({
   noCompanion: true, // night-mode requires an explicit opt-out of companion gates
   planPath: PLAN_H,
   homeDir: HOME_H,
+  worktreePath: addLinkedWorktree(TOY_REPO_PATH, HOME_H, "h"),
   config,
   executorFactory: placeholderFactory,
   nightMode: true,
@@ -1292,6 +1294,118 @@ console.log(
 );
 
 // ---------------------------------------------------------------------------
+// RUN K — worktree ADOPTION lifecycle through the real startRun: the run records
+//          the worktree it was handed (never creates one), a second run on the
+//          same worktree is refused while the first is live (lock released, no
+//          stray run dir), the main checkout and a dirty worktree are refused,
+//          and once the first run is aborted the SAME worktree is adopted again
+//          (the whole seeding sequence applied twice without error).
+// ---------------------------------------------------------------------------
+
+const HOME_K = `/tmp/dagrun-smoke-mock-k-${BASE_TS + 9}`;
+mkdirSync(join(HOME_K, "runs"), { recursive: true });
+const PLAN_K = makePlanPath(HOME_K, BASE_TS + 9);
+// A throwaway repo, NOT the shared toy-repo: that fixture may track files under
+// .claude/ (older smoke:live runs committed some), which dagrunner's own seeding
+// then modifies — a worktree that read as dirty to the next adoption.
+const REPO_K = join(HOME_K, "repo");
+mkdirSync(REPO_K, { recursive: true });
+execFileSync("git", ["init", "-q", "-b", "main"], { cwd: REPO_K });
+writeFileSync(join(REPO_K, "README.md"), "# k\n");
+execFileSync("git", ["add", "README.md"], { cwd: REPO_K });
+execFileSync(
+  "git",
+  ["-c", "user.name=smoke", "-c", "user.email=smoke@example.com", "commit", "-q", "-m", "init"],
+  { cwd: REPO_K },
+);
+const configK: DagrunnerConfig = { DEVHARNESS_SRC: REPO_K };
+const WT_K = addLinkedWorktree(REPO_K, HOME_K, "k");
+const gitK = (cwd: string, ...args: string[]): string =>
+  execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" }).trim();
+const worktreeCountK = (): number =>
+  gitK(REPO_K, "worktree", "list", "--porcelain")
+    .split("\n")
+    .filter((l) => l.startsWith("worktree ")).length;
+const startK = (worktreePath: string) =>
+  startRun({
+    workflow: featureWorkflow,
+    noCompanion: true,
+    planPath: PLAN_K,
+    homeDir: HOME_K,
+    worktreePath,
+    config: configK,
+    executorFactory: mockFactory,
+  });
+const runDirsK = (): string[] =>
+  readdirSync(join(HOME_K, "runs")).filter((d) =>
+    existsSync(join(HOME_K, "runs", d, "state.json")),
+  );
+
+{
+  const before = worktreeCountK();
+  await startK(WT_K);
+  const [runK1] = runDirsK();
+  assert.ok(runK1 !== undefined, "K1: a run must exist");
+  const st = JSON.parse(
+    readFileSync(join(HOME_K, "runs", runK1, "state.json"), "utf8"),
+  ) as { worktreePath: string; branch: string; worktreeOrigin?: string; status: string };
+  assert.strictEqual(st.worktreePath, WT_K, "K1: state.worktreePath is the adopted worktree");
+  assert.strictEqual(st.worktreeOrigin, "adopted", "K1: worktreeOrigin = adopted");
+  assert.strictEqual(
+    st.branch,
+    gitK(WT_K, "symbolic-ref", "--short", "HEAD"),
+    "K1: state.branch is the branch checked out in the worktree",
+  );
+  assert.strictEqual(st.status, "paused", "K1: define gate-pause");
+  assert.strictEqual(worktreeCountK(), before, "K1: startRun created NO worktree");
+  assert.ok(!existsSync(join(HOME_K, "worktrees")), "K1: nothing under <home>/worktrees");
+  assert.ok(
+    existsSync(join(WT_K, ".claude", "settings.json")),
+    "K1: the adopted worktree was seeded",
+  );
+}
+
+// K2 — a second run on the SAME worktree while run 1 is live is refused.
+await assert.rejects(() => startK(WT_K), /already uses it/);
+assert.ok(!existsSync(join(HOME_K, "active.lock")), "K2: lock released after the refusal");
+assert.strictEqual(runDirsK().length, 1, "K2: the refused start created no run");
+
+// K3 — main checkout refused; dirty tracked file refused.
+await assert.rejects(() => startK(REPO_K), /main checkout/);
+assert.ok(!existsSync(join(HOME_K, "active.lock")), "K3: lock released after the main-checkout refusal");
+{
+  const dirtyWt = addLinkedWorktree(REPO_K, join(HOME_K, "dirty"), "kd");
+  writeFileSync(join(dirtyWt, "README.md"), "dirty\n");
+  await assert.rejects(() => startK(dirtyWt), /uncommitted changes to tracked files/);
+  assert.ok(!existsSync(join(HOME_K, "active.lock")), "K3: lock released after the dirty refusal");
+}
+assert.strictEqual(runDirsK().length, 1, "K3: refusals created no run");
+
+// K4 — abort run 1 → the same worktree is adopted again (seeding applied twice).
+{
+  const [runK1] = runDirsK();
+  const f = join(HOME_K, "runs", runK1 as string, "state.json");
+  const st = JSON.parse(readFileSync(f, "utf8")) as Record<string, unknown>;
+  writeFileSync(f, JSON.stringify({ ...st, status: "aborted" }, null, 2));
+  await startK(WT_K);
+  assert.strictEqual(runDirsK().length, 2, "K4: a second run now exists");
+  const dirs = runDirsK();
+  const second = JSON.parse(
+    readFileSync(join(HOME_K, "runs", dirs[1] as string, "state.json"), "utf8"),
+  ) as { worktreePath: string; status: string };
+  assert.strictEqual(second.worktreePath, WT_K, "K4: re-adopted the same worktree");
+  assert.strictEqual(second.status, "paused", "K4: second run reached its gate");
+  assert.strictEqual(
+    gitK(WT_K, "status", "--porcelain", "--untracked-files=no"),
+    "",
+    "K4: seeding twice left no tracked changes",
+  );
+}
+console.log(
+  "step K passed: startRun adopts (never creates) a worktree, refuses a second live run / the main checkout / a dirty worktree with the lock released, and re-adopts after abort",
+);
+
+// ---------------------------------------------------------------------------
 // Done
 // ---------------------------------------------------------------------------
 
@@ -1301,5 +1415,5 @@ console.log(
     "Run F: outcomeGate blocks the dependent on non-PASS, Run G: noPlaceholders blocks a manually-approved " +
     "gate, Run H: noPlaceholders blocks a night-mode auto-approved gate, Run I: rerunNode archives " +
     "the prior failed attempt before wiping, Run J: resumeRun archives an interrupted node's " +
-    "partial artifacts before the retry re-executes)",
+    "partial artifacts before the retry re-executes, Run K: worktree adoption lifecycle)",
 );

@@ -1,7 +1,7 @@
 /**
  * run-engine.test.ts — unit tests for pure exports only.
  *
- * Scope: pure exported helpers (makeRunId, makeBranchName, makePrTitlePrefix).
+ * Scope: pure exported helpers (makeRunId, makePrTitlePrefix).
  * NOT orchestration — startRun, resumeRun, runDag, and their collaborators are
  * Tier C and owned by smoke. This file tests only the extracted pure functions
  * that have no orchestration dependencies. See DECISIONS.md § unit-test-backfill-2b.
@@ -25,7 +25,6 @@ import { join } from "node:path";
 
 import {
   makeRunId,
-  makeBranchName,
   makePrTitlePrefix,
   findWorktreeScratch,
   worktreeArtifactPatterns,
@@ -110,41 +109,6 @@ test("makeRunId: skips entries that don't match {issueNum}-N pattern", () => {
   mkdirSync(join(runsDir, "53856-1"), { recursive: true });
   const result = makeRunId("/plans/53856-my-plan.md", runsDir);
   assert.equal(result, "53856-2");
-});
-
-// ---------------------------------------------------------------------------
-// makeBranchName
-// ---------------------------------------------------------------------------
-
-test("makeBranchName: standard feature plan → feat/{issueNum}-{slug}", () => {
-  const result = makeBranchName(
-    "feature",
-    "/plans/53856-single-job-priority-update-grpc-plan.md",
-  );
-  assert.equal(result, "feat/53856-single-job-priority-update-grpc");
-});
-
-test("makeBranchName: fix workflow → fix/{issueNum}-{slug}", () => {
-  const result = makeBranchName("fix", "/plans/12345-add-retry-logic-plan.md");
-  assert.equal(result, "fix/12345-add-retry-logic");
-});
-
-test("makeBranchName: no leading digits in filename — falls back gracefully (no issue prefix)", () => {
-  const result = makeBranchName(
-    "feature",
-    "/plans/single-job-priority-update-grpc-plan.md",
-  );
-  // No leading digits → issueNum is "0", slug is the full filename sans extension
-  assert.ok(result.startsWith("feat/"), `expected feat/ prefix: ${result}`);
-  assert.ok(
-    result.includes("single-job-priority-update-grpc"),
-    `expected slug in result: ${result}`,
-  );
-});
-
-test("makeBranchName: unknown workflow type falls back to feat/", () => {
-  const result = makeBranchName("unknown-type", "/plans/99-test-plan.md");
-  assert.ok(result.startsWith("feat/"), `expected feat/ prefix: ${result}`);
 });
 
 // ---------------------------------------------------------------------------
@@ -614,18 +578,6 @@ test("severityForcesPause: case-insensitive — 'CRITICAL' → true", () => {
 
 test("severityForcesPause: case-insensitive — 'BLOCKER' → true", () => {
   assert.equal(severityForcesPause("BLOCKER"), true);
-});
-
-// ---------------------------------------------------------------------------
-// makeBranchName: bugfix workflow
-// ---------------------------------------------------------------------------
-
-test("makeBranchName: bugfix workflow → fix/{issueNum}-{slug}", () => {
-  const result = makeBranchName(
-    "bugfix",
-    "/plans/12345-null-pointer-in-job-activation-fix-plan.md",
-  );
-  assert.equal(result, "fix/12345-null-pointer-in-job-activation");
 });
 
 test("makePrTitlePrefix: bugfix → 'fix:'", () => {

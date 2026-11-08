@@ -29,6 +29,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { startRun, resumeRun } from "../../src/runtime/run-engine.js";
+import { addLinkedWorktree } from "./adopt.js";
 import { createMockExecutor } from "../../src/runtime/mock-executor.js";
 import { bugfixWorkflow } from "../../src/workflow/bugfix-workflow.js";
 import { startUiServer } from "../../src/ui/server.js";
@@ -69,7 +70,6 @@ const bugfixMockFactory = () =>
 const BASE_TS = Date.now();
 const HOME = `/tmp/dagrun-smoke-ui-${BASE_TS}`;
 mkdirSync(join(HOME, "runs"), { recursive: true });
-mkdirSync(join(HOME, "worktrees"), { recursive: true });
 
 function readState(runDir: string): RunState {
   return JSON.parse(
@@ -87,6 +87,7 @@ await startRun({
   noCompanion: true,
   planPath: PLAN_1,
   homeDir: HOME,
+  worktreePath: addLinkedWorktree(TOY_REPO_PATH, HOME, "ui1"),
   config,
   executorFactory: bugfixMockFactory,
 });
@@ -110,6 +111,7 @@ await startRun({
   noCompanion: true,
   planPath: PLAN_2,
   homeDir: HOME,
+  worktreePath: addLinkedWorktree(TOY_REPO_PATH, HOME, "ui2"),
   config,
   executorFactory: bugfixMockFactory,
 });
