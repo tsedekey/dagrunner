@@ -32,11 +32,12 @@ stop. The answer is almost always a native Claude Code mechanism.
 
 ## Home layout (XDG, crev-derived)
 
-- State/artifacts/inbox/store: `~/.local/share/dagrunner/` (override via `DAGRUNNER_HOME`). Worktrees are
-  not created here any more: a run adopts the worktree it is started in (workmux creates it; run from
-  inside it or pass `--worktree`). Only runs made before v0.1.80 keep theirs under `worktrees/`.
+- State/artifacts/inbox/store: `~/.local/share/camunda/dagrunner/` (override via `DAGRUNNER_HOME`; moved
+  there from `~/.local/share/dagrunner/` in v0.1.85 with `scripts/move-home.mjs`). Worktrees are not
+  created here any more: a run adopts the worktree it is started in (workmux creates it; run from inside
+  it or pass `--worktree`).
 - Cache: `~/.cache/dagrunner/`. Binary: `~/.local/bin/dagrun`.
-- Machine config: `~/.local/share/dagrunner/config.json`. `DEVHARNESS_SRC` is mandatory-explicit.
+- Machine config: `~/.local/share/camunda/dagrunner/config.json`. `DEVHARNESS_SRC` is mandatory-explicit.
 - Secrets live in env / keychain only — never written to the run tree, never logged.
 
 ## Engineering discipline
