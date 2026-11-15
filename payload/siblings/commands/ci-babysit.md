@@ -100,6 +100,19 @@ Rebase occurs FIRST, before any check fixing, so fixes apply against the current
 rebase exits non-zero, STOP immediately and surface the conflict — do not guess at semantic
 conflicts. Push with `--force-with-lease` after a clean rebase.
 
+**Write lock.** Phases 3 to 4d change the branch, and pr-triage can push an approved fix to the same checkout. Unless this
+tick is a no-op, take the worktree write lock before the rebase:
+
+```bash
+zsh "$HOME/.claude/skills/_shared/git-lock.sh" acquire ci-babysit
+```
+
+Exit 3 means another writer (pr-triage) is changing this branch now: do NOT rebase, fix or push this tick. Say who holds it and
+stop. Renew the lock at the end of Phase 3, Phase 4b and Phase 4c (`zsh "$HOME/.claude/skills/_shared/git-lock.sh" renew ci-babysit`) so a long local build never
+lets it lapse. Release it in Phase 6, and on every other way out: the rebase conflict below (the script exits 1 and deletes its
+state, but you still release the lock), a stop in Phase 4b because the fix implies a design change, a failed 4c check or 4d push,
+or the human stopping you.
+
 ```bash
 SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scripts/ci-babysit"
 zsh "$SCRIPT_DIR/phase-3-rebase.sh" "$ARGUMENTS"
@@ -131,7 +144,7 @@ zsh "$SCRIPT_DIR/phase-4a-collect-logs.sh" "$ARGUMENTS"
 
 ## Phase 4b — Diagnose and fix failing checks
 
-Read the failure logs collected above. For each failing check:
+Read the failure logs collected above. Before diagnosing, read this workspace's lessons (`~/.claude/skills/_shared/lessons.sh read ci-babysit --titles`, then the relevant entries with `--match <term>`) as hypotheses to check. For each failing check:
 
 1. Determine the root cause from the log output. Common categories:
    - **Format/lint** (`spotless`, `prettier`, `eslint`, `checkstyle`): apply automatic formatting.
@@ -146,7 +159,7 @@ Read the failure logs collected above. For each failing check:
 
 2. **STOP if the fix implies a feature or design change.** If the failure reveals an
    unimplemented requirement, a broken API contract, or behavior that needs a design decision,
-   surface it to the human with the exact log lines and stop. Do NOT silently rework the feature.
+   surface it to the human with the exact log lines, release the write lock and stop. Do NOT silently rework the feature.
 
 3. **Scope all fixes to making CI green.** Do not introduce refactors, renames, or cleanups
    beyond what the check requires.
@@ -227,6 +240,12 @@ SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/scri
 zsh "$SCRIPT_DIR/phase-6-persist.sh" "$ARGUMENTS"
 ```
 
+Then release the write lock (a no-op tick never took it, so there is nothing to release):
+
+```bash
+zsh "$HOME/.claude/skills/_shared/git-lock.sh" release ci-babysit
+```
+
 ---
 
 ## Scheduling
@@ -274,20 +293,16 @@ Each tick is independent and idempotent:
 
 ---
 
-## Learnings
+## Lessons
 
-If this tick encountered anything unexpected that is not already captured in prior reflections,
-append one JSON line to `$DAGRUNNER_HOME/store/reflection-log.jsonl` (default `~/.local/share/camunda/dagrunner`):
+Follow the [lessons protocol](~/.claude/skills/_shared/lessons-protocol.md). **Workspace:** `ci-babysit`. **Written when:** the end of a tick that hit something new, such as a `gh` field mismatch, a tool-version surprise or an environment assumption that proved wrong. Routine failures (format check, test failure, rebase conflict) are not lessons.
 
-```json
-{
-  "ts": "<ISO-8601-UTC>",
-  "source": "ci-babysit",
-  "run_id": "<run_id>",
-  "body": "## YYYY-MM-DD\n\n**Symptom:** ...\n**Root cause:** ...\n**Resolution:** ...\n**Watch for:** ..."
-}
+```bash
+~/.claude/skills/_shared/lessons.sh append ci-babysit --case "PR #<pr_number> (<branch>)" --title "<short, searchable>" --tags gh,ci <<'EOF'
+**Applicability:** ...
+**Observed:** ...
+**Provenance:** ...
+EOF
 ```
 
-Only log if it adds knowledge that would prevent wasted time on a future run. Routine failures
-(format check, test failure, rebase conflict) do not need an entry. Novel `gh` field mismatches,
-tool-version surprises, or environment assumptions that proved wrong are the right candidates.
+Check it is new first (`lessons.sh read ci-babysit --match "<term>"`). In the closing message list the titles written and ask which, if any, Eddie wants to promote; promotion stays a separate, reviewed step.

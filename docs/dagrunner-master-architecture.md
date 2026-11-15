@@ -868,6 +868,8 @@ as long as a PR exists for it. `RUN_ID` falls back to the sanitized current bran
 (`/` → `-`) when `DAGRUN_RUN_ID` is unset, so sequential runs on different branches out of the
 same checkout don't collide on one state directory.
 
+**Write lock (v0.1.88).** ci-babysit takes the per-worktree write lock before it rebases, fixes or pushes (`~/.claude/skills/_shared/git-lock.sh`, a directory in the worktree's git dir, shared with pr-triage), renews it at phase boundaries, and releases it in phase 6 and on every stop. A tick that is a no-op never takes it. Its lessons go to its own workspace, `~/.local/share/camunda/ci-babysit/lessons.md`, not into the reflection log.
+
 ### 10.3 pr-triage — left dagrunner in v0.1.87
 
 pr-triage is no longer a dagrunner sibling: dagrunner does not seed it into worktrees any more
