@@ -579,7 +579,7 @@ function scanWorktreeForLeaks(
 
 /**
  * Seed the worktree's .claude/ with dagrunner-owned sibling commands and scripts
- * (ci-babysit, seed-data, manual-smoke, backport-resolve). These are seeded AFTER the pipeline commands
+ * (ci-babysit, seed-data, manual-smoke). These are seeded AFTER the pipeline commands
  * so that session-start.sh's DEVHARNESS_SRC sync can be overridden by this call.
  *
  * Also exports DAGRUNNER_ROOT into process.env so session-start.sh can re-apply
@@ -695,7 +695,7 @@ export function seedRunWorktree(opts: {
   cpSync(srcHooks, join(destClaude, "hooks"), { recursive: true });
   cpSync(srcAgents, join(destClaude, "agents"), { recursive: true });
 
-  // Seed sibling commands + scripts (ci-babysit, seed-data, manual-smoke, backport-resolve) into the
+  // Seed sibling commands + scripts (ci-babysit, seed-data, manual-smoke) into the
   // worktree. Also exports DAGRUNNER_ROOT so session-start.sh can re-apply siblings
   // at every node session start (satisfying the env-propagation contract in CLAUDE.md).
   // Must run AFTER pipeline commands so siblings land last and always win over
