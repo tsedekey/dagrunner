@@ -13,8 +13,8 @@ guide — through a fixed, gated pipeline (`implement → review → fix → pr`
 first), pausing at the fix gate and the pre-PR gate and checkpointing to disk so it survives
 process exit. Each node is a Claude Code session spawned via the Agent SDK in
 the git worktree the run was started in (`dagrun start` adopts an existing worktree — it never
-creates one; see the master doc §4 "Worktree adoption"). Three human-driven sibling commands (`ci-babysit`, `pr-triage`,
-`/seed-data`) run outside the pipeline against a live PR/cluster.
+creates one; see the master doc §4 "Worktree adoption"). Human-driven sibling commands (`ci-babysit`, `/seed-data`, `/manual-smoke`) run outside the pipeline against a
+live PR/cluster. (`pr-triage` was one until v0.1.87; it is now a user-level skill, `~/.claude/skills/pr-triage`.)
 
 ## Repo layout
 

@@ -1,6 +1,7 @@
 /**
  * siblings-run-id.test.ts — every phase script of the run-scoped sibling
- * commands (pr-triage, ci-babysit) must resolve the run id exactly like phase 0:
+ * commands (ci-babysit; pr-triage left dagrunner in v0.1.87 and keeps its own checks in
+ * ~/.claude/skills/pr-triage/tests/) must resolve the run id exactly like phase 0:
  * `--run-id <id>` argument > $DAGRUN_RUN_ID > sanitized branch name.
  *
  * Bug: only phase-0 parsed `--run-id`; phases 1+ used the branch-derived id, so
@@ -52,7 +53,7 @@ function resolvedArtifactsDir(sibling: string, phase: string, args: string[], en
   return m[1] as string;
 }
 
-for (const sibling of ["pr-triage", "ci-babysit"]) {
+for (const sibling of ["ci-babysit"]) {
   test(`${sibling}: every later phase honours --run-id (not the branch-derived id)`, { skip: !zshAvailable }, () => {
     const phases = laterPhases(sibling);
     assert.ok(phases.length > 0);

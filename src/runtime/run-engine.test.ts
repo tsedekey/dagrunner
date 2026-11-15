@@ -427,7 +427,6 @@ test("seedWorktreeSiblings: sibling .md files (including manual-smoke, D7) seede
 
   for (const name of [
     "ci-babysit.md",
-    "pr-triage.md",
     "seed-data.md",
     "manual-smoke.md",
   ]) {
@@ -444,7 +443,7 @@ test("seedWorktreeSiblings: sibling script subdirs (including manual-smoke, D7) 
 
   seedWorktreeSiblings(dagrunnerRoot, destClaude);
 
-  for (const name of ["ci-babysit", "pr-triage", "seed-data", "manual-smoke"]) {
+  for (const name of ["ci-babysit", "seed-data", "manual-smoke"]) {
     assert.ok(
       existsSync(join(destClaude, "scripts", name)),
       `expected sibling scripts/${name}/ to exist after seeding`,
@@ -452,17 +451,21 @@ test("seedWorktreeSiblings: sibling script subdirs (including manual-smoke, D7) 
   }
 });
 
-test("seedWorktreeSiblings: pr-triage scripts include gh-comment-capabilities.md (non-.sh file)", () => {
+test("seedWorktreeSiblings: script folders are copied recursively and not filtered by extension (a non-.sh file)", () => {
+  // pr-triage's gh-comment-capabilities.md used to prove this; pr-triage left dagrunner in v0.1.87, so the
+  // payload is a throwaway one here.
+  const root = mkdtempSync(join(tmpdir(), "dr-seed-root-"));
+  mkdirSync(join(root, "payload", "siblings", "commands"), { recursive: true });
+  mkdirSync(join(root, "payload", "siblings", "scripts", "demo"), { recursive: true });
+  writeFileSync(join(root, "payload", "siblings", "commands", "demo.md"), "demo\n");
+  writeFileSync(join(root, "payload", "siblings", "scripts", "demo", "notes.md"), "notes\n");
   const destClaude = mkdtempSync(join(tmpdir(), "dr-seed-sib-md-"));
-  mkdirSync(join(destClaude, "commands"), { recursive: true });
 
-  seedWorktreeSiblings(dagrunnerRoot, destClaude);
+  seedWorktreeSiblings(root, destClaude);
 
   assert.ok(
-    existsSync(
-      join(destClaude, "scripts", "pr-triage", "gh-comment-capabilities.md"),
-    ),
-    "expected gh-comment-capabilities.md to be included (recursive copy must not filter by extension)",
+    existsSync(join(destClaude, "scripts", "demo", "notes.md")),
+    "expected notes.md to be included (recursive copy must not filter by extension)",
   );
 });
 

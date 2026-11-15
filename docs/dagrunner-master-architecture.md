@@ -22,9 +22,9 @@ North star: **strip everything predictive out of the front of the pipeline; deci
 | --- | ---------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | **Glean Agent (Feature Task Companion)** | Glean                                                | Ingests a GitHub task and (together with the Copilot planning session that follows it) produces the approved plan — INTENT and the code-level HOW. The approved plan file is dagrunner's inbox input and the contract of the run; no node re-derives it. No GitHub issue needed. |
 | 2   | **dagrunner (static feature pipeline)**  | local machine                                        | The gated feature pipeline. The heart of the system.                                                                                                                                                                                                 |
-| 3   | **Three Phase-3 siblings**               | Camunda monorepo private `.claude/`, run in worktree | Interactive human-driven commands acting on Camunda: `/seed-data` (c8ctl seeding of a human-started OC), `ci-babysit`, `pr-triage`. See §9.                                                                                                          |
+| 3   | **Phase-3 siblings**                     | Camunda monorepo private `.claude/`, run in worktree | Interactive human-driven commands acting on Camunda: `/seed-data` (c8ctl seeding of a human-started OC), `ci-babysit`; `pr-triage` left in v0.1.87 (§10.3). See §9.                                                                                                          |
 
-Phase 3 is three LOCAL siblings (/seed-data + ci-babysit + pr-triage) — one substrate, enterprise subscription locally. `/pr-review` is NOT a dagrunner sibling: it stays a private standalone command for reviewing OTHERS' PRs (see §9). gh-aw and dynamic-workflows-in-pipeline are not used (see §9 rationale).
+Phase 3 is LOCAL siblings (/seed-data + ci-babysit; pr-triage was the third until v0.1.87, §10.3) — one substrate, enterprise subscription locally. `/pr-review` is NOT a dagrunner sibling: it stays a private standalone command for reviewing OTHERS' PRs (see §9). gh-aw and dynamic-workflows-in-pipeline are not used (see §9 rationale).
 
 **Plan authoring guidance (since v0.1.82 — the plan is the guide):** the plan is the contract `implement` works from; there is no define/reproduce node that elaborates or challenges it. So it must be implementable as written: the requirement, intent and acceptance criteria — including the source issue's prescribed solution path when one exists — plus, for a bug, the reported symptom, the root-cause hypothesis and the reproducing test or validation command, because `implement` must prove RED from them (§3e). When the plan turns out to be wrong, the run stops (an unprovable RED fails the run; a flagged `## Concerns / plan challenges` pauses `--night`) and the human goes back to the planning session for a revised plan — a new revision and a new run.
 
@@ -839,9 +839,9 @@ All four thresholds (`COLD_RELOAD_TAX_THRESHOLD`, `OUTPUT_HEAVY_SHARE_THRESHOLD`
 
 ---
 
-## 10. Phase 3 siblings — THREE interactive Claude Code commands
+## 10. Phase 3 siblings — interactive Claude Code commands
 
-All three: Claude Code commands in the **Camunda monorepo's private `.claude/`** (alongside `/pr-review`, gitignored via `.git/info/exclude`), **copied into each worktree by dagrunner's seed/sync** and RUN inside the worktree (where the built code, PR branch, and cluster live). Edit the canonical copy in DEVHARNESS_SRC; the worktree copy is ephemeral. Interactive, human-driven — they need Docker, host ports, `gh`, broad network, none of which the autonomous DAG's fire-and-forget nodes are a good fit for; that's why they're commands, not nodes. Run under CLAUDE_CONFIG_DIR=~/.claude-work. Built one at a time, in order.
+All of these (pr-triage no longer, §10.3): Claude Code commands in the **Camunda monorepo's private `.claude/`** (alongside `/pr-review`, gitignored via `.git/info/exclude`), **copied into each worktree by dagrunner's seed/sync** and RUN inside the worktree (where the built code, PR branch, and cluster live). Edit the canonical copy in DEVHARNESS_SRC; the worktree copy is ephemeral. Interactive, human-driven — they need Docker, host ports, `gh`, broad network, none of which the autonomous DAG's fire-and-forget nodes are a good fit for; that's why they're commands, not nodes. Run under CLAUDE_CONFIG_DIR=~/.claude-work. Built one at a time, in order.
 
 > DROPPED: the dedicated "/verify-demo environment creator" (DMS-based cluster + breakpoint placement). The **c8ctl dev plugin** spins up a configured local OC smoothly, making a separate cluster-creator command unnecessary. The **Debugger MCP Server (DMS)** is parked for a FUTURE bug-fix / issue-investigation workflow (where programmatic breakpoints aid an investigating agent) — it has no role in the feature-task workflow. **Since the verify-autonomy change (§3d), the pipeline's `verify` node no longer emits `seeding-spec.json`/`manual-test.md` at all** — that generation moved to the on-demand `/manual-smoke` sibling (§10.4). The code-trail the old `tour-spec.json` carried is folded into `manual-test.md`, and no automated breakpoint-placer consumes it.
 
@@ -858,7 +858,7 @@ Local: monitors CI on the open PR, rebases on base, fixes failing checks (scoped
 
 **Human gate (never auto):** the **draft -> ready flip** is ci-babysit's defining gate — when CI is green and re-verification passes, it surfaces the readiness summary and the `gh pr ready` command but NEVER flips the PR itself. Readiness is not latched: new commits/failures reopen the work and re-present the gate.
 
-**Poll/trigger machinery (built here, reused by pr-triage):** ci-babysit owns the Claude Code Desktop scheduled-task / poll loop and the crev-style `--since <prior-run-id>` incremental pattern (act only on new commits/failures since the last tick; checkpoint-and-exit per tick, state on disk). pr-triage (§9.3) imports this loop rather than building a second one.
+**Poll/trigger machinery (built here, reused by pr-triage):** ci-babysit owns the Claude Code Desktop scheduled-task / poll loop and the crev-style `--since <prior-run-id>` incremental pattern (act only on new commits/failures since the last tick; checkpoint-and-exit per tick, state on disk). pr-triage (§10.3) imported this loop rather than building a second one, until it left dagrunner (v0.1.87).
 
 Operates over the PR lifetime — in a dagrunner-managed worktree (`DAGRUN_RUN_ID` set) it must
 persist (don't `cleanup` until the PR is closed; for an adopted worktree that is workmux's `wm rm`). Neither sibling requires a dagrunner worktree,
@@ -868,43 +868,16 @@ as long as a PR exists for it. `RUN_ID` falls back to the sanitized current bran
 (`/` → `-`) when `DAGRUN_RUN_ID` is unset, so sequential runs on different branches out of the
 same checkout don't collide on one state directory.
 
-### 10.3 pr-triage (Sibling 3)
+### 10.3 pr-triage — left dagrunner in v0.1.87
 
-Local: polls the open PR for new review comments across **three gh API endpoints** — inline review
-comments (`pulls/{pr}/comments`), PR-level issue comments (`issues/{pr}/comments`), and review
-summaries (`pulls/{pr}/reviews`) — classifies each, drafts replies as artifacts in
-`pr-triage/drafts/`, and surfaces a **per-comment human approve/post gate**. **NEVER auto-posts.**
+pr-triage is no longer a dagrunner sibling: dagrunner does not seed it into worktrees any more
+(`payload/siblings/commands/pr-triage.md` and `scripts/pr-triage/` are gone). It is a user-level skill,
+`~/.claude/skills/pr-triage/` (symlinked into `~/.copilot/skills/`), usable from any agent, and started from the
+PR's own worktree window by the launcher (`launcher.py triage`, tmux prefix + N). Its behaviour is documented in
+that skill's `SKILL.md`; the reasons for the move are in `DECISIONS.md § sibling-pr-triage-leaves-dagrunner`.
 
-**Bot detection:** `user.type == "Bot"` is reliable and must be used as the primary signal.
-Login `[bot]` suffix is NOT reliable — Copilot inline surfaces as `"Copilot"` with no suffix
-but `user.type == "Bot"`. Never use the login suffix as the sole test.
-
-**Triage-state lifecycle per comment:** `seen → drafted → {posted | skipped | superseded}`.
-Edited comments re-enter as `superseded` — the prior draft is archived to `prior_draft_file`,
-not silently overwritten. This ensures the human always sees what changed.
-
-**Coexistence contract with ci-babysit:** ci-babysit owns all git mutations (rebase, fix, push).
-pr-triage owns the comment conversation only. pr-triage MUST NOT call `git push`, stage files,
-edit source files, or commit. The two commands share the same worktree but have strict domain
-separation enforced by convention.
-
-**Artifact path:** `~/.local/share/camunda/dagrunner/runs/<run-id>/pr-triage/` — drafts live in
-`pr-triage/drafts/<comment-id>.md`; triage ledger in `pr-triage/triage-state.json` (written by phase 5,
-read by phase 1) and the phase-0 identity record (`{run_id, pr_number, repo, ...}`) in the separate
-`pr-triage/pr-triage-state.json` — two files by design, not a mismatch. **Run-id contract (v0.1.73):**
-every phase script (pr-triage 1/2/5 and ci-babysit 1-6) resolves the run id exactly like phase 0 —
-`--run-id <id>` in the args string it is passed, else `$DAGRUN_RUN_ID`, else the sanitized branch name —
-so a non-dagrunner checkout run with `--run-id X` finds `runs/X/...`; the command docs pass
-`"$ARGUMENTS"` to every phase (they used to pass nothing after phase 0, so later phases silently fell
-back to the branch-derived id and failed with "State file not found").
-
-**Poll machinery:** reuses ci-babysit's scheduled-task / poll loop and `--since` incremental
-pattern (§9.2) — it does NOT build a second loop; per tick it ingests only new/edited comments
-since the last processed marker.
-
-gh-aw deliberately rejected (its async edge is cancelled by the human gate; safe-outputs
-governance redundant with never-auto-post; data-governance cost not worth it). Revisit only if
-this becomes team-scale, multi-repo, no-single-human-gate infra.
+What dagrunner still owes it: nothing, except that a branch triaged during a dagrunner run keeps its state under
+`runs/<run-id>/pr-triage/`, and the skill continues from it (it finds the run by branch).
 
 ### 10.4 manual-smoke (Sibling 4 — originally relocated out of the old verify node, §3d)
 
@@ -960,7 +933,7 @@ verify-autonomy-remove-election`; the verify node itself was later removed entir
 | **1**  | Engine + spine + thin slice + Gate 1; state/resume/worktrees/artifacts/hooks/launcher; `dagrun report` static HTML. (Built classify/expand/implement — classify-as-a-node since RETIRED; its logic moved into review's diff-triage.)                                                                                          | ✅ DONE & hardened | —           |
 | **2a** | (1) Preflight + runtime permission/sandbox/network model [FIRST]; (2) review node (diff-triage self-select + fan-out + finding-count-gated verifier -> findings schema); (3) fix node (gated, self-verifying). Built, fixture-passed, post-fixture restructure (classify removal etc.) applied.                               | ✅ DONE            | —           |
 | **2b** | verify-election + verify (doc-only; cluster automation REMOVED, see §9) + Gate 3; pr node (terminal); pure-capture reflection via dagrun reflect-append; rerun command; PR post-process outside sandbox.                                                                                                                      | ✅ DONE            | 2a complete |
-| **3**  | Three interactive siblings, in order: (1) /seed-data [c8ctl, assumes human-started OC], (2) ci-babysit, (3) pr-triage. All local, human-driven.                                                                                                                                                                               | ✅ DONE            | —           |
+| **3**  | Three interactive siblings, in order: (1) /seed-data [c8ctl, assumes human-started OC], (2) ci-babysit, (3) pr-triage (moved out in v0.1.87, §10.3). All local, human-driven.                                                                                                                                                                               | ✅ DONE            | —           |
 | **5**  | Bug fix workflow (`dagrun start bugfix`). New `reproduce` node (Gate 1: confirms bug is real, validates root cause — removed in v0.1.82, `implement` proves RED now, §3e); shorter pipeline — no verify node (regression test runs in implement/fix). `base_branch` from plan YAML frontmatter (hotfix branch support). Severity-aware night-mode (critical/blocker always pauses). | ✅ DONE            | —           |
 | **6**  | Live `dagrun ui` (Node-http + SSE + vanilla HTML, localhost-only, scrubbed)                                                                                                                                                                                                                                                   | shipped (§3g)      | —           |
 
@@ -975,7 +948,7 @@ Open items: confirm Agent SDK credit pool covers volume; some preflight checks (
 ## 12. Operating reminders
 
 - Every real-work `dagrun` runs with CLAUDE_CONFIG_DIR=~/.claude-work (alias `dagrun-work`); spawned sessions inherit config from the dagrun process. ANTHROPIC_API_KEY unset (subscription auth).
-- Siblings: canonical in Camunda private `.claude/`, edit in DEVHARNESS_SRC. ci-babysit/pr-triage
+- Siblings: canonical in Camunda private `.claude/`, edit in DEVHARNESS_SRC. ci-babysit (pr-triage until v0.1.87)
   run from any git checkout on any branch with a discoverable PR — not restricted to a
   dagrunner-managed worktree. When `DAGRUN_RUN_ID` IS set (dagrunner-managed worktree), persist
   the worktree until the PR is done (adopted worktrees are removed by their owner, not dagrunner).
@@ -983,5 +956,5 @@ Open items: confirm Agent SDK credit pool covers volume; some preflight checks (
 - Unattended pipeline runs: never auto-approve a gate **unless `--night` is active and no concern is flagged** (see §3 night-mode). The one-rule policy: agent-decidable gates (the fix gate and the pr gate) auto-approve when neither the gate's own artifact nor a done ancestor's (notably `implement/summary.md`) contains a "Concerns / plan challenges" heading. A clean night-mode run proceeds `fix` → `pr` fully unattended with no park anywhere (there is no verify election or hand-off step — §3d). Subagents never end a turn with a question.
 - Schema is single-source-of-truth, owned by dagrunner, never duplicated.
 - Each sibling plan front-loads a tool-introspection spike (c8ctl for /seed-data; the `gh` CI-status surface for ci-babysit; the `gh` review-comment surface for pr-triage) — verify the installed surface, don't assume from docs.
-- ci-babysit and pr-triage share a worktree but have hard domain separation: ci-babysit owns git mutations (rebase, fix, commit, push); pr-triage owns the comment conversation (never calls git push, never edits source files, never stages/commits).
+- ci-babysit and pr-triage share a worktree but have hard domain separation: ci-babysit owns git mutations (rebase, fix, commit, push); pr-triage (now the user-level skill, §10.3) owns the comment conversation; the one change it makes to the branch is an approved `needs-code-change` fix (edit, commit, push), taken under the worktree write lock.
 - pr-triage bot detection: use `user.type == "Bot"` — do NOT rely on `[bot]` login suffix (Copilot inline has type=Bot but login="Copilot" with no suffix).

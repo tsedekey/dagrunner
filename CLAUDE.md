@@ -69,7 +69,7 @@ within the same turn, via `TaskOutput`/`Monitor` — never treated as "come back
 
 ## Grill Me / sibling walkthrough sessions
 
-When walking through a sibling (seed-data, ci-babysit, pr-triage) step by step with the user,
+When walking through a sibling (seed-data, ci-babysit) step by step with the user,
 **always use the AskUserQuestion tool** for every question — never ask questions as plain prose.
 One question at a time, surfaced via the tool.
 
