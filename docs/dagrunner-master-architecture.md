@@ -868,6 +868,8 @@ as long as a PR exists for it. `RUN_ID` falls back to the sanitized current bran
 (`/` → `-`) when `DAGRUN_RUN_ID` is unset, so sequential runs on different branches out of the
 same checkout don't collide on one state directory.
 
+**Command frontmatter (v0.1.90).** Seeding copies `payload/` verbatim into every worktree, and Copilot CLI drops a command whose header is not strict YAML (Claude Code is lenient), so every command under `payload/commands` and `payload/siblings/commands` keeps a single-line `key: value` header, with any value that contains `: ` or starts with `[` double-quoted. `src/runtime/payload-frontmatter.test.ts` enforces it.
+
 **backport-resolve (v0.1.89)** left dagrunner as well: it is a user-level skill (`~/.claude/skills/backport-resolve`), started by the launcher's `backport` entry in one worktree per conflicting draft backport PR, and dagrunner no longer seeds it.
 
 **Write lock (v0.1.88).** ci-babysit takes the per-worktree write lock before it rebases, fixes or pushes (`~/.claude/skills/_shared/git-lock.sh`, a directory in the worktree's git dir, shared with pr-triage), renews it at phase boundaries, and releases it in phase 6 and on every stop. A tick that is a no-op never takes it. Its lessons go to its own workspace, `~/.local/share/camunda/ci-babysit/lessons.md`, not into the reflection log.

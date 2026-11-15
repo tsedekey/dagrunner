@@ -1,5 +1,5 @@
 ---
-description: Babysit CI on the PR (draft or open) — one incremental tick: poll checks, rebase, fix failures, surface ready gate
+description: "Babysit CI on the PR (draft or open) — one incremental tick: poll checks, rebase, fix failures, surface ready gate"
 argument-hint: (no args needed — PR, run-id, and repo auto-detected from current branch and git remote)
 ---
 
