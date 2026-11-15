@@ -14,7 +14,7 @@ runnable script + captured transcript, never a prose "I verified it works."
 | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | 1 — deterministic unit (no Claude)        | DAG topo/readiness, when-skip, join + optional-degradation, model/dependsOn/cycle validation, state.json I/O, reconcile-on-resume              | Pure TS via the **mock executor**; `node --test`; seconds; offline |
 | 2 — integration (real SDK, trivial nodes) | env-propagation, SessionStart sync, PostToolUse format, artifact passing, structured-output capture, checkpoint-and-exit + resume-same-session | Thin slice on a throwaway toy repo + one-line plan                 |
-| 3 — human acceptance                      | gate UX, conversation-led revise quality, the manual verify step                                                                               | Human drives `dagrun resume`                                       |
+| 3 — human acceptance                      | gate UX, conversation-led revise quality, hands-on manual testing                                                                              | Human drives `dagrun resume`                                       |
 
 ## The mock node executor (first-class v1 artifact — Block 3)
 
@@ -36,7 +36,7 @@ Use Node's built-in `node:test` + `node:assert`. NO test framework dependency. C
 
 1. topological order + readiness computation (deps terminal, none failed),
 2. `when` predicate skip + skip propagation downstream,
-3. join rule `none-failed-min-one-success` and `optional` degradation,
+3. `optional` degradation and the default every-dep-done join,
 4. load-time validation: bad model string, unknown dependsOn, duplicate id, cycle — each throws a
    specific, node-named error (assert the message),
 5. state.json read/write round-trip,
@@ -54,18 +54,28 @@ Use Node's built-in `node:test` + `node:assert`. NO test framework dependency. C
 
 ## smoke:mock — the per-plan gate (fast, free, deterministic)
 
+`npm run smoke:mock` now also runs `test/smoke/smoke-gates.ts` (companion gates end-to-end on the bugfix
+workflow: association, blocked/recovery, propose-vs-confirm, stale/duplicate/wrong-run, fix gate -> pre-PR gate,
+amend + invalidation, produces contract). It cannot prove real `claude --resume`
+re-entry — that stays a manual/harness check.
+
 `npm run smoke:mock` (`test/smoke/smoke-mock.ts`) drives the **full gated pipeline in-process** using
 the mock executor. Zero API calls. Runs in ~150 ms. Deterministic by construction.
 
-Two runs in one script:
+Runs in one script (see the header of `test/smoke/smoke-mock.ts` for the full list):
 
-- **Run A (election=n):** init → expand gate-pause → reject+feedback → approve Gate 1 → implement →
-  review → fix gate-pause → approve Gate 2 + election=n → verify skipped → pr → done.
-- **Run B (election=y):** same but election=y: verify gate-pause → approve Gate 3 → pr → done.
+- **Run A (feature) / Run B (bugfix):** init → implement (RED proven) → review → fix gate-pause
+  (the FIRST pause) → approve → pr → done. No define/reproduce/verify node exists.
+- **Runs C-K:** night-mode (incl. a concern raised by implement parking the fix gate), stale-gate
+  auto-skip (incl. legacy `define`/`verify` nodes left in an old run's state), outcomeGate
+  end-to-end (F, and F2: the shipped pipeline failing at implement when RED is not proven),
+  noPlaceholders (G/H, on a tiny custom gated workflow), rerun/interrupt artifact archiving,
+  worktree adoption.
 
 What it asserts: gate pauses, produces-contract met at every gate node, artifact channel (each
 produces file exists after its node), state transitions (awaiting-gate, paused, done), routing
-(verify skipped when election=n, runs when election=y), verifyElection in state.json.
+(fix → pr directly; no next-node decision is written; an unprovable RED fails implement and
+review/fix/pr never run).
 
 What it does NOT assert: model output quality (mock writes canned text), exact session IDs, JSON
 validity of findings.json (mock writes plain text there).
@@ -74,7 +84,7 @@ validity of findings.json (mock writes plain text there).
 
 ## smoke:live — the real-SDK integration test (occasional)
 
-`npm run smoke:live` (`test/smoke/smoke.ts`) drives the full 7-step pipeline with real Claude Code
+`npm run smoke:live` (`test/smoke/smoke.ts`) drives the full 6-step pipeline with real Claude Code
 sessions. Requires `ANTHROPIC_API_KEY` or claude.ai subscription. ~35 min, real tokens,
 non-deterministic on model output.
 
@@ -91,28 +101,28 @@ structured output, format hook fires, worktree diff exists.
 slip past the per-plan gate until the next `smoke:live`. The mitigation is the guideline above —
 prompt changes trigger a live run.
 
-## The 7-step smoke:live test (Block 9, now called smoke:live)
+## The 6-step smoke:live test (Block 9, now called smoke:live)
 
 A runnable script driving the real thin slice end to end with non-interactive flags, asserting each
 step, capturing a transcript.
 
 1. `dagrun init` → XDG home tree created (assert dirs exist).
-2. `dagrun start feature --plan toy-plan.md` → `expand` runs (Gate 1), checkpoints, process exits.
-3. `dagrun status` shows `expand: awaiting-gate`, a cost figure.
-4. `dagrun resume --reject "..."` → expand revises in the same session, feedback-1.md written,
+2. `dagrun start feature --plan toy-plan.md` → `implement` proves RED first (red.json confirmed,
+   red-evidence.md), `review` (findings.json, valid JSON with required keys), `fix` hits the fix
+   gate (the first pause), checkpoints, process exits.
+3. `dagrun status` shows `fix: awaiting-gate`, a cost figure.
+4. `dagrun resume --reject "..."` → fix revises in the same session, feedback-1.md written,
    re-pauses.
-5. `dagrun resume --approve` → Gate 1 approved → implement → review (findings.json, valid JSON with
-   required keys) → fix hits Gate 2, re-pauses.
-6. `dagrun resume --approve --verify n` → Gate 2 approved, election=n, verify skipped, pr done,
-   run is done (pr is terminal). Best-effort: check `store/reflection-log.jsonl` has entries.
-7. Synthetic reconcile test (no API call): inject a state with `interruptRetries: 99`, resume →
+5. `dagrun resume --approve` → fix gate approved → pr composes its body and pauses at the pre-PR
+   gate. Check `store/reflection-log.jsonl` has the seeded reflection (SessionEnd hook wiring).
+6. Synthetic reconcile test (no API call): inject a state with `interruptRetries: 99`, resume →
    retry cap hit → run stays failed, exit 1.
 
-Passing all seven = v1 real-SDK integration confirmed.
+Passing all six = v1 real-SDK integration confirmed.
 
 ## What is explicitly NOT tested in v1
 
-- Model output QUALITY (is the guide good?) — human judgment, not a CI assertion. Do not try.
+- Model output QUALITY (is the RED proof honest? is the plan followed?) — human judgment, not a CI assertion. Do not try.
 - Load / concurrency (one-run-at-a-time).
 - A live 6-way reviewer fan-out — those nodes are phase-2 config; validate the join logic with tier-1
   mock tests instead.

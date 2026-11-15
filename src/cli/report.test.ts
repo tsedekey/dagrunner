@@ -46,12 +46,12 @@ const FIXED_STATE: RunState = {
   branch: "feature/test-plan-1234567890",
   sourcePlanPath: "/path/to/test-plan.md",
   nodes: {
-    define: {
+    implement: {
       status: "done",
       startedAt: "2026-06-17T10:00:00.000Z",
       endedAt: "2026-06-17T10:30:00.000Z",
       artifacts: [
-        "/home/testuser/.local/share/dagrunner/runs/test-plan-1234567890/define/guide.md",
+        "/home/testuser/.local/share/dagrunner/runs/test-plan-1234567890/implement/summary.md",
       ],
       model: "sonnet",
       iteration: 1,
@@ -64,7 +64,7 @@ const FIXED_STATE: RunState = {
         },
       ],
     },
-    implement: {
+    fix: {
       status: "failed",
       startedAt: "2026-06-17T10:30:00.000Z",
       artifacts: [],
@@ -107,10 +107,10 @@ const FIXED_FRICTION = ["first friction line", "second friction line <&>"];
 // ---------------------------------------------------------------------------
 // Fixed burnByNode — Burn Monitor Deliverable 2 fixture, covering all four
 // render-degrade paths the brief requires:
-//   define    — clean BurnDocOk that fires BOTH a tier leak (declared
+//   implement    — clean BurnDocOk that fires BOTH a tier leak (declared
 //               "sonnet", opus tokens present) and cold-reload-tax
 //               (cacheColdRatio 95/110 > 0.5 threshold)
-//   implement — BurnDocOk with tierMix.unknown tokens only (no declared
+//   fix — BurnDocOk with tierMix.unknown tokens only (no declared
 //               model, no hotspots — demonstrates the "unclassified"
 //               render path in isolation)
 //   review    — BurnDocError (the D1 error-marker case)
@@ -137,9 +137,9 @@ const FIXED_FRICTION = ["first friction line", "second friction line <&>"];
 // ---------------------------------------------------------------------------
 
 const FIXED_BURN: Record<string, BurnDoc | undefined> = {
-  define: {
-    node: "define",
-    sessionId: "sess-define",
+  implement: {
+    node: "implement",
+    sessionId: "sess-implement",
     costUsd: 0.5,
     schemaVersion: 1,
     phase: "rollup",
@@ -176,9 +176,9 @@ const FIXED_BURN: Record<string, BurnDoc | undefined> = {
     },
     intraNode: null,
   },
-  implement: {
-    node: "implement",
-    sessionId: "sess-implement",
+  fix: {
+    node: "fix",
+    sessionId: "sess-fix",
     costUsd: 0.05,
     schemaVersion: 1,
     phase: "rollup",
@@ -458,7 +458,7 @@ test("generateReport: tierMix.unknown tokens are rendered visibly, not silently 
   const html = generateReport(FIXED_STATE, [], FIXED_BURN);
   assert.ok(
     html.includes("unclassified: 407 tokens"),
-    "implement's 407 unclassified tokens must be visible",
+    "fix's 407 unclassified tokens must be visible",
   );
 });
 
@@ -466,44 +466,44 @@ test("generateReport: hotspot badges render for a node whose flags fired (tier l
   const html = generateReport(FIXED_STATE, [], FIXED_BURN);
   assert.ok(
     html.includes("tier leak") && html.includes("declared sonnet"),
-    "define's tier-leak badge must render with the declared tier",
+    "implement's tier-leak badge must render with the declared tier",
   );
   assert.ok(
     html.includes("cold-reload tax"),
-    "define's cold-reload-tax badge must render",
+    "implement's cold-reload-tax badge must render",
   );
 });
 
 test("generateReport: per-model breakdown from models[] renders alongside the tier-mix aggregate", () => {
   const html = generateReport(FIXED_STATE, [], FIXED_BURN);
-  // define's two distinct models[] entries — this is the D1 empirical
+  // implement's two distinct models[] entries — this is the D1 empirical
   // motivation (opus-tier parent + sonnet-tier subagent fan-out) — must
   // both be individually visible, not just aggregated into tierMix.
   assert.ok(
     html.includes("claude-sonnet-5: 250 tok"),
-    "define's claude-sonnet-5 per-model line must render",
+    "implement's claude-sonnet-5 per-model line must render",
   );
   assert.ok(
     html.includes("claude-opus-4-8: 40 tok"),
-    "define's claude-opus-4-8 per-model line must render",
+    "implement's claude-opus-4-8 per-model line must render",
   );
   assert.ok(
     html.includes("claude-mystery-model: 407 tok"),
-    "implement's single-model breakdown must render",
+    "fix's single-model breakdown must render",
   );
 });
 
 test("generateReport: run-level Token Rollup section shows totals by bucket and by tier", () => {
   const html = generateReport(FIXED_STATE, [], FIXED_BURN);
   assert.ok(html.includes("Token Rollup"));
-  // cacheCreation total = 95 (define) + 2 (implement) + 374,853 (reviewers) = 374,950
+  // cacheCreation total = 95 (implement) + 2 (fix) + 374,853 (reviewers) = 374,950
   assert.ok(
     html.includes("374,950"),
     "rollup cache-creation total must appear",
   );
-  // cacheRead total = 15 (define) + 300 (implement) + 7,218,204 (reviewers) = 7,218,519
+  // cacheRead total = 15 (implement) + 300 (fix) + 7,218,204 (reviewers) = 7,218,519
   assert.ok(html.includes("7,218,519"), "rollup cache-read total must appear");
-  // output total = 60 (define) + 5 (implement) + 59,308 (reviewers) = 59,373
+  // output total = 60 (implement) + 5 (fix) + 59,308 (reviewers) = 59,373
   assert.ok(html.includes("59,373"), "rollup output total must appear");
 });
 
@@ -517,7 +517,7 @@ test("generateReport: Token Rollup section is omitted when no node has valid bur
 // ---------------------------------------------------------------------------
 
 /** Slices out ONLY the Intra-Node Attribution <section>...</section> block
- * — bounded at both ends, since "Node: <code>define</code>" also appears
+ * — bounded at both ends, since "Node: <code>implement</code>" also appears
  * (unrelated) inside the later Gate History section. */
 function intraNodeSectionOf(html: string): string {
   const start = html.indexOf("<h2>Intra-Node Attribution</h2>");
@@ -531,19 +531,19 @@ test("generateReport: a rollup-phase node (intraNode null) is entirely unaffecte
   const html = generateReport(FIXED_STATE, [], FIXED_BURN);
   const section = intraNodeSectionOf(html);
   assert.ok(
-    !/Node: <code>define<\/code>/.test(section),
-    "define (phase: rollup) must not get an Intra-Node Attribution block",
-  );
-  assert.ok(
     !/Node: <code>implement<\/code>/.test(section),
     "implement (phase: rollup) must not get an Intra-Node Attribution block",
+  );
+  assert.ok(
+    !/Node: <code>fix<\/code>/.test(section),
+    "fix (phase: rollup) must not get an Intra-Node Attribution block",
   );
 });
 
 test("generateReport: Intra-Node Attribution section omitted entirely when no node has phase: transcript", () => {
   const rollupOnly: Record<string, BurnDoc | undefined> = {
-    define: FIXED_BURN["define"],
     implement: FIXED_BURN["implement"],
+    fix: FIXED_BURN["fix"],
   };
   const html = generateReport(FIXED_STATE, [], rollupOnly);
   assert.ok(!html.includes("Intra-Node Attribution"));

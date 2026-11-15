@@ -1,7 +1,8 @@
 #!/bin/zsh
 set -euo pipefail
 
-REFLECTION_LOG="$HOME/.local/share/dagrunner/store/reflection-log.jsonl"
+DAGRUNNER_HOME="${DAGRUNNER_HOME:-$HOME/.local/share/camunda/dagrunner}"
+REFLECTION_LOG="$DAGRUNNER_HOME/store/reflection-log.jsonl"
 mkdir -p "$(dirname "$REFLECTION_LOG")"
 if [ -f "$REFLECTION_LOG" ]; then
   echo "=== Prior reflections (seed-data) ==="
@@ -30,7 +31,7 @@ SPEC_PATH="${SPEC_PATH/#\~/$HOME}"
 
 if [ -z "$SPEC_PATH" ]; then
   # Scan for most recent run with a verify-guide/seeding-spec.json
-  RUNS_DIR="${DAGRUNNER_HOME:-$HOME/.local/share/dagrunner}/runs"
+  RUNS_DIR="$DAGRUNNER_HOME/runs"
   if [ -d "$RUNS_DIR" ]; then
     SPEC_PATH=$(find "$RUNS_DIR" -maxdepth 3 -name "seeding-spec.json" -path "*/verify-guide/*" \
       | xargs ls -t 2>/dev/null | head -1 || true)
@@ -39,7 +40,7 @@ fi
 
 if [ -z "$SPEC_PATH" ] || [ ! -f "$SPEC_PATH" ]; then
   echo "ERROR: seeding-spec.json not found."
-  echo "Pass the path explicitly: /seed-data ~/.local/share/dagrunner/runs/<run-id>/verify-guide/seeding-spec.json"
+  echo "Pass the path explicitly: /seed-data $DAGRUNNER_HOME/runs/<run-id>/verify-guide/seeding-spec.json"
   echo "Or omit it — /seed-data will scan for the most recent run automatically."
   exit 1
 fi

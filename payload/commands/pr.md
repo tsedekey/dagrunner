@@ -6,86 +6,50 @@ produce the artifacts.
 
 ## Step 0 — Confirm output directory
 
-```bash
-mkdir -p "$DAGRUN_ARTIFACTS"
-```
+The block directly below gives the **literal absolute** `artifactsDir`, `runDir`,
+`worktree` and `runId` for this session. Wherever this document writes `<artifactsDir>`, `<runDir>`,
+`<worktree>` or `<runId>`, substitute those literal values — type the real path, never a shell
+variable: the sandbox rejects Bash commands that contain a variable expansion (`simple_expansion`),
+which cost earlier runs dozens of denied calls. Never print or discover environment variables
+(`echo`, `printenv`, `env`).
 
-The value of `$DAGRUN_ARTIFACTS` is the **only** directory you may write to.
-It ends with the node name (`pr/`), not `artifacts/`.
+`artifactsDir` (it ends with the node name, `pr/`) is the **only** directory you may write to — put
+`body.md` and `pr-meta.json` there, nowhere else: not the worktree, not a scratch dir (a
+`.dagrun-pr-output/` in the worktree is NOT picked up and fails the run). `runDir` is read-only in
+this session — never write there. Prefer the Write tool with the literal `artifactsDir` path; a
+heredoc redirect to that literal path also works (Step 2/3).
 
-**Do not try to print or discover the literal value of `$DAGRUN_ARTIFACTS`**
-(e.g. via `echo "$DAGRUN_ARTIFACTS"`, `printenv`, or `env`) — this sandbox's
-Bash tool blocks bare variable-expansion/introspection commands outright,
-before any approval prompt. Using the variable inline inside a real command
-(`mkdir -p "$DAGRUN_ARTIFACTS"`, or a heredoc redirect as in Step 2/3) works
-fine — the shell expands it as part of that command's own side effect. It is
-only _printing_ a variable's bare value that gets rejected. Because of this,
-write every artifact via heredoc (see Step 2/3), never via the Write tool —
-the Write tool needs a literal path string, and there is no reliable way to
-obtain one in this sandbox.
+Run environment (engine-provided):
 
-All output files go to `$DAGRUN_ARTIFACTS/`.
-`$DAGRUN_RUN_DIR` is read-only in this session — never write there.
+$ARGUMENTS
 
 ## Step 1 — Read all available artifacts
 
-**Do not try to print or discover the literal value of any `$DAGRUN_*` variable** (e.g. via `echo`,
-`printenv`, or `env`) — this sandbox's Bash tool blocks bare variable-expansion/introspection
-commands outright, before any approval prompt (same constraint as Step 0's `$DAGRUN_ARTIFACTS`
-note). Read each of these inputs via `cat` in Bash (not the Read tool, which needs a literal path
-you don't have) — a `$DAGRUN_*` variable used inline inside a real command like `cat` expands fine,
-it is only a bare print that gets rejected:
+Read each of these inputs from the literal `runDir` (Read tool, or `cat` of the literal path;
+substitute it for `<runDir>` below — see Step 0):
 
 ```bash
-cat "$DAGRUN_RUN_DIR/plan/plan.md" 2>/dev/null
-cat "$DAGRUN_RUN_DIR/define/guide.md" 2>/dev/null
-cat "$DAGRUN_RUN_DIR/reproduce/guide.md" 2>/dev/null
-cat "$DAGRUN_RUN_DIR/implement/summary.md" 2>/dev/null
-cat "$DAGRUN_RUN_DIR/review/findings.json" 2>/dev/null
-cat "$DAGRUN_RUN_DIR/fix/summary.md" 2>/dev/null
-cat "$DAGRUN_RUN_DIR/verify/verify-report.json" 2>/dev/null
-cat "$DAGRUN_RUN_DIR/verify/manual-test.md" 2>/dev/null
+cat "<runDir>/plan/plan.md" 2>/dev/null
+cat "<runDir>/implement/summary.md" 2>/dev/null
+cat "<runDir>/implement/red-evidence.md" 2>/dev/null
+cat "<runDir>/review/findings.json" 2>/dev/null
+cat "<runDir>/fix/summary.md" 2>/dev/null
 ```
 
-- Guide: use `define/guide.md` if it printed something; otherwise use `reproduce/guide.md` (bugfix workflow).
-- `verify/manual-test.md` is optional — absent is fine, skip it.
-- `verify/verify-report.json`'s `outcome` field matters for Step 2 below: if it is
-  `"DEFERRED_TO_CI"`, the PR body must carry a visible callout — see Step 2's "Deferred-to-CI
-  callout" note. If the file is absent (verify never ran on this workflow shape) or `outcome` is
-  anything else, no callout is needed.
+- The plan is the contract and the source of the PR's goal; `implement/red-evidence.md` is the proof that the test failed before the change and passes after it. There is no separate implementation guide.
 
 ## Step 2 — Compose the PR body
-
-**Deferred-to-CI callout (only if Step 1 found `verify/verify-report.json`'s `outcome` is
-`"DEFERRED_TO_CI"`):** insert a short, clearly-labeled callout block immediately after the
-`## Description` section, before `## Checklist` — a reviewer merging this PR needs to know verify
-did NOT independently confirm a green build, and why, before they trust the checklist below. This
-callout is explicitly exempt from the "no bullet lists"/plain-prose rule that governs the
-Description paragraph itself (they are separate sections with separate purposes) — name the
-specific unrelated trunk module/file/error from `stages.build.detail`, verbatim or close to it, not
-a vague "build issue":
-
-```markdown
-> **⚠️ Verify deferred to CI:** the independent build rerun hit a confirmed pre-existing,
-> diff-unrelated issue in `<module/file from stages.build.detail>` (`<one-line error summary>`) —
-> mechanically confirmed unchanged from the merge-base, unrelated to this PR. Acceptance-test
-> confirmation was deferred to CI as a result; verify did NOT independently confirm a green build
-> for this change.
-```
 
 Follow the Camunda PR template exactly:
 
 ```bash
-# $DAGRUN_ARTIFACTS expands inline here — never write to $DAGRUN_RUN_DIR
-cat > "$DAGRUN_ARTIFACTS/body.md" << 'BODY'
+# <artifactsDir> expands inline here — never write to <runDir>
+cat > "<artifactsDir>/body.md" << 'BODY'
 ## Description
 
 <2–4 sentences. What this PR does and why — goal and purpose only.
-Draw from guide.md and implement/summary.md. No bullet lists, no sub-headers,
-no review/fix recap. If verify ran, one sentence noting it was produced.>
-
-<Insert the Deferred-to-CI callout block here, verbatim, ONLY if outcome was "DEFERRED_TO_CI" per
-Step 1 — omit this line and the callout entirely otherwise.>
+Draw from plan.md and implement/summary.md. No bullet lists, no sub-headers,
+no review/fix recap.>
 
 ## Checklist
 
@@ -104,7 +68,7 @@ BODY
 
 ## Step 3 — Write metadata
 
-Use a heredoc (not the Write tool — see Step 0) to write `$DAGRUN_ARTIFACTS/pr-meta.json`:
+Write `pr-meta.json` into `artifactsDir` (Write tool with the literal path, or the heredoc below):
 
 The `title` field must follow [Conventional Commits](https://www.conventionalcommits.org/) format
 as required by the Camunda monorepo:
@@ -113,34 +77,30 @@ as required by the Camunda monorepo:
 <type>: <short description>
 ```
 
-- **type** — read `$DAGRUN_PR_TITLE_PREFIX` from the environment first. It is set by dagrunner
-  to the correct type prefix for this workflow (e.g. `feat:`). Use it verbatim. Only fall back to
-  deriving the type from `plan.md` and `implement/summary.md` if the env var is empty or absent.
+- **type** — dagrunner sets `DAGRUN_PR_TITLE_PREFIX` in your environment to the correct type prefix
+  for this workflow (e.g. `feat:`). Use it verbatim if you can read it; reading it needs a variable
+  expansion the sandbox may reject, in which case derive the type from `plan.md` and
+  `implement/summary.md` (a bugfix workflow is `fix:`, a feature workflow `feat:`).
 - **short description** — lowercase, imperative mood, no period, ≤60 chars after the prefix.
   Example: `feat: add retry logic to job activation` ✓ `feat: Added Retry Logic` ✗
 
-First, run this to get the branch name (a real command, not a bare variable print —
-this one is not blocked):
+First, run this to get the branch name:
 
 ```bash
-cd "$DAGRUN_WORKTREE" && git rev-parse --abbrev-ref HEAD
+cd "<worktree>" && git rev-parse --abbrev-ref HEAD
 ```
 
-Then write the heredoc yourself with that branch name and the other computed values
-(`title`, `verifyRan`, `createdAt`) substituted in as literal text. Leave
-`$DAGRUN_RUN_ID`/`$DAGRUN_WORKTREE`/`$DAGRUN_ARTIFACTS` as shell variables — the shell
-expands those safely as part of the heredoc's own redirect, you don't need to know
-their bare values:
+Then write the file with the branch name, the literal paths and the other computed values (`title`,
+`createdAt`) all substituted in as literal text (Write tool, or this heredoc):
 
 ```bash
-cat > "$DAGRUN_ARTIFACTS/pr-meta.json" << META
+cat > "<artifactsDir>/pr-meta.json" << 'META'
 {
-  "runId": "$DAGRUN_RUN_ID",
+  "runId": "<runId>",
   "branch": "<branch name from the command above — literal text, not a variable>",
-  "worktreePath": "$DAGRUN_WORKTREE",
-  "bodyPath": "$DAGRUN_ARTIFACTS/body.md",
+  "worktreePath": "<worktree>",
+  "bodyPath": "<artifactsDir>/body.md",
   "title": "<type>: <short description>",
-  "verifyRan": <true|false>,
   "createdAt": "<ISO timestamp>"
 }
 META
@@ -153,7 +113,7 @@ handles the fallback.
 Confirm both files exist:
 
 ```bash
-ls -la "$DAGRUN_ARTIFACTS/"
+ls -la "<artifactsDir>/"
 ```
 
 ## Step 4 — Backstop commit
@@ -161,16 +121,48 @@ ls -la "$DAGRUN_ARTIFACTS/"
 Check for uncommitted changes in the worktree:
 
 ```bash
-cd "$DAGRUN_WORKTREE"
+cd "<worktree>"
 git status --short
 ```
 
-If there are uncommitted changes, commit them using the same type prefix as the PR title:
+If there are uncommitted changes, commit **only the declared deliverables** — never
+`git add -A` / `git add .`. The worktree may hold unrelated dirty files (pre-existing
+`package.json`/lockfile drift, `node_modules` symlinks created by a build) that must not ship
+under the fix's authorship.
+
+Build the expected-path list from the upstream artifacts (`implement/deliverables.txt`, plus
+`fix/deliverables.txt` if the fix node wrote one):
 
 ```bash
-git add -A
-git commit -m "${DAGRUN_PR_TITLE_PREFIX:-feat} <short description> (dagrun: $DAGRUN_RUN_ID)"
+cd "<worktree>"
+cat "<runDir>/implement/deliverables.txt" "<runDir>/fix/deliverables.txt" 2>/dev/null \
+  | grep -v '^$' | sort -u > "<artifactsDir>/deliverables.txt"
 ```
+
+**If `deliverables.txt` is empty** (implement's step was skipped or predates this change): do not
+fall back to `-A`. Run `git status --short`, then state in your own reasoning, path by path, what
+you are about to add and why it belongs to the plan's change surface (`plan/plan.md`); exclude
+anything else. Write only those paths, one per line, to `<artifactsDir>/deliverables.txt`.
+
+Then stage exactly those paths, verify, and commit:
+
+```bash
+while IFS= read -r p; do [ -n "$p" ] && git add -- "$p"; done < "<artifactsDir>/deliverables.txt"
+
+# Safety net: refuse to commit if anything staged is not on the list
+unexpected=$(git diff --cached --name-only --no-renames | grep -vxF -f "<artifactsDir>/deliverables.txt")
+if [ -n "$unexpected" ]; then
+  echo "ERROR: staged paths not in deliverables.txt — refusing to commit:" >&2
+  echo "$unexpected" >&2
+  exit 1
+fi
+git commit -m "<type>: <short description> (dagrun: <runId>)"
+```
+
+If the safety net fires, stop and report the unexpected paths loudly in your final output; never
+commit a partial set silently and never add the paths to the list just to get past the check
+unless they are demonstrably part of the fix. Dirty files left out of the commit are expected —
+list them in your final output.
 
 Add a description (a second `-m`) only when it earns its place — it explains something the
 subject can't: non-obvious code, a workaround, or context a reviewer would otherwise be missing.
@@ -179,10 +171,33 @@ Co-Authored-By, no other trailers.
 
 Under normal flow `implement.md` commits first — this is a no-op if that happened.
 
-## Step 5 — Reflections (optional, do this last)
+## Step 5 — Suggest reviewers (report-only)
+
+Run exactly this one command, with the literal `runDir` from the run-environment block above (no
+variable, no pipe, no redirect):
+
+```bash
+dagrun reviewers --run-dir "<runDir>"
+```
+
+It reads the Core Features Alpha team roster, your committed diff and the review queues from GitHub,
+writes `reviewers.json` and `reviewers.md` into `artifactsDir` itself, and prints two suggestions —
+an **Expert** and a **Stretch** — each with a one-line reason and the real numbers behind it.
+
+- Put the **Expert** and **Stretch** lines it printed into your final output, verbatim. Do not
+  re-rank, re-word or add anyone.
+- **Report-only.** Never run `gh pr edit --add-reviewer`, `gh pr comment`, `gh api` writes or any
+  other command that posts to GitHub, and never put a reviewer name or `@handle` into `body.md` or
+  `pr-meta.json` — `body.md` is posted to GitHub verbatim.
+- If the command exits non-zero it has already recorded the failure in `reviewers.json`. State
+  `REVIEWER SUGGESTION FAILED: <the message it printed>` in your final output. Do **not** invent,
+  guess or look up reviewers another way, and do not retry with other commands. A failed suggestion
+  does not fail the PR — carry on to the next step.
+
+## Step 6 — Reflections (optional, do this last)
 
 After all artifacts are confirmed, write any tips about the PR process or code
-area to $DAGRUN_ARTIFACTS/reflections.md. The SessionEnd hook captures this
+area to <artifactsDir>/reflections.md. The SessionEnd hook captures this
 automatically. Absence is fine.
 
 ## Done

@@ -59,6 +59,14 @@ export type GateConfig = {
    * the run instead of halting. Used for post-PR gates that must never block shipping.
    */
   skippable?: boolean;
+  /**
+   * Gated ANCESTORS a companion amendment at this gate may send back for
+   * revision (the gate node itself is always allowed). Explicit per workflow
+   * because re-running an ancestor leaves its downstream worktree effects —
+   * only list a target whose revise path re-edits the existing worktree
+   * (e.g. bugfix pr → fix). Validated at load.
+   */
+  amendTargets?: string[];
 };
 
 // ---------------------------------------------------------------------------
@@ -78,12 +86,6 @@ export type LoopConfig = {
 };
 
 // ---------------------------------------------------------------------------
-// Join rule
-// ---------------------------------------------------------------------------
-
-export type JoinRule = "none-failed-min-one-success";
-
-// ---------------------------------------------------------------------------
 // Outcome gate — content-level pass/fail check on a produced JSON artifact
 // ---------------------------------------------------------------------------
 
@@ -95,7 +97,7 @@ export type JoinRule = "none-failed-min-one-success";
  * produces-contract violation — see dag.ts `checkOutcomeGate`).
  */
 export type OutcomeGateConfig = {
-  /** Artifact filename (relative to the node's artifact dir), e.g. "verify-report.json". */
+  /** Artifact filename (relative to the node's artifact dir), e.g. "findings.json". */
   file: string;
   /** Top-level JSON field to read, e.g. "outcome". */
   field: string;
@@ -142,7 +144,7 @@ export type Node = {
   /**
    * Filenames (relative to the node's artifact dir) to mechanically scan for
    * unresolved placeholder markers (`TBD`, `TODO`, `FIXME`, `XXX`, whole-word,
-   * case-sensitive) after fenced code blocks are stripped (a guide may
+   * case-sensitive) after fenced code blocks are stripped (a document may
    * legitimately quote an existing `// TODO` from the codebase it's
    * describing). Checked after the produces-existence and outcomeGate checks
    * pass; any match fails the node loud. See `checkNoPlaceholders` in dag.ts.
@@ -154,8 +156,6 @@ export type Node = {
   loop?: LoopConfig;
   /** When true, a failed run degrades this node to 'skipped' instead of 'failed'. */
   optional?: boolean;
-  /** How to proceed when joining from multiple parallel predecessors. */
-  joinRule?: JoinRule;
   /** Max infra/transient retries before marking the node failed. Default 2. */
   maxRetries?: number;
   /** Per-node spend ceiling in USD (for unpinned/Opus-eligible nodes). */
@@ -188,4 +188,11 @@ export type Workflow = {
   nodes: Node[];
   /** Max concurrent SDK sessions. Default 6. */
   maxParallel?: number;
+  /**
+   * When true, every gate returns to the originating planning companion
+   * (`dagrun gate show|decide`, see core/gate.ts) instead of spawning a fresh
+   * `claude` review session. `dagrun start` then requires an explicit
+   * `--companion-session <id>` or `--no-companion` — no silent default.
+   */
+  companionGates?: boolean;
 };

@@ -1,5 +1,5 @@
 ---
-description: Generate a human-readable manual verification guide (+ seeding spec, when a live cluster is actually needed) on demand from a completed (or past-Gate-1) dagrunner run's artifacts — the old read-only verify-guide behavior, relocated out of the autonomous pipeline. Analyzes what the diff actually touches to pick the right verification method (REST API, secondary-storage query, zdb, or an existing automated test) instead of assuming REST/Postman is always reachable. Gates nothing.
+description: Generate a human-readable manual verification guide (+ seeding spec, when a live cluster is actually needed) on demand from a completed (or gate-paused) dagrunner run's artifacts — the old read-only verify-guide behavior, relocated out of the autonomous pipeline. Analyzes what the diff actually touches to pick the right verification method (REST API, secondary-storage query, zdb, or an existing automated test) instead of assuming REST/Postman is always reachable. Gates nothing.
 argument-hint: [run-id]
 ---
 
@@ -9,12 +9,8 @@ argument-hint: [run-id]
 
 Produces a human-readable `manual-test.md` (plus `seeding-spec.json`, only when the chosen
 verification method actually needs a seeded cluster) from a run's existing artifacts (diff,
-`guide.md`, `summary.md`, review findings, OpenAPI grounding). `verify` is now a fully autonomous
-acceptance-test author/runner/judge/gate and no longer produces these human-facing documents (see
-`docs/dagrunner-master-architecture.md` §3 and DECISIONS.md § verify-autonomy-remove-election) —
-this sibling exists so a human can still get that value, on demand, for any run. **It is NOT part
-of the autonomous pipeline and gates nothing** — invoke it whenever you want a manual-smoke-test
-walkthrough for a run, regardless of that run's `verify` outcome.
+`plan.md`, `summary.md`, review findings, OpenAPI grounding). **It is NOT part of the autonomous
+pipeline and gates nothing** — invoke it whenever you want a manual-smoke-test walkthrough for a run.
 
 **Do not assume REST API + Postman is always the right verification surface.** Some diffs never
 touch the REST gateway or any secondary-storage export path at all (e.g. a change confined to a
@@ -33,7 +29,7 @@ script for run/worktree-resolution logic changes.
 
 ---
 
-## Phase 0 — Resolve the run, worktree, and guide
+## Phase 0 — Resolve the run, worktree, and plan
 
 ```bash
 SCRIPT_DIR="$(git rev-parse --show-toplevel)/.claude/scripts/manual-smoke"
@@ -43,9 +39,9 @@ zsh "$SCRIPT_DIR/phase-0-bootstrap.sh" "$ARGUMENTS"
 **PHASE_0_CHECKPOINT:**
 
 - [ ] `manual-smoke-state.json` written under the run's `manual-smoke/` artifact dir with
-      `run_id`, `run_dir`, `worktree`, `guide_path`, `artifacts`
+      `run_id`, `run_dir`, `worktree`, `plan_path`, `artifacts`
 - [ ] Read the printed `State:` path and use its `artifacts` value as your output directory for
-      the rest of this command, and its `worktree`/`run_dir`/`guide_path` values in place of
+      the rest of this command, and its `worktree`/`run_dir`/`plan_path` values in place of
       `$DAGRUN_WORKTREE`/`$DAGRUN_RUN_DIR` below
 
 ---
@@ -66,12 +62,12 @@ this is the analysis substrate for Step 2's method decision, not just background
 
 ```bash
 # 1. Artifacts from the run (check existence before reading)
-cat "<run_dir>/plan/plan.md" 2>/dev/null
-cat "<guide_path>" 2>/dev/null   # define/guide.md or reproduce/guide.md, per Phase 0
+cat "<plan_path>" 2>/dev/null   # <run_dir>/plan/plan.md — the plan is the guide
+cat "<run_dir>/implement/summary.md" 2>/dev/null
+cat "<run_dir>/implement/red-evidence.md" 2>/dev/null
 cat "<run_dir>/implement/reflections.md" 2>/dev/null
 cat "<run_dir>/review/findings.json" 2>/dev/null
 cat "<run_dir>/fix/summary.md" 2>/dev/null
-cat "<run_dir>/verify/verify-plan.md" 2>/dev/null    # optional — verify's own acceptance-test plan, if present
 
 # 2. Recent commits on this branch
 cd "<worktree>" && git log origin/main..HEAD --oneline
@@ -95,7 +91,7 @@ works. Ground every choice in evidence from Step 1's diff/artifacts, not assumpt
 Available methods:
 
 - **`rest-api`** — verify via the Camunda REST API surface (a Postman/curl call), grounded in the
-  OpenAPI spec. Applicable when the diff touches a REST controller/handler, or the guide/summary
+  OpenAPI spec. Applicable when the diff touches a REST controller/handler, or the plan/summary
   describes a REST-facing contract change.
 - **`secondary-storage`** — verify by querying the secondary-storage backend directly with a
   database client (Elasticsearch/OpenSearch index query, or a RDBMS SQL query — whichever backend
@@ -120,7 +116,7 @@ Procedure:
    ```
 2. For each candidate method above, look for concrete evidence in the diff and Step 1's artifacts
    (a REST controller annotation, an exporter/index-mapping/schema file, broker/engine/stream-
-   processor code, or the guide/summary's own description of the user-facing contract) — do not
+   processor code, or the plan/summary's own description of the user-facing contract) — do not
    guess module boundaries from memory of the Camunda repo; ground the decision in what Step 1
    actually surfaced.
 3. Multiple methods can apply together — e.g. `rest-api` + `secondary-storage` is the common combo
@@ -232,7 +228,7 @@ The human verifier will:
 Structure:
 
 ```markdown
-# Manual Verification Guide — <feature/fix name from plan.md or the guide>
+# Manual Verification Guide — <feature/fix name from plan.md>
 
 ## Feature summary
 
@@ -293,7 +289,7 @@ Leave this section empty if there is nothing to add.>
 ### If Step 2 chose `existing-test` (alone — no live cluster needed)
 
 ````markdown
-# Manual Verification Guide — <feature/fix name from plan.md or the guide>
+# Manual Verification Guide — <feature/fix name from plan.md>
 
 ## Feature summary
 
@@ -345,7 +341,7 @@ no existing suite was found to cover the change (see the Step 2 procedure's step
 ## Reflections
 
 If this run encountered anything unexpected, append one JSON line to
-`~/.local/share/dagrunner/store/reflection-log.jsonl`:
+`$DAGRUNNER_HOME/store/reflection-log.jsonl` (default `~/.local/share/camunda/dagrunner`):
 
 ```json
 {

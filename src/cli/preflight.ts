@@ -10,7 +10,7 @@
 
 import { execSync } from "node:child_process";
 import { existsSync, readdirSync, mkdirSync, writeFileSync } from "node:fs";
-import { join, basename, resolve as resolvePath, sep } from "node:path";
+import { join, basename } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import type { DagrunnerConfig } from "../config/xdg.js";
@@ -20,6 +20,7 @@ import {
   readWorkProfileMcpServers,
 } from "../config/settings-seed.js";
 import { readLock } from "../core/lock.js";
+import { isMainCheckout } from "../runtime/worktree.js";
 import type { VersionInfo } from "../config/version.js";
 
 const _require = createRequire(import.meta.url);
@@ -116,25 +117,23 @@ export function checkStaleLock(homeDir: string): string[] {
   ];
 }
 
-/** Check E: DEVHARNESS_SRC is not inside the dagrunner worktree root. */
-export function checkDevharnessNotInWorktreeRoot(
-  config: DagrunnerConfig,
-  homeDir: string,
+/**
+ * Check E: DEVHARNESS_SRC is the main checkout, not a linked worktree. Runs adopt
+ * linked worktrees of DEVHARNESS_SRC (worktree.ts requires the worktree's common
+ * git dir to equal DEVHARNESS_SRC's), so pointing DEVHARNESS_SRC itself at a
+ * linked worktree would make "the main checkout" ambiguous and break the
+ * base-branch/clean checks above. Not a git repo → [] (reported by the
+ * is-a-git-repo check; don't double-report).
+ */
+export function checkDevharnessIsMainCheckout(
+  config: Pick<DagrunnerConfig, "DEVHARNESS_SRC">,
 ): string[] {
-  const worktreeRoot = resolvePath(
-    config.worktreeRoot ?? join(homeDir, "worktrees"),
-  );
-  const devharness = resolvePath(config.DEVHARNESS_SRC);
-  if (
-    devharness === worktreeRoot ||
-    devharness.startsWith(worktreeRoot + sep)
-  ) {
-    return [
-      `DEVHARNESS_SRC "${config.DEVHARNESS_SRC}" points inside the dagrunner worktree root "${worktreeRoot}". ` +
-        `Set DEVHARNESS_SRC to your main checkout, not a managed worktree.`,
-    ];
-  }
-  return [];
+  const main = isMainCheckout(config.DEVHARNESS_SRC);
+  if (main !== false) return [];
+  return [
+    `DEVHARNESS_SRC "${config.DEVHARNESS_SRC}" is a linked worktree, not the main checkout. ` +
+      `Set DEVHARNESS_SRC to your main checkout; runs adopt worktrees of it.`,
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -217,15 +216,16 @@ export function runPreflight(
         );
       }
 
-      // E. DEVHARNESS_SRC must not be inside the dagrunner worktree root
-      failures.push(...checkDevharnessNotInWorktreeRoot(config, homeDir));
+      // E. DEVHARNESS_SRC must be the main checkout, not a linked worktree
+      failures.push(...checkDevharnessIsMainCheckout(config));
     }
   }
 
   // ------------------------------------------------------------------
   // 4. Dagrunner home exists and has required subdirs
   // ------------------------------------------------------------------
-  for (const sub of ["runs", "worktrees", "inbox", "store"]) {
+  // (worktrees/ is legacy-only: runs adopt existing worktrees, so it is no longer required.)
+  for (const sub of ["runs", "inbox", "store"]) {
     if (!existsSync(join(homeDir, sub))) {
       failures.push(
         `Dagrunner home missing "${sub}" directory: ${join(homeDir, sub)}. Run: dagrun init`,
@@ -643,9 +643,6 @@ export function formatAgentContext(
   }
   if (config.maxParallel !== undefined) {
     lines.push(`  Max parallel      ${config.maxParallel}`);
-  }
-  if (config.worktreeRoot !== undefined) {
-    lines.push(`  Worktree root     ${config.worktreeRoot}`);
   }
 
   lines.push(`\n🤖 Agent context  (dagrunner + DEVHARNESS_SRC)`);

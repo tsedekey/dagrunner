@@ -1,18 +1,22 @@
 /**
- * feature-workflow.ts — v1 thin-slice workflow definition.
+ * feature-workflow.ts — feature pipeline workflow definition.
  *
- * Phase 2a pipeline:
- *   define (Gate 1) -> implement -> review -> fix (Gate 2)
+ * Pipeline shape:
+ *   implement -> review -> fix (gate) -> pr (gate, pre-PR)
  *
- * Phase 2b (autonomous verify — see the verify-autonomy change, DECISIONS.md
- * § verify-autonomy-remove-election) adds: verify -> pr (terminal). verify is
- * a required, blocking, fully autonomous node — it authors and runs its own
- * @MultiDbTest acceptance test, independently reruns build+tests, and gates
- * pr via outcomeGate on verify-report.json's `outcome` field. No human
- * election, no manual-test gate — see payload/commands/verify.md.
+ * The plan is the guide (DECISIONS.md § plan-is-the-guide): the plan stage happens
+ * upstream in a planning session whose approved plan file is the run's input
+ * (<runDir>/plan/plan.md), so there is no define node and no gate before implement.
+ * `implement` proves RED first and fails the run loudly (outcomeGate on red.json)
+ * when it cannot.
  *
- * This is the ONLY workflow in v1. Additional workflows are config additions
- * on the proven engine.
+ * Parity with bugfix-workflow.ts (DECISIONS.md § feature-companion-gates-parity):
+ * every gate (fix, pr) returns to the originating planning companion via
+ * `dagrun gate show|decide` (`companionGates: true`). There is no verify node
+ * (removed — DECISIONS.md § verify-node-removed).
+ *
+ * This is one of two workflows in v1 (the other is bugfix-workflow.ts). Additional
+ * workflows are config additions on the proven engine.
  */
 
 import type { Workflow } from "../core/types.js";
@@ -105,22 +109,19 @@ export const FINDINGS_SCHEMA = {
 
 export const featureWorkflow: Workflow = {
   name: "feature",
+  // Every gate (fix, pr) returns to the originating planning companion
+  // via `dagrun gate show|decide` — see DECISIONS.md § companion-gates and
+  // § feature-companion-gates-parity.
+  companionGates: true,
   nodes: [
     {
-      id: "define",
-      command: "/define",
-      model: "opus",
-      produces: ["guide.md"],
-      noPlaceholders: ["guide.md"],
-      gate: { maxIterations: 10, onReject: "revise-self" },
-    },
-    {
       id: "implement",
-      dependsOn: ["define"],
       command: "/implement",
       model: "sonnet",
       effort: "medium",
-      produces: ["summary.md", "red-evidence.md"],
+      // See bugfix-workflow.ts: red.json is produced and outcome-gated.
+      produces: ["summary.md", "red-evidence.md", "red.json"],
+      outcomeGate: { file: "red.json", field: "red", passValues: ["confirmed"] },
       formatCommand: "./mvnw spotless:apply --no-transfer-progress",
     },
     {
@@ -137,70 +138,32 @@ export const featureWorkflow: Workflow = {
       model: "sonnet",
       effort: "medium",
       produces: ["summary.md"],
-      gate: { maxIterations: 8, onReject: "revise-self" },
+      gate: {
+        maxIterations: 8,
+        onReject: "revise-self",
+      },
       revisionInstruction:
         "Review the feedback below and revise the code changes in the worktree accordingly. " +
         "Then update {artifactsDir}/summary.md to reflect all changes made (which findings were addressed, what files changed, what was deferred).",
       formatCommand: "./mvnw spotless:apply --no-transfer-progress",
     },
-    // Autonomous acceptance-test author/runner/judge/gate — no human election,
-    // no Gate 3. Required and blocking: a non-PASS outcome fails this node via
-    // outcomeGate, which halts the run and blocks pr (same as a produces
-    // violation). See payload/commands/verify.md for the full flow (D2-D6 of
-    // the verify-autonomy change).
-    {
-      id: "verify",
-      dependsOn: ["fix"],
-      command: "/verify",
-      model: "sonnet",
-      // verify-plan.md is conditional, not unconditional — payload/commands/verify.md's
-      // legitimate short-circuit paths (Docker unreachable at Step 0; unrecoverable
-      // stall with no usable report, ERROR_INFRA) explicitly instruct "Do NOT write a
-      // verify-plan.md — no authoring work happened." Only verify-report.json is
-      // load-bearing here; it remains gated via outcomeGate below. See DECISIONS.md
-      // § verify-run-56962-1-forensics.
-      produces: ["verify-report.json"],
-      formatCommand: "./mvnw spotless:apply --no-transfer-progress",
-      // DEFERRED_TO_CI (verify-defer-to-ci-and-drop-diff-scoped-rerun change,
-      // 2026-07-14, see DECISIONS.md § verify-defer-to-ci-and-drop-diff-scoped-rerun,
-      // motivated by run 56954-1) is non-blocking, alongside PASS: it means
-      // verify confirmed Step 4's build broke on a pre-existing, diff-unrelated
-      // trunk issue (mechanically proven byte-identical against the merge-base)
-      // and deferred acceptance-test confirmation to CI, NOT that the build was
-      // skipped or the diff itself is broken. FAIL_BUILD/FAIL_TEST/FAIL_ASSERTION/
-      // ERROR_INFRA remain blocking — unchanged.
-      outcomeGate: {
-        file: "verify-report.json",
-        field: "outcome",
-        passValues: ["PASS", "DEFERRED_TO_CI"],
-      },
-    },
     {
       id: "pr",
-      dependsOn: ["fix", "verify"], // fix ensures worktree is ready; verify is required (non-optional) and gates pr
+      dependsOn: ["fix"],
       command: "/pr",
       model: "haiku",
       produces: ["body.md"],
-    },
-    // Terminal-adjacent, informational, read-only — same deps as pr so it runs
-    // in parallel with pr and adds no wall-clock time (see DECISIONS.md §
-    // digest-node). Synthesizes a bottom-up knowledge map of what was
-    // implemented (and why) from the already-written run artifacts, grounded
-    // in the diff/summaries/findings rather than the plan — so Eddie has full
-    // context before reviewing the PR or reading pr-triage's drafted replies.
-    // No gate (same read-only pattern as review); sonnet, not opus — this is
-    // synthesis of already-written artifacts, not adversarial judgment.
-    // optional: true — informational-only; a produces-contract violation here
-    // (e.g. an untested new prompt file hitting the $DAGRUN_* probe wall) must
-    // degrade to 'skipped', never fail a run whose PR already shipped via pr.
-    // See DECISIONS.md § digest-node.
-    {
-      id: "digest",
-      dependsOn: ["fix", "verify"],
-      command: "/digest",
-      model: "sonnet",
-      produces: ["knowledge-map.md"],
-      optional: true,
+      // Pre-PR gate: pr only COMPOSES the body/meta in-session; push + draft-PR
+      // creation happen in runPrPostProcess after this gate is approved, so the
+      // human decision genuinely precedes publication.
+      // Parity with bugfix-workflow.ts's pr gate — see DECISIONS.md §
+      // feature-companion-gates-parity: approving the fix gate no longer
+      // auto-publishes; this gate's approval does.
+      gate: {
+        maxIterations: 5,
+        onReject: "revise-self",
+        amendTargets: ["fix"],
+      },
     },
   ],
 };

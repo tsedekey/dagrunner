@@ -16,6 +16,7 @@
  */
 
 import type { Workflow } from "../core/types.js";
+import { ancestorsOf } from "../core/gate.js";
 
 // ---------------------------------------------------------------------------
 // loadWorkflow
@@ -145,6 +146,43 @@ export function loadWorkflow(def: Workflow): Workflow {
         `loadWorkflow: node "${node.id}" noPlaceholders must be a non-empty array of non-empty strings`,
       );
     }
+  }
+
+  // 4c2. gate.amendTargets must be gated ancestors of the gate node.
+  for (const node of def.nodes) {
+    const at: unknown = node.gate?.amendTargets;
+    if (at === undefined) continue;
+    if (!Array.isArray(at) || !at.every((t) => typeof t === "string")) {
+      throw new Error(
+        `loadWorkflow: node "${node.id}" gate.amendTargets must be an array of node ids`,
+      );
+    }
+    for (const t of at as string[]) {
+      const tn = def.nodes.find((n) => n.id === t);
+      if (tn === undefined || tn.gate === undefined) {
+        throw new Error(
+          `loadWorkflow: node "${node.id}" gate.amendTargets "${t}" must be a known gated node`,
+        );
+      }
+      if (!ancestorsOf(def, node.id).includes(t)) {
+        throw new Error(
+          `loadWorkflow: node "${node.id}" gate.amendTargets "${t}" is not an ancestor of "${node.id}"`,
+        );
+      }
+    }
+  }
+
+  // 4d. companionGates shape — typed at load.
+  const cg: unknown = def.companionGates;
+  if (cg !== undefined && typeof cg !== "boolean") {
+    throw new Error(
+      `loadWorkflow: companionGates must be a boolean or omitted (got ${typeof cg})`,
+    );
+  }
+  if (cg === true && !def.nodes.some((n) => n.gate !== undefined)) {
+    throw new Error(
+      `loadWorkflow: companionGates is true but no node declares a gate — nothing to return to a companion`,
+    );
   }
 
   // 5. Cycle detection via Kahn's algorithm
@@ -320,7 +358,7 @@ export const FIXTURE_BAD_NO_PLACEHOLDERS: Workflow = {
     {
       id: "step-a",
       command: "/step-a",
-      produces: ["guide.md"],
+      produces: ["doc.md"],
       noPlaceholders: [],
     },
   ],

@@ -8,3 +8,8 @@ Add a `GET /hello` endpoint to `toy-service/` (the single HTTP service in this r
 - `GET /hello` returns HTTP 200.
 - Response body is `{"message":"hello"}` (valid JSON, `Content-Type: application/json`).
 - A unit test covers the happy path.
+
+## Validation
+
+The toy service is plain Node (no build tool): write the test with Node's built-in test runner and
+run it with `node --test <test file>`.

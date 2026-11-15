@@ -1,11 +1,13 @@
 #!/bin/zsh
 # phase-0-bootstrap.sh — resolve which completed dagrunner run's artifacts to
-# read, locate its worktree, and figure out which guide (define vs reproduce)
-# it produced. Fails loud (never a silent fallback) when the run or its
-# worktree cannot be found — this command reads DONE-run artifacts only.
+# read, locate its worktree, and locate the run's plan (plan/plan.md — the plan
+# is the guide; there is no define/reproduce node). Fails loud (never a silent
+# fallback) when the run or its worktree cannot be found — this command reads
+# DONE-run artifacts only.
 set -euo pipefail
 
-REFLECTION_LOG="$HOME/.local/share/dagrunner/store/reflection-log.jsonl"
+DAGRUNNER_HOME="${DAGRUNNER_HOME:-$HOME/.local/share/camunda/dagrunner}"
+REFLECTION_LOG="$DAGRUNNER_HOME/store/reflection-log.jsonl"
 mkdir -p "$(dirname "$REFLECTION_LOG")"
 if [ -f "$REFLECTION_LOG" ]; then
   echo "=== Prior reflections (manual-smoke) ==="
@@ -41,7 +43,7 @@ if [ -z "$RUN_ID" ]; then
   exit 1
 fi
 
-RUN_DIR="$HOME/.local/share/dagrunner/runs/${RUN_ID}"
+RUN_DIR="$DAGRUNNER_HOME/runs/${RUN_ID}"
 STATE_FILE="$RUN_DIR/state.json"
 
 if [ ! -f "$STATE_FILE" ]; then
@@ -59,16 +61,11 @@ if [ -z "$WORKTREE" ] || [ ! -d "$WORKTREE" ]; then
   exit 1
 fi
 
-# Which guide did this run produce? define/guide.md (feature) or
-# reproduce/guide.md (bugfix) — mutually exclusive per run.
-GUIDE_PATH=""
-if [ -f "$RUN_DIR/define/guide.md" ]; then
-  GUIDE_PATH="$RUN_DIR/define/guide.md"
-elif [ -f "$RUN_DIR/reproduce/guide.md" ]; then
-  GUIDE_PATH="$RUN_DIR/reproduce/guide.md"
-else
-  echo "ERROR: neither define/guide.md nor reproduce/guide.md found under ${RUN_DIR}."
-  echo "  manual-smoke requires a completed (or at least past-Gate-1) dagrunner run."
+# The plan is the contract: dagrunner copies it to <run>/plan/plan.md at start.
+PLAN_PATH="$RUN_DIR/plan/plan.md"
+if [ ! -f "$PLAN_PATH" ]; then
+  echo "ERROR: plan/plan.md not found under ${RUN_DIR}."
+  echo "  manual-smoke requires a dagrunner run that has at least started (the plan is copied in at start)."
   exit 1
 fi
 
@@ -80,14 +77,14 @@ jq -n \
   --arg run_id "$RUN_ID" \
   --arg run_dir "$RUN_DIR" \
   --arg worktree "$WORKTREE" \
-  --arg guide_path "$GUIDE_PATH" \
+  --arg plan_path "$PLAN_PATH" \
   --arg artifacts "$ARTIFACTS_DIR" \
-  '{"run_id":$run_id,"run_dir":$run_dir,"worktree":$worktree,"guide_path":$guide_path,"artifacts":$artifacts}' \
+  '{"run_id":$run_id,"run_dir":$run_dir,"worktree":$worktree,"plan_path":$plan_path,"artifacts":$artifacts}' \
   > "$STATE_OUT"
 
 echo "Run ID:    ${RUN_ID}"
 echo "Run dir:   ${RUN_DIR}"
 echo "Worktree:  ${WORKTREE}"
-echo "Guide:     ${GUIDE_PATH}"
+echo "Plan:      ${PLAN_PATH}"
 echo "Artifacts: ${ARTIFACTS_DIR}"
 echo "State:     ${STATE_OUT}"

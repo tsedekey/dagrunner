@@ -1,7 +1,7 @@
 /**
  * run-engine.ts — high-level run orchestrator.
  *
- * startRun:  create run dir + git worktree, lock, run DAG, checkpoint or finish.
+ * startRun:  create run dir, lock, ADOPT an existing worktree, run DAG, checkpoint or finish.
  * resumeRun: reconcile stale state, handle gate decision, re-run DAG.
  *
  * Lock discipline (logged in DECISIONS.md block7):
@@ -22,6 +22,7 @@ import {
   existsSync,
   unlinkSync,
   symlinkSync,
+  lstatSync,
 } from "node:fs";
 
 // Mutable ref so the SIGINT handler in cli.ts can find the active run dir and
@@ -31,9 +32,33 @@ import { join, basename, dirname } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import type { Workflow } from "../core/types.js";
 import type { DagrunnerConfig } from "../config/xdg.js";
-import { readState, writeState } from "../core/state.js";
-import type { RunState, NodeState, NodeStatus } from "../core/state.js";
+import { accrueSessionCost, readState, writeState } from "../core/state.js";
+import { appendEvent } from "../core/events.js";
+import {
+  ancestorsOf,
+  findSessionConfigDir,
+  planAmend,
+  validateGateRequest,
+  type GateRequest,
+} from "../core/gate.js";
+import {
+  awaitingGateId,
+  describeGatePause,
+  emitGateBrief,
+  sessionConfigDirs,
+} from "./gate-files.js";
+import type {
+  RunState,
+  NodeState,
+  NodeStatus,
+  GateHistoryEntry,
+} from "../core/state.js";
 import type { ExecutionCtx, NodeExecutor } from "./mock-executor.js";
+import {
+  assertRunWorktreeExists,
+  validateAdoptedWorktree,
+  type AdoptedWorktree,
+} from "./worktree.js";
 
 type ExecutorFactory = (
   config: DagrunnerConfig,
@@ -92,13 +117,14 @@ export function parseGateDecision(
   return { decision: value, body };
 }
 
-/** Node IDs that night-mode may auto-approve (Gate 1 + Gate 2). */
-const AGENT_DECIDABLE_GATES = new Set(["define", "reproduce", "fix"]);
+/** Node IDs that night-mode may auto-approve: the fix gate (the first gate of a run) and the pre-PR gate ("pr"), on both feature and bugfix — see DECISIONS.md § plan-is-the-guide and § feature-companion-gates-parity. */
+const AGENT_DECIDABLE_GATES = new Set(["fix", "pr"]);
 
 /**
  * True when night-mode may auto-decide the gate for nodeId.
- * Expand (Gate 1) and fix (Gate 2) are agent-decidable; verify-election and
- * all others are human-only. Exported for unit testing.
+ * fix (the first gate) and pr (the pre-PR gate) are agent-decidable;
+ * all others — including a leftover id from a removed node — are human-only.
+ * Exported for unit testing.
  */
 export function agentDecidable(nodeId: string): boolean {
   return AGENT_DECIDABLE_GATES.has(nodeId);
@@ -114,6 +140,52 @@ export function hasConcerns(content: string): boolean {
 }
 
 /**
+ * Night-mode's "no concerns flagged" test for a gate. True (= pause for a human)
+ * when the gate node's primary artifact (`produces[0]`) OR the primary artifact of
+ * any DONE ancestor carries a "Concerns / plan challenges" heading.
+ *
+ * Ancestors matter because the plan is the guide (DECISIONS.md § plan-is-the-guide):
+ * `implement` is the first node and raises the heading in ITS summary.md when RED
+ * was proven but the plan's assumptions differ, while the first gate a run reaches
+ * is `fix`, whose own summary.md does not repeat it. Checking only the gate's own
+ * artifact would auto-approve past a flagged plan challenge.
+ *
+ * Safe default throughout: a gate id that is not in the workflow (a leftover node
+ * of a removed shape), or a missing/unreadable artifact on the gate or on a done
+ * ancestor, counts as concerns — never as a silent pass. Exported for unit testing.
+ */
+export function nightConcernsFlagged(
+  runDir: string,
+  state: RunState,
+  workflow: Workflow,
+  gateNodeId: string,
+): boolean {
+  const gateNode = workflow.nodes.find((n) => n.id === gateNodeId);
+  if (gateNode === undefined) return true;
+  const ids = [
+    gateNodeId,
+    ...ancestorsOf(workflow, gateNodeId).filter(
+      (id) => state.nodes[id]?.status === "done",
+    ),
+  ];
+  for (const id of ids) {
+    const primary = workflow.nodes.find((n) => n.id === id)?.produces?.[0];
+    if (primary === undefined) {
+      if (id === gateNodeId) return true;
+      continue;
+    }
+    const artifactPath = join(runDir, id, primary);
+    try {
+      if (!existsSync(artifactPath)) return true;
+      if (hasConcerns(readFileSync(artifactPath, "utf8"))) return true;
+    } catch {
+      return true; // unreadable -> pause
+    }
+  }
+  return false;
+}
+
+/**
  * Extract the leading issue number from a plan filename.
  * e.g. "53856-single-job-priority-update-grpc-plan.md" → "53856"
  * Falls back to "0" if the filename has no leading digits.
@@ -122,24 +194,6 @@ function issueNumFromPlanPath(planPath: string): string {
   const name = basename(planPath, ".md");
   const match = /^(\d+)-/.exec(name);
   return match ? (match[1] ?? "0") : "0";
-}
-
-/**
- * Extract the slug segment from a plan filename.
- * Strips the leading "{issueNum}-" prefix and the "-fix-plan" or "-plan" suffix.
- * e.g. "53856-null-pointer-fix-plan.md" → "null-pointer"
- * e.g. "53856-single-job-priority-update-grpc-plan.md" → "single-job-priority-update-grpc"
- * Falls back to the full filename (without extension) if no prefix/suffix found.
- */
-function slugFromPlanPath(planPath: string): string {
-  const name = basename(planPath, ".md");
-  // Strip leading "{digits}-" prefix if present.
-  const withoutPrefix = name.replace(/^\d+-/, "");
-  // Strip trailing "-fix-plan" suffix first (more specific), then "-plan".
-  const withoutSuffix = withoutPrefix
-    .replace(/-fix-plan$/, "")
-    .replace(/-plan$/, "");
-  return withoutSuffix !== "" ? withoutSuffix : name;
 }
 
 // ---------------------------------------------------------------------------
@@ -215,7 +269,7 @@ export function makeRunId(planPath: string, runsDir: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Branch naming — Conventional Commits style
+// PR title prefix — Conventional Commits style
 // ---------------------------------------------------------------------------
 
 const WORKFLOW_TYPE_PREFIX: Record<string, string> = {
@@ -232,21 +286,6 @@ const WORKFLOW_TYPE_PREFIX: Record<string, string> = {
   style: "style",
   revert: "revert",
 };
-
-/**
- * Compute the git branch name for a new run.
- * Format: {type}/{issueNum}-{slug}
- *   e.g. feat/53856-single-job-priority-update-grpc
- *
- * The issue number makes the branch unique — no random suffix needed.
- * Exported for unit testing.
- */
-export function makeBranchName(workflowName: string, planPath: string): string {
-  const prefix = WORKFLOW_TYPE_PREFIX[workflowName] ?? "feat";
-  const issueNum = issueNumFromPlanPath(planPath);
-  const slug = slugFromPlanPath(planPath);
-  return `${prefix}/${issueNum}-${slug}`;
-}
 
 /**
  * Return the PR title prefix for a workflow: "{type}:"
@@ -275,15 +314,6 @@ export function worktreeArtifactPatterns(): string[] {
     }
   }
   // Secondary scratch patterns that aren't in produces.
-  //
-  // verify-plan.md: dropped from verify's `produces` array (run 56962-1
-  // forensics, DECISIONS.md § verify-run-56962-1-forensics) because
-  // payload/commands/verify.md's legitimate short-circuit paths (Docker
-  // unreachable, unrecoverable stall) explicitly skip writing it. It is
-  // still written on the normal (non-short-circuit) path, so it still needs
-  // to be excluded from the worktree/PR here — this hygiene list is a
-  // separate concern from the produces-contract check and must not silently
-  // lose coverage just because the file became conditional.
   for (const p of [
     "*.tmp",
     "*-state.json",
@@ -291,7 +321,6 @@ export function worktreeArtifactPatterns(): string[] {
     ".gitignore",
     ".claude/",
     "**/target/",
-    "verify-plan.md",
   ]) {
     names.add(p);
   }
@@ -495,7 +524,16 @@ function seedWorktreeNodeModules(
       if (!nmPath) continue;
       const rel = nmPath.slice(devharnessSrc.length).replace(/^\//, "");
       const dest = join(worktreePath, rel);
-      if (!existsSync(dest)) {
+      // lstat, not existsSync: a symlink left dangling by an earlier seeding
+      // reads as "absent" to existsSync, and symlinkSync would then throw EEXIST
+      // and abort the rest of the loop. An adopted worktree may carry such links.
+      let present = true;
+      try {
+        lstatSync(dest);
+      } catch {
+        present = false;
+      }
+      if (!present) {
         mkdirSync(dirname(dest), { recursive: true });
         symlinkSync(nmPath, dest);
       }
@@ -541,7 +579,7 @@ function scanWorktreeForLeaks(
 
 /**
  * Seed the worktree's .claude/ with dagrunner-owned sibling commands and scripts
- * (ci-babysit, pr-triage, seed-data). These are seeded AFTER the pipeline commands
+ * (ci-babysit, seed-data, manual-smoke). These are seeded AFTER the pipeline commands
  * so that session-start.sh's DEVHARNESS_SRC sync can be overridden by this call.
  *
  * Also exports DAGRUNNER_ROOT into process.env so session-start.sh can re-apply
@@ -588,11 +626,141 @@ export function seedWorktreeSiblings(
 }
 
 /**
+ * Everything startRun seeds into an ADOPTED worktree after validation: the
+ * artifact-scratch exclude, the java/maven .tool-versions entries, node_modules
+ * symlinks, the .claude/ commands + hooks + agents, the sibling commands/scripts
+ * and the node-run settings.json.
+ *
+ * The worktree already exists and may have been seeded by an earlier run (or hold
+ * its own node_modules/.claude), so every step must be IDEMPOTENT: re-applying it
+ * errors nowhere and changes nothing that was already seeded (the exclude block
+ * is marker-guarded, .tool-versions entries are only added when absent,
+ * node_modules links only where nothing is present, cpSync overwrites with the
+ * same payload, settings.json is rewritten for THIS run's runDir). Pinned by
+ * seed-run-worktree.test.ts. Fail-loud: a broken install (missing payload)
+ * throws.
+ */
+export function seedRunWorktree(opts: {
+  worktreePath: string;
+  runDir: string;
+  homeDir: string;
+  config: DagrunnerConfig;
+  dagrunnerRoot: string;
+}): void {
+  const { worktreePath, runDir, homeDir, config, dagrunnerRoot } = opts;
+
+  // Structural scratch backstop: seed the repo's .git/info/exclude so known
+  // artifact filenames can never be staged or committed even if a prompt
+  // accidentally writes to cwd instead of $DAGRUN_ARTIFACTS. Uses the common
+  // gitdir (not per-worktree) — see DECISIONS.md § worktree-exclude-location.
+  seedWorktreeExclude(worktreePath, worktreeArtifactPatterns());
+
+  // Seed java + maven into .tool-versions and mark skip-worktree so the
+  // implement node's pre-commit format hook resolves both tools without the
+  // node having to add them and accidentally committing them.
+  seedWorktreeToolVersions(worktreePath);
+
+  // Symlink node_modules from the main DEVHARNESS_SRC checkout into the
+  // worktree so the implement node can run frontend tests against the changed
+  // source without a separate npm install.
+  seedWorktreeNodeModules(worktreePath, config.DEVHARNESS_SRC);
+
+  // Seed the worktree's .claude/ with dagrunner's bundled commands + hooks + a
+  // node-run settings.json. Without this, a source repo with no .claude/commands/
+  // causes node commands to return immediately with cost=0 and no output —
+  // the SDK treats unknown slash commands as no-ops.
+  const destClaude = join(worktreePath, ".claude");
+  mkdirSync(join(destClaude, "commands"), { recursive: true });
+  mkdirSync(join(destClaude, "hooks"), { recursive: true });
+  mkdirSync(join(destClaude, "agents"), { recursive: true });
+  const srcCommands = join(dagrunnerRoot, "payload", "commands");
+  const srcHooks = join(dagrunnerRoot, ".claude", "hooks");
+  const srcAgents = join(dagrunnerRoot, "payload", "agents");
+  if (!existsSync(srcCommands)) {
+    throw new Error(
+      `dagrun: bundled commands not found at ${srcCommands} — package installation may be broken`,
+    );
+  }
+  if (!existsSync(srcHooks)) {
+    throw new Error(
+      `dagrun: bundled hooks not found at ${srcHooks} — package installation may be broken`,
+    );
+  }
+  if (!existsSync(srcAgents)) {
+    throw new Error(
+      `dagrun: bundled agents not found at ${srcAgents} — package installation may be broken`,
+    );
+  }
+  cpSync(srcCommands, join(destClaude, "commands"), { recursive: true });
+  cpSync(srcHooks, join(destClaude, "hooks"), { recursive: true });
+  cpSync(srcAgents, join(destClaude, "agents"), { recursive: true });
+
+  // Seed sibling commands + scripts (ci-babysit, seed-data, manual-smoke) into the
+  // worktree. Also exports DAGRUNNER_ROOT so session-start.sh can re-apply siblings
+  // at every node session start (satisfying the env-propagation contract in CLAUDE.md).
+  // Must run AFTER pipeline commands so siblings land last and always win over
+  // any DEVHARNESS_SRC rsync that session-start.sh may have applied.
+  seedWorktreeSiblings(dagrunnerRoot, destClaude);
+
+  // Runtime settings.json: full permission model (Phase 2a D1).
+  // DISTINCT from the build-harness settings.json (bypassPermissions).
+  // buildSeededSettings is the single authoritative template (settings-seed.ts).
+  const seededSettings = buildSeededSettings({
+    runDir,
+    homeDir: homedir(),
+    tmpDir: tmpdir(),
+    passthrough: readSourcePassthrough(config.DEVHARNESS_SRC),
+    ...(config.claudeConfigDir !== undefined
+      ? { claudeConfigDir: config.claudeConfigDir }
+      : {}),
+    workProfileMcpServers: readWorkProfileMcpServers(
+      config.claudeConfigDir ?? join(homedir(), ".claude"),
+      worktreePath,
+    ),
+    devharnessSrc: config.DEVHARNESS_SRC,
+    dagrunnerHome: homeDir,
+  });
+  writeFileSync(
+    join(destClaude, "settings.json"),
+    JSON.stringify(seededSettings, null, 2),
+    "utf8",
+  );
+}
+
+/**
  * Wrap an executor so that immediately before the `pr` node fires, the worktree
  * is scanned for leaked artifacts. Advisory only — never blocks the pr node.
  * Note: rerunNode does not use this wrapper (debug tool; intentional omission
  * documented in DECISIONS.md).
  */
+/**
+ * Wrap an executor so the ENGINE (never an agent) saves the worktree's change as
+ * `fix/changes.diff` when `fix` finishes or pauses at its gate, and registers it
+ * as a `done` fix artifact. Failure warns only (tryWriteChangesDiff).
+ */
+function wrapWithChangesDiff(
+  base: NodeExecutor,
+  worktreePath: string,
+  runDir: string,
+  baseBranch: string,
+): NodeExecutor {
+  return async (id, node, ctx) => {
+    const result = await base(id, node, ctx);
+    if (id !== "fix" || result.status === "failed") return result;
+    const diff = tryWriteChangesDiff({
+      worktreePath,
+      baseBranch,
+      runDir,
+      nodeId: id,
+    });
+    return diff !== null &&
+      result.status === "done" &&
+      !result.artifacts.includes(diff)
+      ? { ...result, artifacts: [...result.artifacts, diff] }
+      : result;
+  };
+}
+
 function wrapWithPrScan(
   base: NodeExecutor,
   worktreePath: string,
@@ -607,14 +775,19 @@ function wrapWithPrScan(
 }
 
 import {
+  CHANGES_DIFF_FILE,
+  tryWriteChangesDiff,
+} from "../core/changes-diff.js";
+import {
   reconcileRunningNodes,
   resetInterruptedNodes,
   MAX_INTERRUPT_RETRIES,
   runDag,
   checkOutcomeGate,
   checkNoPlaceholders,
+  reenableBlockedDependents,
 } from "../core/dag.js";
-import { acquireLock, releaseLock } from "../core/lock.js";
+import { acquireLock, assertNoLiveDriver, releaseLock } from "../core/lock.js";
 import { makeSDKRunner } from "./sdk-runner.js";
 import { featureWorkflow } from "../workflow/feature-workflow.js";
 import { bugfixWorkflow } from "../workflow/bugfix-workflow.js";
@@ -623,6 +796,7 @@ import {
   readSourcePassthrough,
   readWorkProfileMcpServers,
   buildSeededSettings,
+  denyPluginsInSeededSettings,
 } from "../config/settings-seed.js";
 
 // ---------------------------------------------------------------------------
@@ -681,8 +855,124 @@ function workflowFromState(state: RunState): Workflow {
 }
 
 // ---------------------------------------------------------------------------
+// announcePause — what to print when a run checkpoints at a gate
+// ---------------------------------------------------------------------------
+
+/**
+ * Companion-mode runs write the gate brief and point at the originating
+ * companion (or say honestly that it is unavailable); legacy runs keep the
+ * `dagrun resume` hint.
+ */
+function announcePause(
+  runId: string,
+  runDir: string,
+  stateFile: string,
+  workflow: Workflow,
+  config: DagrunnerConfig,
+): void {
+  const st = readState(stateFile);
+  const gate = awaitingGateId(st);
+  if (gate === "pr") {
+    // Pre-PR gate opens: refresh the saved change (an amend may have moved the
+    // worktree since fix) in fix/ and give the pr gate brief its own copy.
+    const args = {
+      worktreePath: st.worktreePath,
+      baseBranch: st.baseBranch ?? "main",
+      runDir,
+    };
+    tryWriteChangesDiff({ ...args, nodeId: "fix" });
+    tryWriteChangesDiff({ ...args, nodeId: "pr" });
+  }
+  if (
+    gate !== undefined &&
+    st.companion !== undefined &&
+    workflow.companionGates === true
+  ) {
+    process.stdout.write(
+      describeGatePause(
+        emitGateBrief({
+          runDir,
+          state: st,
+          workflow,
+          gateNodeId: gate,
+          config,
+        }),
+      ),
+    );
+  } else {
+    if (gate !== undefined) {
+      // Legacy gate: no brief/revision, but the gate opening is still a timeline event.
+      appendEvent(runDir, {
+        ts: new Date().toISOString(),
+        type: "gate.opened",
+        node: gate,
+        iteration: st.nodes[gate]?.iteration ?? 0,
+      });
+    }
+    process.stdout.write(`dagrun: resume with: dagrun resume ${runId}\n`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // startRun
 // ---------------------------------------------------------------------------
+
+/**
+ * Everything startRun can refuse BEFORE any side effect: workflow validity and
+ * the explicit companion association. Exported so a `--detach` parent can fail
+ * synchronously (exit non-zero) instead of reporting success for a child that
+ * would die on the same check. Returns the companion's config dir (null = none).
+ */
+export function validateStartOptions(opts: {
+  workflow: Workflow;
+  config: DagrunnerConfig;
+  nightMode?: boolean;
+  companionSessionId?: string;
+  noCompanion?: boolean;
+  sessionConfigDirs?: string[];
+}): { companionId: string | undefined; companionConfigDir: string | null } {
+  const { workflow, config } = opts;
+  // Validate workflow at load time (hard rule: fail at load, not at runtime).
+  loadWorkflow(workflow);
+
+  // Companion association: explicit, never a silent default (fail before any side effect).
+  const companionId = opts.companionSessionId?.trim();
+  if (workflow.companionGates === true) {
+    if (companionId === undefined && opts.noCompanion !== true) {
+      throw new Error(
+        `dagrun start: workflow "${workflow.name}" returns every gate to the originating planning companion — ` +
+          `pass --companion-session <id> (the companion's CLAUDE_CODE_SESSION_ID) or --no-companion to use legacy fresh-session gates`,
+      );
+    }
+    if (companionId !== undefined && opts.noCompanion === true) {
+      throw new Error(
+        `dagrun start: --companion-session and --no-companion are mutually exclusive`,
+      );
+    }
+    if (companionId !== undefined && opts.nightMode === true) {
+      throw new Error(
+        `dagrun start: --night auto-approves gates, which contradicts companion gates — use --no-companion for unattended runs`,
+      );
+    }
+  } else if (companionId !== undefined) {
+    throw new Error(
+      `dagrun start: workflow "${workflow.name}" has no companion gates; --companion-session does not apply`,
+    );
+  }
+  const companionConfigDir =
+    companionId === undefined
+      ? null
+      : findSessionConfigDir(
+          companionId,
+          opts.sessionConfigDirs ?? sessionConfigDirs(config),
+        );
+  if (companionId !== undefined && companionConfigDir === null) {
+    throw new Error(
+      `dagrun start: companion session "${companionId}" has no transcript in any known Claude config dir — refusing to record an association that could never be returned to`,
+    );
+  }
+  return { companionId, companionConfigDir };
+}
 
 export async function startRun(opts: {
   workflow: Workflow;
@@ -694,20 +984,45 @@ export async function startRun(opts: {
   executorFactory?: ExecutorFactory;
   /** Run unattended: auto-approve agent-decidable gates when no concerns are flagged. */
   nightMode?: boolean;
+  /** CLAUDE_CODE_SESSION_ID of the originating planning companion (companion-gate workflows). */
+  companionSessionId?: string;
+  /** Explicit opt-out: use legacy fresh-session gates for a companion-gate workflow. */
+  noCompanion?: boolean;
+  /** Test seam: config dirs searched for the companion's transcript. */
+  sessionConfigDirs?: string[];
+  /**
+   * Run id pre-claimed by a `--detach` parent (which created runs/<id>/ to hold
+   * driver.log). Absent = allocate as usual.
+   */
+  runId?: string;
+  /**
+   * The existing git worktree this run ADOPTS (a linked worktree of
+   * DEVHARNESS_SRC, created by `wm add` / `git worktree add`). Required and
+   * explicit: the engine never falls back to cwd — the CLI resolves
+   * `--worktree` (default: git toplevel of cwd) and passes it in.
+   */
+  worktreePath: string;
 }): Promise<void> {
   const { workflow, planPath, homeDir, config, force } = opts;
 
-  // Validate workflow at load time (hard rule: fail at load, not at runtime).
-  loadWorkflow(workflow);
+  const { companionId, companionConfigDir } = validateStartOptions(opts);
 
-  const runId = makeRunId(planPath, join(homeDir, "runs"));
+  const runId = opts.runId ?? makeRunId(planPath, join(homeDir, "runs"));
   const runDir = join(homeDir, "runs", runId);
   const stateFile = join(runDir, "state.json");
-  const worktreePath = join(homeDir, "worktrees", runId);
 
   // Defensive backstop: the run-count scheme ensures a unique ID is computed by
   // scanning existing dirs, but we assert loudly rather than silently clobber.
-  if (existsSync(runDir)) {
+  // A pre-claimed dir (--detach) may hold only the parent's driver.log.
+  const leftovers = existsSync(runDir)
+    ? readdirSync(runDir).filter(
+        (f) => !(opts.runId !== undefined && f === "driver.log"),
+      )
+    : [];
+  if (
+    existsSync(runDir) &&
+    (opts.runId === undefined || leftovers.length > 0)
+  ) {
     throw new Error(
       `dagrun: run directory "${runDir}" already exists — this should never happen with the unique run-id scheme; aborting to avoid clobbering an existing run`,
     );
@@ -717,126 +1032,47 @@ export async function startRun(opts: {
   activeRun.runDir = runDir;
   activeRun.homeDir = homeDir;
 
-  // Lock BEFORE creating the worktree (advisor: avoid stray worktrees on failure).
+  // Lock BEFORE any other side effect (a failed validation below releases it).
   if (force === true) releaseLock(homeDir);
   acquireLock(homeDir, runId);
 
   // Parse frontmatter from plan to extract base_branch, severity, issueUrl.
-  // Must happen before worktree creation (base_branch determines start-point).
+  // Must happen before adoption: base_branch is what the adopted branch must differ from.
   const planContent = readFileSync(planPath, "utf8");
   const frontmatter = parseFrontmatter(planContent);
   const baseBranch = frontmatter["base_branch"] ?? "main";
   const severity = frontmatter["severity"];
   const issueUrl = frontmatter["issue"];
 
-  // Validate base branch exists in DEVHARNESS_SRC before any side effects.
-  // Fail loud — a typo in base_branch would silently branch from HEAD.
+  // Adopt the worktree: linked worktree of DEVHARNESS_SRC, on a branch other than
+  // the base, clean tracked files, base branch resolves, no other live run on it.
+  // Fail loud, before any side effect other than the lock, and release the lock.
+  let adopted: AdoptedWorktree;
   try {
-    execSync(`git rev-parse --verify --quiet "${baseBranch}"`, {
-      cwd: config.DEVHARNESS_SRC,
-      stdio: "pipe",
+    adopted = validateAdoptedWorktree({
+      worktreePath: opts.worktreePath,
+      devharnessSrc: config.DEVHARNESS_SRC,
+      baseBranch,
+      homeDir,
     });
-  } catch {
+  } catch (err) {
     releaseLock(homeDir);
-    process.stderr.write(
-      `dagrun: base_branch "${baseBranch}" not found in DEVHARNESS_SRC — fetch it first\n`,
-    );
-    process.exit(1);
+    throw err;
   }
+  const { worktreePath, branch: branchName } = adopted;
 
   // Create run directory and copy plan.
   mkdirSync(join(runDir, "plan"), { recursive: true });
   cpSync(planPath, join(runDir, "plan", "plan.md"));
 
-  const branchName = makeBranchName(workflow.name, planPath);
-
-  // Create git worktree from DEVHARNESS_SRC, branching from baseBranch start-point.
-  // For feature workflow baseBranch is always "main"; for bugfix it may be a release branch.
-  execSync(
-    `git worktree add "${worktreePath}" -b "${branchName}" "${baseBranch}"`,
-    {
-      cwd: config.DEVHARNESS_SRC,
-      stdio: "inherit",
-    },
-  );
-
-  // Structural scratch backstop: seed the repo's .git/info/exclude so known
-  // artifact filenames can never be staged or committed even if a prompt
-  // accidentally writes to cwd instead of $DAGRUN_ARTIFACTS. Uses the common
-  // gitdir (not per-worktree) — see DECISIONS.md § worktree-exclude-location.
-  seedWorktreeExclude(worktreePath, worktreeArtifactPatterns());
-
-  // Seed java + maven into .tool-versions and mark skip-worktree so the
-  // implement node's pre-commit format hook resolves both tools without the
-  // node having to add them and accidentally committing them.
-  seedWorktreeToolVersions(worktreePath);
-
-  // Symlink node_modules from the main DEVHARNESS_SRC checkout into the
-  // worktree so the implement node can run frontend tests against the changed
-  // source without a separate npm install.
-  seedWorktreeNodeModules(worktreePath, config.DEVHARNESS_SRC);
-
-  // Seed the worktree's .claude/ with dagrunner's bundled commands + hooks + a
-  // node-run settings.json. Without this, a source repo with no .claude/commands/
-  // causes node commands to return immediately with cost=0 and no output —
-  // the SDK treats unknown slash commands as no-ops.
-  const dagrunnerRoot = new URL("../../", import.meta.url).pathname;
-  const destClaude = join(worktreePath, ".claude");
-  mkdirSync(join(destClaude, "commands"), { recursive: true });
-  mkdirSync(join(destClaude, "hooks"), { recursive: true });
-  mkdirSync(join(destClaude, "agents"), { recursive: true });
-  const srcCommands = join(dagrunnerRoot, "payload", "commands");
-  const srcHooks = join(dagrunnerRoot, ".claude", "hooks");
-  const srcAgents = join(dagrunnerRoot, "payload", "agents");
-  if (!existsSync(srcCommands)) {
-    throw new Error(
-      `dagrun: bundled commands not found at ${srcCommands} — package installation may be broken`,
-    );
-  }
-  if (!existsSync(srcHooks)) {
-    throw new Error(
-      `dagrun: bundled hooks not found at ${srcHooks} — package installation may be broken`,
-    );
-  }
-  if (!existsSync(srcAgents)) {
-    throw new Error(
-      `dagrun: bundled agents not found at ${srcAgents} — package installation may be broken`,
-    );
-  }
-  cpSync(srcCommands, join(destClaude, "commands"), { recursive: true });
-  cpSync(srcHooks, join(destClaude, "hooks"), { recursive: true });
-  cpSync(srcAgents, join(destClaude, "agents"), { recursive: true });
-
-  // Seed sibling commands + scripts (ci-babysit, pr-triage, seed-data) into the
-  // worktree. Also exports DAGRUNNER_ROOT so session-start.sh can re-apply siblings
-  // at every node session start (satisfying the env-propagation contract in CLAUDE.md).
-  // Must run AFTER pipeline commands so siblings land last and always win over
-  // any DEVHARNESS_SRC rsync that session-start.sh may have applied.
-  seedWorktreeSiblings(dagrunnerRoot, destClaude);
-
-  // Runtime settings.json: full permission model (Phase 2a D1).
-  // DISTINCT from the build-harness settings.json (bypassPermissions).
-  // buildSeededSettings is the single authoritative template (settings-seed.ts).
-  const seededSettings = buildSeededSettings({
+  // Seed the adopted worktree (idempotent — see seedRunWorktree).
+  seedRunWorktree({
+    worktreePath,
     runDir,
-    homeDir: homedir(),
-    tmpDir: tmpdir(),
-    passthrough: readSourcePassthrough(config.DEVHARNESS_SRC),
-    ...(config.claudeConfigDir !== undefined
-      ? { claudeConfigDir: config.claudeConfigDir }
-      : {}),
-    workProfileMcpServers: readWorkProfileMcpServers(
-      config.claudeConfigDir ?? join(homedir(), ".claude"),
-      worktreePath,
-    ),
-    devharnessSrc: config.DEVHARNESS_SRC,
-    dagrunnerHome: homeDir,
+    homeDir,
+    config,
+    dagrunnerRoot: new URL("../../", import.meta.url).pathname,
   });
-  writeFileSync(
-    join(destClaude, "settings.json"),
-    JSON.stringify(seededSettings, null, 2),
-    "utf8",
-  );
 
   const state: RunState = {
     runId,
@@ -846,7 +1082,21 @@ export async function startRun(opts: {
     status: "running",
     worktreePath,
     branch: branchName,
+    worktreeOrigin: "adopted",
     sourcePlanPath: planPath,
+    ...(companionId !== undefined
+      ? {
+          companion: {
+            sessionId: companionId,
+            ...(companionConfigDir !== null
+              ? { configDir: companionConfigDir }
+              : {}),
+            associatedAt: new Date().toISOString(),
+            source: "handoff" as const,
+            reconstructed: false,
+          },
+        }
+      : {}),
     nodes: makeInitialNodeStates(workflow),
     // Frontmatter fields — survive resume via state.json.
     ...(baseBranch !== "main" ? { baseBranch } : {}),
@@ -867,12 +1117,17 @@ export async function startRun(opts: {
   const defaultFactory: ExecutorFactory = (c, rid, rdir, wt, sd) =>
     makeSDKRunner(c, rid, rdir, wt, sd, opts.nightMode);
   const executor = wrapWithPrScan(
-    (opts.executorFactory ?? defaultFactory)(
-      config,
-      runId,
-      runDir,
+    wrapWithChangesDiff(
+      (opts.executorFactory ?? defaultFactory)(
+        config,
+        runId,
+        runDir,
+        worktreePath,
+        join(homeDir, "store"),
+      ),
       worktreePath,
-      join(homeDir, "store"),
+      runDir,
+      baseBranch,
     ),
     worktreePath,
     runDir,
@@ -880,12 +1135,17 @@ export async function startRun(opts: {
   const ctx = makeCtx(runDir);
   const result = await runDag(workflow, executor, state, { ctx, stateFile });
 
-  runPrPostProcess(readState(stateFile), runDir);
+  if (!runPrPostProcess(readState(stateFile), runDir, stateFile).ok) {
+    releaseLock(homeDir);
+    process.stdout.write(`dagrun: run ${runId} failed\n`);
+    process.exit(1);
+  }
 
   // Night-mode: auto-resolve agent-decidable gates in a loop.
   if (opts.nightMode === true && result.status === "paused") {
     let nightState = readState(stateFile);
-    // Safety cap: max 20 iterations (the real pipeline has 2 decidable gates).
+    // Safety cap: max 20 iterations (each pipeline has 2 decidable gates: fix, pr — so a
+    // clean run needs 2; the cap leaves room for gate-revise rounds before falling through).
     for (let loops = 0; loops < 20; loops++) {
       const gateEntry = Object.entries(nightState.nodes).find(
         ([, ns]) => ns.status === "awaiting-gate",
@@ -898,7 +1158,7 @@ export async function startRun(opts: {
         process.stdout.write(
           `dagrun: [night] paused — "${gateNodeId}" requires human decision\n`,
         );
-        process.stdout.write(`dagrun: resume with: dagrun resume ${runId}\n`);
+        announcePause(runId, runDir, stateFile, workflow, config);
         return;
       }
 
@@ -909,42 +1169,31 @@ export async function startRun(opts: {
         process.stdout.write(
           `dagrun: [night] paused at gate "${gateNodeId}" — severity "${nightState.severity ?? ""}" requires human review\n`,
         );
-        process.stdout.write(`dagrun: resume with: dagrun resume ${runId}\n`);
+        announcePause(runId, runDir, stateFile, workflow, config);
         return;
       }
 
-      // Read the primary artifact and check for a concerns heading.
+      // Check the gate's artifact and its done ancestors' for a concerns heading
+      // (safe default: pause when an artifact is missing/unreadable).
       const gateNode = workflow.nodes.find((n) => n.id === gateNodeId);
-      const primaryFile = gateNode?.produces?.[0];
-      // Safe default: pause when artifact is missing/unreadable.
-      let concerns = true;
-      if (primaryFile !== undefined) {
-        const artifactPath = join(runDir, gateNodeId, primaryFile);
-        try {
-          if (existsSync(artifactPath)) {
-            concerns = hasConcerns(readFileSync(artifactPath, "utf8"));
-          }
-        } catch {
-          // unreadable → concerns stays true → pause
-        }
-      }
+      const concerns = nightConcernsFlagged(runDir, nightState, workflow, gateNodeId);
 
       if (concerns) {
         releaseLock(homeDir);
         process.stdout.write(
           `dagrun: [night] paused at gate "${gateNodeId}" — concerns flagged in artifact\n`,
         );
-        process.stdout.write(`dagrun: resume with: dagrun resume ${runId}\n`);
+        announcePause(runId, runDir, stateFile, workflow, config);
         return;
       }
 
       // Auto-approve: log to gateHistory with night-mode basis. A mechanical
       // noPlaceholders violation still fails the node even after auto-approval
-      // — gated nodes (define/reproduce) always return awaiting-gate, never
-      // 'done', from the executor itself (sdk-runner.ts), so this approve
-      // transition — not runDag's done-branch — is the only place their
-      // noPlaceholders check is ever reachable. See DECISIONS.md
-      // § no-placeholders-gate-approve-wiring.
+      // — gated nodes always return awaiting-gate, never 'done', from the
+      // executor itself (sdk-runner.ts), so this approve transition — not
+      // runDag's done-branch — is the only place a gated node's noPlaceholders
+      // check is ever reachable (no shipped node declares one today; the
+      // wiring is generic). See DECISIONS.md § no-placeholders-gate-approve-wiring.
       const autoTs = new Date().toISOString();
       const basis = "no concerns flagged";
       const nightArtifacts = (gateNode?.produces ?? [])
@@ -992,14 +1241,16 @@ export async function startRun(opts: {
         );
       }
 
-      // Re-run the DAG from the newly approved gate. verify (when present) now
-      // runs fully autonomously — no verify-election park here (see D1 of the
-      // verify-autonomy change; DECISIONS.md § verify-autonomy-remove-election).
+      // Re-run the DAG from the newly approved gate.
       const nightResult = await runDag(workflow, executor, nightState, {
         ctx,
         stateFile,
       });
-      runPrPostProcess(readState(stateFile), runDir);
+      if (!runPrPostProcess(readState(stateFile), runDir, stateFile).ok) {
+        releaseLock(homeDir);
+        process.stdout.write(`dagrun: run ${runId} failed\n`);
+        process.exit(1);
+      }
       nightState = readState(stateFile);
 
       if (nightResult.status !== "paused") {
@@ -1017,7 +1268,7 @@ export async function startRun(opts: {
     process.stdout.write(
       `dagrun: checkpointed at gate — node "${gateNode?.[0] ?? "unknown"}" awaiting review\n`,
     );
-    process.stdout.write(`dagrun: resume with: dagrun resume ${runId}\n`);
+    announcePause(runId, runDir, stateFile, workflow, config);
     return;
   }
 
@@ -1031,7 +1282,7 @@ export async function startRun(opts: {
     process.stdout.write(
       `dagrun: checkpointed at gate — node "${gateNode?.[0] ?? "unknown"}" awaiting review\n`,
     );
-    process.stdout.write(`dagrun: resume with: dagrun resume ${runId}\n`);
+    announcePause(runId, runDir, stateFile, workflow, config);
   } else {
     releaseLock(homeDir);
     process.stdout.write(`dagrun: run ${runId} ${result.status}\n`);
@@ -1049,7 +1300,17 @@ export async function resumeRun(opts: {
   config: DagrunnerConfig;
   approve?: boolean;
   rejectComment?: string;
+  /** Companion gates: the validated-by-CLI request; re-validated here against fresh state. */
+  gateRequest?: GateRequest & { decisionId: string };
+  /** Test seam: config dirs searched for the companion's transcript. */
+  sessionConfigDirs?: string[];
   executorFactory?: ExecutorFactory;
+  /**
+   * TEST seam (smoke): resolve the run against this workflow instead of the shipped one
+   * named by state.workflow — lets smoke-mock exercise a generic engine primitive
+   * (noPlaceholders on a gate) that no shipped node uses. Real callers never pass it.
+   */
+  workflow?: Workflow;
 }): Promise<void> {
   const { runId, homeDir, config } = opts;
   const runDir = join(homeDir, "runs", runId);
@@ -1064,13 +1325,24 @@ export async function resumeRun(opts: {
     process.exit(1);
   }
 
+  // A LIVE driver already owns this run: refuse BEFORE touching state — reconcile
+  // below would otherwise mark the live driver's running nodes failed. A stale
+  // lock (dead pid) falls through and is recovered as before.
+  assertNoLiveDriver(homeDir, runId);
+
+  // The adopted worktree may have been removed from under the run (`wm rm`): fail
+  // loud BEFORE reconcile/lock/seeding — the sibling seed below would otherwise
+  // re-create the deleted path as a bare .claude/ dir and run nodes in it.
+  const loaded = readState(stateFile);
+  assertRunWorktreeExists(loaded, config.DEVHARNESS_SRC);
+
   // Reconcile: running → failed (crash recovery). Then re-acquire lock.
-  let state = reconcileRunningNodes(readState(stateFile));
+  let state = reconcileRunningNodes(loaded);
   releaseLock(homeDir);
   acquireLock(homeDir, runId);
   writeState(stateFile, state);
 
-  const workflow = workflowFromState(state);
+  const workflow = opts.workflow ?? workflowFromState(state);
 
   // Any node that was running when the process was interrupted is marked
   // failed by reconcileRunningNodes. Reset interrupted nodes to pending up
@@ -1134,7 +1406,177 @@ export async function resumeRun(opts: {
     } else {
       const maxIterations = gateNode.gate?.maxIterations ?? 10;
 
-      if (opts.rejectComment !== undefined) {
+      // ---- Companion gates: the decision comes from the originating companion
+      // via `dagrun gate decide`, never a fresh spawned session or a bare flag.
+      const companionMode =
+        state.companion !== undefined && workflow.companionGates === true;
+      let approveNow = opts.approve === true;
+      let rejectNow = opts.rejectComment;
+      let boundMeta: Partial<GateHistoryEntry> = {};
+      if (companionMode) {
+        if (opts.approve === true || opts.rejectComment !== undefined) {
+          process.stderr.write(
+            `dagrun: run "${runId}" uses companion gates — bare --approve/--reject is refused. ` +
+              `Use \`dagrun gate show ${runId}\` then \`dagrun gate decide ${runId} …\`\n`,
+          );
+          releaseLock(homeDir);
+          process.exit(1);
+        }
+        const brief = emitGateBrief({
+          runDir,
+          state,
+          workflow,
+          gateNodeId,
+          config,
+          ...(opts.sessionConfigDirs !== undefined
+            ? { configDirs: opts.sessionConfigDirs }
+            : {}),
+        });
+        if (opts.gateRequest === undefined) {
+          process.stdout.write(describeGatePause(brief));
+          releaseLock(homeDir);
+          process.exit(0);
+        }
+        const req = opts.gateRequest;
+        const v = validateGateRequest({ state, workflow, brief, req });
+        if (!v.ok) {
+          process.stderr.write(
+            `dagrun: gate decision refused [${v.code}] ${v.message}\n`,
+          );
+          releaseLock(homeDir);
+          process.exit(1);
+        }
+        const now = new Date().toISOString();
+        boundMeta = {
+          revision: req.revision,
+          action: v.action,
+          target: v.target,
+          decisionId: req.decisionId,
+        };
+        if (v.action === "hold") {
+          const note = (req.comment ?? "").trim();
+          state = {
+            ...state,
+            nodes: {
+              ...state.nodes,
+              [gateNodeId]: {
+                ...gateNodeState,
+                gateHistory: [
+                  ...gateNodeState.gateHistory,
+                  {
+                    decision: "hold",
+                    comment: note,
+                    timestamp: now,
+                    ...boundMeta,
+                    resumePoint: `stay paused at gate "${gateNodeId}" (${note})`,
+                  },
+                ],
+              },
+            },
+            updatedAt: now,
+          };
+          writeState(stateFile, state);
+          process.stdout.write(
+            `dagrun: hold recorded at gate "${gateNodeId}" — still paused, nothing advanced\n`,
+          );
+          releaseLock(homeDir);
+          process.exit(0);
+        }
+        if (v.action === "approve") {
+          approveNow = true;
+          const c = (req.comment ?? "").trim();
+          boundMeta = {
+            ...boundMeta,
+            ...(c !== "" ? { comment: c } : {}),
+            resumePoint: `run ${brief.pendingDecision.approveContinuesTo.join(", ") || "(end)"}`,
+          };
+        } else if (v.target === gateNodeId) {
+          rejectNow = (req.comment ?? "").trim();
+          boundMeta = {
+            ...boundMeta,
+            resumePoint: `re-run "${gateNodeId}" with feedback, then pause again`,
+          };
+        } else {
+          // Amend an ancestor: revise it with the feedback and invalidate everything
+          // downstream (including this gate and finished siblings) — no stale evidence,
+          // and no publication effect can have happened (this gate was still open).
+          const plan = planAmend(workflow, gateNodeId, v.target);
+          const tState = state.nodes[plan.revise];
+          const tNode = workflow.nodes.find((n) => n.id === plan.revise);
+          if (tState === undefined || tNode === undefined) {
+            process.stderr.write(
+              `dagrun: amend target "${plan.revise}" not in run\n`,
+            );
+            releaseLock(homeDir);
+            process.exit(1);
+          }
+          const tMax = tNode.gate?.maxIterations ?? 10;
+          if (tState.iteration >= tMax) {
+            process.stderr.write(
+              `dagrun: maxIterations (${tMax}) reached for "${plan.revise}" — cannot amend further\n`,
+            );
+            releaseLock(homeDir);
+            process.exit(1);
+          }
+          const nodesNext = { ...state.nodes };
+          for (const id of plan.reset) {
+            const ns = nodesNext[id];
+            if (ns === undefined) continue;
+            const dir = join(runDir, id);
+            archivePriorAttempt(runDir, id, dir);
+            rmSync(dir, { recursive: true, force: true });
+            mkdirSync(dir, { recursive: true });
+            nodesNext[id] = {
+              status: "pending",
+              artifacts: [],
+              iteration: 0,
+              cost: ns.cost,
+              gateHistory: ns.gateHistory,
+              // Earlier executions' timing survives an invalidation.
+              ...(ns.attempts !== undefined ? { attempts: ns.attempts } : {}),
+              ...(ns.model !== undefined ? { model: ns.model } : {}),
+            };
+          }
+          const n = tState.iteration + 1;
+          writeFileSync(
+            join(runDir, plan.revise, `feedback-${n}.md`),
+            (req.comment ?? "").trim(),
+            "utf8",
+          );
+          nodesNext[plan.revise] = {
+            ...tState,
+            status: "pending",
+            iteration: n,
+            gateHistory: [
+              ...tState.gateHistory,
+              {
+                decision: "reject",
+                comment: (req.comment ?? "").trim(),
+                timestamp: now,
+                ...boundMeta,
+                invalidated: plan.reset,
+                resumePoint: `re-run "${plan.revise}" with feedback, then re-run ${plan.reset.join(", ")} from fresh evidence`,
+              },
+            ],
+          };
+          state = {
+            ...state,
+            nodes: nodesNext,
+            status: "running",
+            updatedAt: now,
+          };
+          writeState(stateFile, state);
+          process.stdout.write(
+            `dagrun: amend — "${plan.revise}" will revise (iteration ${n}); invalidated: ${plan.reset.join(", ")}\n`,
+          );
+        }
+      }
+      const amendedAncestor =
+        boundMeta.action === "amend" && boundMeta.target !== gateNodeId;
+
+      if (amendedAncestor) {
+        // State already rewritten above; fall through to re-run the DAG.
+      } else if (rejectNow !== undefined) {
         // Check maxIterations — at the limit, do not auto-revise (spec: terminal choice).
         if (gateNodeState.iteration >= maxIterations) {
           process.stdout.write(
@@ -1149,7 +1591,7 @@ export async function resumeRun(opts: {
         const n = gateNodeState.iteration + 1;
         writeFileSync(
           join(artifactsDir, `feedback-${n}.md`),
-          opts.rejectComment,
+          rejectNow,
           "utf8",
         );
 
@@ -1166,8 +1608,9 @@ export async function resumeRun(opts: {
                 ...gateNodeState.gateHistory,
                 {
                   decision: "reject",
-                  comment: opts.rejectComment,
+                  comment: rejectNow,
                   timestamp: new Date().toISOString(),
+                  ...boundMeta,
                 },
               ],
             },
@@ -1179,17 +1622,21 @@ export async function resumeRun(opts: {
         process.stdout.write(
           `dagrun: rejected — node "${gateNodeId}" will revise (iteration ${n})\n`,
         );
-      } else if (opts.approve === true) {
+      } else if (approveNow) {
         // Approve: mark done, collect artifacts from disk, continue. A
         // mechanical noPlaceholders violation still fails the node even after
-        // human approval — gated nodes (define/reproduce) always return
-        // awaiting-gate, never 'done', from the executor itself
-        // (sdk-runner.ts), so this approve transition — not runDag's
-        // done-branch — is the only place their noPlaceholders check is ever
-        // reachable. See DECISIONS.md § no-placeholders-gate-approve-wiring.
-        const approvedArtifacts = (gateNode?.produces ?? [])
+        // human approval — gated nodes always return awaiting-gate, never
+        // 'done', from the executor itself (sdk-runner.ts), so this approve
+        // transition — not runDag's done-branch — is the only place a gated
+        // node's noPlaceholders check is ever reachable (no shipped node
+        // declares one today; the wiring is generic). See DECISIONS.md
+        // § no-placeholders-gate-approve-wiring.
+        const approvedArtifacts = [
+          ...(gateNode?.produces ?? []),
+          CHANGES_DIFF_FILE,
+        ]
           .map((f) => join(artifactsDir, f))
-          .filter((p) => existsSync(p));
+          .filter((p, i, all) => existsSync(p) && all.indexOf(p) === i);
         const approvePlaceholderCheck =
           gateNode !== undefined
             ? checkNoPlaceholders(runDir, gateNodeId, gateNode)
@@ -1213,6 +1660,7 @@ export async function resumeRun(opts: {
                 {
                   decision: "approve",
                   timestamp: approveTs,
+                  ...boundMeta,
                 },
               ],
             },
@@ -1332,7 +1780,10 @@ export async function resumeRun(opts: {
         }
 
         if (parsed.decision === "approve") {
-          await resumeRun({ ...opts, approve: true });
+          await resumeRun({
+            ...opts,
+            approve: true,
+          });
           return;
         } else {
           // reject: pass the consensus feedback body as the rejectComment.
@@ -1344,12 +1795,6 @@ export async function resumeRun(opts: {
     } // closes else (gateNode !== undefined)
   }
 
-  // verify (when present in the workflow) now runs fully autonomously after
-  // fix — no human election, no Gate 3. See D1 of the verify-autonomy change
-  // (DECISIONS.md § verify-autonomy-remove-election). It is a required,
-  // blocking node; its own outcomeGate (checked in dag.ts/rerunNode) is what
-  // halts the run on a bad result, not a human decision made here.
-
   // Re-seed siblings into the worktree and export DAGRUNNER_ROOT so session-start.sh
   // can re-apply them at every node session start. resumeRun is a fresh process —
   // DAGRUNNER_ROOT set in a prior startRun does not survive here.
@@ -1357,6 +1802,11 @@ export async function resumeRun(opts: {
     const dagrunnerRoot = new URL("../../", import.meta.url).pathname;
     const destClaude = join(state.worktreePath, ".claude");
     seedWorktreeSiblings(dagrunnerRoot, destClaude);
+    // resumeRun does not re-seed settings.json, so a worktree seeded before the
+    // Java-LSP denylist existed would keep `jdtls: true` — flip just those keys.
+    const flipped = denyPluginsInSeededSettings(join(destClaude, "settings.json"));
+    if (flipped.length > 0)
+      process.stdout.write(`dagrun: disabled Java LSP plugin(s) in this worktree's node settings: ${flipped.join(", ")}\n`);
   }
 
   // Export PR title prefix before executor/SDK query() so the pr node session inherits it.
@@ -1365,12 +1815,17 @@ export async function resumeRun(opts: {
 
   // Re-run the DAG engine with the (possibly updated) state.
   const executor = wrapWithPrScan(
-    (opts.executorFactory ?? makeSDKRunner)(
-      config,
-      runId,
-      runDir,
+    wrapWithChangesDiff(
+      (opts.executorFactory ?? makeSDKRunner)(
+        config,
+        runId,
+        runDir,
+        state.worktreePath,
+        join(homeDir, "store"),
+      ),
       state.worktreePath,
-      join(homeDir, "store"),
+      runDir,
+      state.baseBranch ?? "main",
     ),
     state.worktreePath,
     runDir,
@@ -1378,7 +1833,11 @@ export async function resumeRun(opts: {
   const ctx = makeCtx(runDir);
   const result = await runDag(workflow, executor, state, { ctx, stateFile });
 
-  runPrPostProcess(readState(stateFile), runDir);
+  if (!runPrPostProcess(readState(stateFile), runDir, stateFile).ok) {
+    releaseLock(homeDir);
+    process.stdout.write(`dagrun: run ${runId} failed\n`);
+    process.exit(1);
+  }
 
   if (result.status === "paused") {
     releaseLock(homeDir);
@@ -1388,7 +1847,7 @@ export async function resumeRun(opts: {
     process.stdout.write(
       `dagrun: re-paused at gate — node "${gateNode?.[0] ?? "unknown"}"\n`,
     );
-    process.stdout.write(`dagrun: resume with: dagrun resume ${runId}\n`);
+    announcePause(runId, runDir, stateFile, workflow, config);
   } else {
     releaseLock(homeDir);
     process.stdout.write(`dagrun: run ${runId} ${result.status}\n`);
@@ -1415,12 +1874,23 @@ export async function resumeRun(opts: {
  * Bash tool without the sandbox's proxy in the way.
  *
  * Reads pr-meta.json for the branch and title written by the agent.
- * Writes prUrl back to pr-meta.json on success, pr-error.txt on failure.
+ * Writes prUrl back to pr-meta.json on success, pr-error.txt on push/gh failure.
  * Idempotent — skips if prUrl is already set.
+ *
+ * Fails LOUD when the deliverables themselves are missing/unparseable: the pr
+ * node is marked `failed` (state.json error, pr/pr-error.txt, node.finished
+ * event), the run `failed`, and the caller gets `{ok:false}` and must exit
+ * nonzero — see the four call sites. Push/`gh` failures keep their existing
+ * softer contract (pr-error.txt + message, node stays done): the deliverables
+ * are intact and a manual command is printed; the smokes pin that behaviour.
  */
-function runPrPostProcess(state: RunState, runDir: string): void {
+export function runPrPostProcess(
+  state: RunState,
+  runDir: string,
+  stateFile: string,
+): { ok: true } | { ok: false; error: string } {
   const prNodeState = state.nodes["pr"];
-  if (prNodeState?.status !== "done") return;
+  if (prNodeState?.status !== "done") return { ok: true };
 
   // Primary locations (correct): runs/<id>/pr/body.md and pr-meta.json.
   // Fallback locations (miswrite): agent used $DAGRUN_RUN_DIR instead of
@@ -1436,7 +1906,46 @@ function runPrPostProcess(state: RunState, runDir: string): void {
     : existsSync(join(runDir, "body.md"))
       ? join(runDir, "body.md")
       : "";
-  if (metaPath === "" || bodyPath === "") return;
+
+  // Fail loud (CLAUDE.md): an approved pr gate whose deliverables are missing
+  // or unreadable must NOT look like a finished run. Run 51496-1: the pr node
+  // wrote both files to <worktree>/.dagrun-pr-output/, this function silently
+  // returned, the run reported "done" and nothing was ever pushed.
+  const failPr = (reason: string): { ok: false; error: string } => {
+    const stray = join(state.worktreePath, ".dagrun-pr-output");
+    const error =
+      `pr deliverables not usable: ${reason}. Expected ${join(runDir, "pr", "body.md")} ` +
+      `and ${join(runDir, "pr", "pr-meta.json")} (valid JSON).` +
+      (existsSync(stray)
+        ? ` Found a stray ${stray} in the worktree — the pr node wrote its output there instead of $DAGRUN_ARTIFACTS.`
+        : "") +
+      ` Nothing was pushed and no PR was created. Re-run the pr node: dagrun rerun ${state.runId} pr`;
+    const errorPath = join(runDir, "pr", "pr-error.txt");
+    try {
+      mkdirSync(join(runDir, "pr"), { recursive: true });
+      writeFileSync(errorPath, error + "\n", "utf8");
+    } catch {
+      // the state.json error below is the authoritative record
+    }
+    const now = new Date().toISOString();
+    writeState(stateFile, {
+      ...state,
+      status: "failed",
+      updatedAt: now,
+      nodes: {
+        ...state.nodes,
+        pr: { ...prNodeState, status: "failed", error, endedAt: now },
+      },
+    });
+    process.stderr.write(`dagrun: ${error}\n`);
+    return { ok: false, error };
+  };
+
+  const missing = [
+    ...(bodyPath === "" ? ["body.md"] : []),
+    ...(metaPath === "" ? ["pr-meta.json"] : []),
+  ];
+  if (missing.length > 0) return failPr(`missing ${missing.join(" and ")}`);
 
   let meta: Record<string, unknown>;
   try {
@@ -1444,11 +1953,13 @@ function runPrPostProcess(state: RunState, runDir: string): void {
       string,
       unknown
     >;
-  } catch {
-    return;
+  } catch (e) {
+    return failPr(
+      `${metaPath} is not valid JSON (${e instanceof Error ? e.message : String(e)})`,
+    );
   }
 
-  if (typeof meta["prUrl"] === "string" && meta["prUrl"] !== "") return;
+  if (typeof meta["prUrl"] === "string" && meta["prUrl"] !== "") return { ok: true };
 
   const worktreePath = state.worktreePath;
   const title =
@@ -1462,7 +1973,7 @@ function runPrPostProcess(state: RunState, runDir: string): void {
     const msg = e instanceof Error ? e.message : String(e);
     writeFileSync(errorPath, `git push failed: ${msg}\n`);
     process.stdout.write(`dagrun: git push failed — see ${errorPath}\n`);
-    return;
+    return { ok: true }; // publication failure is surfaced via pr-error.txt (existing contract, smoke-pinned)
   }
 
   // Create the draft PR, targeting the run's base branch (supports hotfix branches).
@@ -1483,6 +1994,7 @@ function runPrPostProcess(state: RunState, runDir: string): void {
       `  Manual: cd "${worktreePath}" && gh pr create --draft --title ${JSON.stringify(title)} --body-file "${bodyPath}" --base ${JSON.stringify(baseBranch)}\n`,
     );
   }
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -1530,8 +2042,8 @@ export function listRuns(
  *
  * Without this, a node's transcript.log/reflections.md/burn.json only ever
  * reflect the LAST attempt — every prior failure's evidence is destroyed by
- * the next rerun. On a node that retries repeatedly (e.g. verify against a
- * flaky external dependency), that's the only record of why earlier attempts
+ * the next rerun. On a node that retries repeatedly (e.g. a node that depends on a
+ * flaky external service), that's the only record of why earlier attempts
  * failed, and it was gone by the time anyone went looking. See
  * DECISIONS.md § rerun-artifact-archiving.
  *
@@ -1624,6 +2136,12 @@ export async function rerunNode(opts: {
   homeDir: string;
   config: DagrunnerConfig;
   executorFactory?: ExecutorFactory;
+  /**
+   * TEST seam (same as resumeRun's): resolve the run against this workflow instead of the
+   * shipped one named by state.workflow — lets tests rerun a node of a tiny custom workflow
+   * (`when` / `optional` siblings) that no shipped workflow has. Real callers never pass it.
+   */
+  workflow?: Workflow;
 }): Promise<void> {
   const { runId, nodeId, homeDir, config } = opts;
   const runDir = join(homeDir, "runs", runId);
@@ -1635,7 +2153,10 @@ export async function rerunNode(opts: {
   }
 
   const state = readState(stateFile);
-  const workflow = workflowFromState(state);
+  // Before ANY side effect: the re-seed below, the attempt archive and the artifact
+  // wipe all assume the adopted worktree still exists (see assertRunWorktreeExists).
+  assertRunWorktreeExists(state, config.DEVHARNESS_SRC);
+  const workflow = opts.workflow ?? workflowFromState(state);
   const node = workflow.nodes.find((n) => n.id === nodeId);
 
   if (node === undefined) {
@@ -1760,10 +2281,14 @@ export async function rerunNode(opts: {
           };
         } else {
           newStatus = "done";
+          // rerun never resumes a session (execCtx has no sessionId) → always a
+          // NEW session: its cumulative cost ADDS to what the node accrued before.
+          const acc = accrueSessionCost(prev, undefined, result);
           updates = {
             status: newStatus,
             artifacts: result.artifacts,
-            cost: result.cost,
+            cost: acc.cost,
+            priorSessionsCost: acc.priorSessionsCost,
             sessionId: result.sessionId,
             endedAt: now,
           };
@@ -1772,11 +2297,13 @@ export async function rerunNode(opts: {
     }
   } else if (result.status === "awaiting-gate") {
     newStatus = "awaiting-gate";
+    const acc = accrueSessionCost(prev, undefined, result);
     updates = {
       status: newStatus,
       iteration: result.iteration,
       sessionId: result.sessionId,
-      cost: result.cost,
+      cost: acc.cost,
+      priorSessionsCost: acc.priorSessionsCost,
       endedAt: now,
     };
   } else {
@@ -1788,16 +2315,41 @@ export async function rerunNode(opts: {
     };
   }
 
-  const updatedState: RunState = {
+  // The node has run now: a "skipped because blocked" marker from the sweep is stale on it.
+  const { skipReason: _staleSkip, ...prevRest } = prev;
+  let updatedState: RunState = {
     ...state,
     updatedAt: now,
     nodes: {
       ...state.nodes,
-      [nodeId]: { ...prev, ...updates },
+      [nodeId]: { ...prevRest, ...updates },
     },
   };
+  // The node may have finished now: whatever the end-of-run sweep skipped ONLY because it
+  // had not (skipReason "blocked-dependency") goes back to pending so `resume` runs it,
+  // instead of ending the run `done` with review/fix/pr still skipped. A node that failed
+  // again keeps them skipped (still accurately blocked). Their leftover artifacts are
+  // archived, like this node's own just above. See DECISIONS.md §
+  // rerun-reenables-blocked-dependents.
+  if (newStatus !== "failed") {
+    const reenabled = reenableBlockedDependents(workflow, updatedState, nodeId);
+    for (const id of reenabled.reset) {
+      archivePriorAttempt(runDir, id, join(runDir, id));
+    }
+    if (reenabled.reset.length > 0) {
+      process.stdout.write(
+        `dagrun: re-enabled ${reenabled.reset.join(", ")} (skipped only because "${nodeId}" had not finished)\n`,
+      );
+    }
+    updatedState = reenabled.state;
+  }
   writeState(stateFile, updatedState);
-  runPrPostProcess(updatedState, runDir);
+  const prPost = runPrPostProcess(updatedState, runDir, stateFile);
+  if (!prPost.ok) {
+    // rerunNode holds no run lock (debug tool) — just report and exit nonzero.
+    process.stdout.write(`dagrun: node "${nodeId}" rerun → failed\n`);
+    process.exit(1);
+  }
 
   process.stdout.write(`dagrun: node "${nodeId}" rerun → ${newStatus}\n`);
   if (newStatus === "done" || newStatus === "awaiting-gate") {
@@ -1813,10 +2365,15 @@ export async function rerunNode(opts: {
  * Create a scaffold run for a single DAG node in isolation.
  *
  * This lets a developer test one node without running the full pipeline:
- *   1. Creates a fresh run dir + git worktree seeded from a feature branch
+ *   1. Adopts an existing worktree (like startRun — never creates one) and
+ *      creates a fresh run dir for it
  *   2. Writes state.json with all transitive deps marked "done", target "pending"
  *   3. Optionally copies mock artifacts into dep dirs
  *   4. Prints the run ID and the `dagrun rerun` command to execute the node
+ *
+ * The scaffold run is written `paused`, which is non-terminal: it keeps the
+ * worktree claimed (a later `dagrun start` there is refused) until it is
+ * `dagrun abort`ed.
  *
  * Lock discipline: scaffoldRun does NOT acquire the run lock — like rerunNode,
  * it is a debug/developer tool. The node is run via `dagrun rerun` which also
@@ -1826,12 +2383,12 @@ export async function scaffoldRun(opts: {
   nodeId: string;
   homeDir: string;
   config: DagrunnerConfig;
-  /** Feature branch name to checkout from DEVHARNESS_SRC (creates a new scaffold branch starting there) */
-  branch: string;
+  /** The existing worktree to adopt (explicit; the CLI resolves --worktree / git toplevel of cwd). */
+  worktreePath: string;
   /** Optional dir whose contents are cpSync'd into runDir (structure: <mocksDir>/<depNodeId>/<file>) */
   mocksDir?: string;
 }): Promise<void> {
-  const { nodeId, homeDir, config, branch, mocksDir } = opts;
+  const { nodeId, homeDir, config, mocksDir } = opts;
 
   // Step 1: Load workflow and find the target node. Fail loud if not found.
   const workflow = featureWorkflow;
@@ -1845,38 +2402,21 @@ export async function scaffoldRun(opts: {
     process.exit(1);
   }
 
-  // Step 2: Validate branch exists in DEVHARNESS_SRC before any side effects.
-  try {
-    execSync(
-      `git -C "${config.DEVHARNESS_SRC}" rev-parse --verify --quiet "${branch}"`,
-      { stdio: "pipe" },
-    );
-  } catch {
-    process.stderr.write(
-      `dagrun scaffold: branch '${branch}' not found in DEVHARNESS_SRC — fetch it first\n`,
-    );
-    process.exit(1);
-  }
+  // Step 2: Adopt the worktree before any side effect. A scaffold has no plan,
+  // hence no base_branch frontmatter: the base is "main" (state.baseBranch absent).
+  const { worktreePath, branch: branchName } = validateAdoptedWorktree({
+    worktreePath: opts.worktreePath,
+    devharnessSrc: config.DEVHARNESS_SRC,
+    baseBranch: "main",
+    homeDir,
+  });
 
-  // Step 3: Generate run ID and paths. Capture timestamp ONCE so runId, branch
-  // name, and state.json all agree on the same timestamp.
-  const ts = Date.now();
-  const runId = `scaffold-${nodeId}-${ts}`;
-  const branchName = `scaffold/${nodeId}-${ts}`;
+  // Step 3: Generate run ID and paths.
+  const runId = `scaffold-${nodeId}-${Date.now()}`;
   const runDir = join(homeDir, "runs", runId);
-  const worktreePath = join(homeDir, "worktrees", runId);
 
   // Step 4: Create run dir.
   mkdirSync(runDir, { recursive: true });
-
-  // Step 5: Create worktree from the feature branch start-point.
-  execSync(
-    `git worktree add "${worktreePath}" -b "${branchName}" "${branch}"`,
-    {
-      cwd: config.DEVHARNESS_SRC,
-      stdio: "inherit",
-    },
-  );
 
   // Step 6: Seed .claude/ into the worktree (same pattern as rerunNode).
   const dagrunnerRoot = new URL("../../", import.meta.url).pathname;
@@ -1958,6 +2498,7 @@ export async function scaffoldRun(opts: {
     status: "paused",
     worktreePath,
     branch: branchName,
+    worktreeOrigin: "adopted",
     sourcePlanPath: "",
     nodes,
   };
@@ -1994,7 +2535,7 @@ export async function scaffoldRun(opts: {
 
   process.stdout.write(
     `dagrun: scaffold run created: ${runId}\n` +
-      `  Worktree: ${worktreePath}  (branch: ${branchName} from ${branch})\n` +
+      `  Worktree: ${worktreePath}  (adopted, branch: ${branchName})\n` +
       `  Artifacts dir: ${runDir}\n` +
       `\n` +
       `Dep mock locations (place files here before rerunning):\n` +

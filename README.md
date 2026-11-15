@@ -3,16 +3,18 @@
 A thin TypeScript binary (`dagrun`) that orchestrates a DAG of Claude Code (Agent SDK) sessions
 across isolated git worktrees, with checkpoint-and-exit human gates. It owns only what has no
 native Claude Code primitive that survives across separate processes/worktrees — the DAG
-executor, conditional skip, gate checkpoints, worktree lifecycle, per-run artifacts — and reuses
+executor, conditional skip, gate checkpoints, worktree adoption, per-run artifacts — and reuses
 Claude Code for everything else. See `CLAUDE.md` for the reuse law and engineering discipline.
 
 ## What it does
 
-Walks a feature or bugfix change through a fixed, gated pipeline (e.g.
-`expand → implement → review → fix → verify → pr`), pausing at human gates and checkpointing to
-disk so it survives process exit. Each node is a Claude Code session spawned via the Agent SDK in
-its own git worktree. Three human-driven sibling commands (`ci-babysit`, `pr-triage`,
-`/seed-data`) run outside the pipeline against a live PR/cluster.
+Walks a feature or bugfix change — starting from an approved plan authored upstream, which is the
+guide — through a fixed, gated pipeline (`implement → review → fix → pr`; `implement` proves RED
+first), pausing at the fix gate and the pre-PR gate and checkpointing to disk so it survives
+process exit. Each node is a Claude Code session spawned via the Agent SDK in
+the git worktree the run was started in (`dagrun start` adopts an existing worktree — it never
+creates one; see the master doc §4 "Worktree adoption"). Human-driven sibling commands (`ci-babysit`, `/seed-data`, `/manual-smoke`) run outside the pipeline against a
+live PR/cluster. (`pr-triage` was one until v0.1.87; it is now a user-level skill, `~/.claude/skills/pr-triage`.)
 
 ## Repo layout
 
@@ -41,10 +43,16 @@ npm run dagrun -- <command>   # run from source (tsx), or use the built dist/cli
 ```
 
 `npm run verify-baseline` (`npm ci && typecheck && unit tests && smoke:mock`) is the standing
-gate — run it before any commit. `npm run smoke:live` runs the real 8-step SDK pipeline
+gate — run it before any commit. `npm run smoke:live` runs the real 6-step SDK pipeline
 (requires `ANTHROPIC_API_KEY`, ~35 min) — run by hand when `payload/commands/*.md` changes.
 
 Machine setup (XDG home, `DEVHARNESS_SRC`, secrets) is documented in `CLAUDE.md`.
+
+The default home is `~/.local/share/camunda/dagrunner` (override: `DAGRUNNER_HOME` or `--home`). Upgrading
+from v0.1.84 or earlier, where it was `~/.local/share/dagrunner`? `dagrun` refuses to run until you move it
+once: `node scripts/move-home.mjs --dry-run` previews, `node scripts/move-home.mjs` does it. If legacy
+worktrees remain under the old `worktrees/` the script refuses; clear them first with
+`DAGRUNNER_HOME=~/.local/share/dagrunner dagrun cleanup --all` (the plain command refuses until the home is moved).
 
 ## How self-changes get made
 

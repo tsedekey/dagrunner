@@ -1,7 +1,7 @@
 /**
  * run-engine.test.ts — unit tests for pure exports only.
  *
- * Scope: pure exported helpers (makeRunId, makeBranchName, makePrTitlePrefix).
+ * Scope: pure exported helpers (makeRunId, makePrTitlePrefix).
  * NOT orchestration — startRun, resumeRun, runDag, and their collaborators are
  * Tier C and owned by smoke. This file tests only the extracted pure functions
  * that have no orchestration dependencies. See DECISIONS.md § unit-test-backfill-2b.
@@ -25,20 +25,23 @@ import { join } from "node:path";
 
 import {
   makeRunId,
-  makeBranchName,
   makePrTitlePrefix,
   findWorktreeScratch,
   worktreeArtifactPatterns,
   agentDecidable,
   hasConcerns,
+  nightConcernsFlagged,
   seedWorktreeSiblings,
   parseGateDecision,
   parseFrontmatter,
   severityForcesPause,
   archivePriorAttempt,
   archiveInterruptedNodeArtifacts,
+  runPrPostProcess,
 } from "./run-engine.js";
 import type { RunState, NodeState } from "../core/state.js";
+import { readState, writeState } from "../core/state.js";
+import { bugfixWorkflow } from "../workflow/bugfix-workflow.js";
 
 // ---------------------------------------------------------------------------
 // Minimal RunState/NodeState fixture helper (archiveInterruptedNodeArtifacts
@@ -108,41 +111,6 @@ test("makeRunId: skips entries that don't match {issueNum}-N pattern", () => {
   mkdirSync(join(runsDir, "53856-1"), { recursive: true });
   const result = makeRunId("/plans/53856-my-plan.md", runsDir);
   assert.equal(result, "53856-2");
-});
-
-// ---------------------------------------------------------------------------
-// makeBranchName
-// ---------------------------------------------------------------------------
-
-test("makeBranchName: standard feature plan → feat/{issueNum}-{slug}", () => {
-  const result = makeBranchName(
-    "feature",
-    "/plans/53856-single-job-priority-update-grpc-plan.md",
-  );
-  assert.equal(result, "feat/53856-single-job-priority-update-grpc");
-});
-
-test("makeBranchName: fix workflow → fix/{issueNum}-{slug}", () => {
-  const result = makeBranchName("fix", "/plans/12345-add-retry-logic-plan.md");
-  assert.equal(result, "fix/12345-add-retry-logic");
-});
-
-test("makeBranchName: no leading digits in filename — falls back gracefully (no issue prefix)", () => {
-  const result = makeBranchName(
-    "feature",
-    "/plans/single-job-priority-update-grpc-plan.md",
-  );
-  // No leading digits → issueNum is "0", slug is the full filename sans extension
-  assert.ok(result.startsWith("feat/"), `expected feat/ prefix: ${result}`);
-  assert.ok(
-    result.includes("single-job-priority-update-grpc"),
-    `expected slug in result: ${result}`,
-  );
-});
-
-test("makeBranchName: unknown workflow type falls back to feat/", () => {
-  const result = makeBranchName("unknown-type", "/plans/99-test-plan.md");
-  assert.ok(result.startsWith("feat/"), `expected feat/ prefix: ${result}`);
 });
 
 // ---------------------------------------------------------------------------
@@ -256,18 +224,12 @@ test("findWorktreeScratch: existing basename tests still pass after signature ch
 
 test("worktreeArtifactPatterns: includes all featureWorkflow produces filenames", () => {
   const patterns = worktreeArtifactPatterns();
-  // All declared produces across featureWorkflow nodes, plus verify-plan.md —
-  // which is no longer in verify's `produces` (run 56962-1 forensics,
-  // DECISIONS.md § verify-run-56962-1-forensics: it's conditional, written on
-  // the normal path but explicitly skipped on verify.md's documented
-  // short-circuit paths) but is still expected here via the SECONDARY scratch
-  // pattern list, since it can still legitimately land in the worktree.
+  // All declared produces across featureWorkflow nodes.
   const expected = [
-    "guide.md",
     "summary.md",
+    "red-evidence.md",
+    "red.json",
     "findings.json",
-    "verify-plan.md",
-    "verify-report.json",
     "body.md",
   ];
   for (const name of expected) {
@@ -275,6 +237,17 @@ test("worktreeArtifactPatterns: includes all featureWorkflow produces filenames"
       patterns.includes(name),
       `expected pattern "${name}" in worktreeArtifactPatterns()`,
     );
+  }
+});
+
+test("worktreeArtifactPatterns: no guide.md pattern remains (define/reproduce were removed — the plan is the guide)", () => {
+  assert.ok(!worktreeArtifactPatterns().includes("guide.md"));
+});
+
+test("worktreeArtifactPatterns: no verify-node artifacts remain (the node was removed)", () => {
+  const patterns = worktreeArtifactPatterns();
+  for (const gone of ["verify-plan.md", "verify-report.json", "demo.md"]) {
+    assert.ok(!patterns.includes(gone), `"${gone}" must not be a scratch pattern any more`);
   }
 });
 
@@ -306,20 +279,20 @@ test("worktreeArtifactPatterns: no duplicates", () => {
 // agentDecidable
 // ---------------------------------------------------------------------------
 
-test("agentDecidable: define is agent-decidable (Gate 1)", () => {
-  assert.equal(agentDecidable("define"), true);
-});
-
-test("agentDecidable: fix is agent-decidable (Gate 2)", () => {
+test("agentDecidable: fix (the first gate) is agent-decidable", () => {
   assert.equal(agentDecidable("fix"), true);
 });
 
-test("agentDecidable: verify is NOT agent-decidable", () => {
+test("agentDecidable: unknown / non-gate / removed node ids are human-only", () => {
   assert.equal(agentDecidable("verify"), false);
+  assert.equal(agentDecidable("implement"), false);
+  // define/reproduce were removed (DECISIONS.md § plan-is-the-guide): a leftover id is NOT decidable.
+  assert.equal(agentDecidable("define"), false);
+  assert.equal(agentDecidable("reproduce"), false);
 });
 
-test("agentDecidable: pr is NOT agent-decidable", () => {
-  assert.equal(agentDecidable("pr"), false);
+test("agentDecidable: pr (pre-PR gate, both feature and bugfix workflows) is night-decidable — preserves prior unattended behavior", () => {
+  assert.equal(agentDecidable("pr"), true);
 });
 
 test("agentDecidable: unknown node is NOT agent-decidable (safe default)", () => {
@@ -347,14 +320,14 @@ test("hasConcerns: # heading present → true", () => {
 test("hasConcerns: heading embedded in larger doc → true", () => {
   assert.equal(
     hasConcerns(
-      "# Guide\n\nPlan looks good.\n\n## Concerns / plan challenges\n- Over-specified.",
+      "# Summary\n\nPlan looks good.\n\n## Concerns / plan challenges\n- Over-specified.",
     ),
     true,
   );
 });
 
 test("hasConcerns: clean content → false", () => {
-  assert.equal(hasConcerns("# Guide\nClean plan with no concerns."), false);
+  assert.equal(hasConcerns("# Summary\nClean plan with no concerns."), false);
 });
 
 test("hasConcerns: empty string → false", () => {
@@ -363,9 +336,77 @@ test("hasConcerns: empty string → false", () => {
 
 test("hasConcerns: mock artifact content (no heading) → false", () => {
   assert.equal(
-    hasConcerns("# Mock artifact: guide.md\nGenerated by mock executor."),
+    hasConcerns("# Mock artifact: summary.md\nGenerated by mock executor."),
     false,
   );
+});
+
+// ---------------------------------------------------------------------------
+// nightConcernsFlagged — --night's "no concerns flagged" test for a gate.
+// implement now raises "Concerns / plan challenges" in ITS summary.md (the plan
+// is the guide — DECISIONS.md § plan-is-the-guide), while the first gate is
+// fix, so the scan must cover the gate's DONE ancestors, not just the gate's
+// own artifact.
+// ---------------------------------------------------------------------------
+
+function nightFixture(files: Record<string, string>, statuses: Record<string, NodeState["status"]>) {
+  const runDir = mkdtempSync(join(tmpdir(), "dr-night-concerns-"));
+  for (const [rel, content] of Object.entries(files)) {
+    mkdirSync(join(runDir, rel.split("/")[0] as string), { recursive: true });
+    writeFileSync(join(runDir, rel), content, "utf8");
+  }
+  const nodes: Record<string, NodeState> = {};
+  for (const [id, st] of Object.entries(statuses)) nodes[id] = nodeState(st);
+  return { runDir, state: runState(nodes) };
+}
+
+const CLEAN = "# Summary\nAll good.\n";
+const CONCERN = "# Summary\n\n## Concerns / plan challenges\n- the root cause differs from the plan\n";
+const DONE_UPSTREAM = { implement: "done", review: "done", fix: "awaiting-gate", pr: "pending" } as const;
+
+test("nightConcernsFlagged: clean gate artifact and clean ancestors -> no concerns", () => {
+  const { runDir, state } = nightFixture(
+    { "implement/summary.md": CLEAN, "review/findings.json": "{}", "fix/summary.md": CLEAN },
+    DONE_UPSTREAM,
+  );
+  assert.equal(nightConcernsFlagged(runDir, state, bugfixWorkflow, "fix"), false);
+});
+
+test("nightConcernsFlagged: a concern raised by implement pauses the fix gate even though fix/summary.md is clean", () => {
+  const { runDir, state } = nightFixture(
+    { "implement/summary.md": CONCERN, "review/findings.json": "{}", "fix/summary.md": CLEAN },
+    DONE_UPSTREAM,
+  );
+  assert.equal(nightConcernsFlagged(runDir, state, bugfixWorkflow, "fix"), true);
+});
+
+test("nightConcernsFlagged: a concern in the gate's own artifact is flagged", () => {
+  const { runDir, state } = nightFixture(
+    { "implement/summary.md": CLEAN, "review/findings.json": "{}", "fix/summary.md": CONCERN },
+    DONE_UPSTREAM,
+  );
+  assert.equal(nightConcernsFlagged(runDir, state, bugfixWorkflow, "fix"), true);
+});
+
+test("nightConcernsFlagged: missing gate artifact -> safe default (pause)", () => {
+  const { runDir, state } = nightFixture(
+    { "implement/summary.md": CLEAN, "review/findings.json": "{}" },
+    DONE_UPSTREAM,
+  );
+  assert.equal(nightConcernsFlagged(runDir, state, bugfixWorkflow, "fix"), true);
+});
+
+test("nightConcernsFlagged: a done ancestor whose primary artifact is missing -> safe default (pause)", () => {
+  const { runDir, state } = nightFixture(
+    { "review/findings.json": "{}", "fix/summary.md": CLEAN },
+    DONE_UPSTREAM,
+  );
+  assert.equal(nightConcernsFlagged(runDir, state, bugfixWorkflow, "fix"), true);
+});
+
+test("nightConcernsFlagged: a gate id that is not in the workflow (leftover define/reproduce) -> pause, never a crash", () => {
+  const { runDir, state } = nightFixture({}, { reproduce: "awaiting-gate", implement: "pending" });
+  assert.equal(nightConcernsFlagged(runDir, state, bugfixWorkflow, "reproduce"), true);
 });
 
 // ---------------------------------------------------------------------------
@@ -386,7 +427,6 @@ test("seedWorktreeSiblings: sibling .md files (including manual-smoke, D7) seede
 
   for (const name of [
     "ci-babysit.md",
-    "pr-triage.md",
     "seed-data.md",
     "manual-smoke.md",
   ]) {
@@ -403,7 +443,7 @@ test("seedWorktreeSiblings: sibling script subdirs (including manual-smoke, D7) 
 
   seedWorktreeSiblings(dagrunnerRoot, destClaude);
 
-  for (const name of ["ci-babysit", "pr-triage", "seed-data", "manual-smoke"]) {
+  for (const name of ["ci-babysit", "seed-data", "manual-smoke"]) {
     assert.ok(
       existsSync(join(destClaude, "scripts", name)),
       `expected sibling scripts/${name}/ to exist after seeding`,
@@ -411,17 +451,21 @@ test("seedWorktreeSiblings: sibling script subdirs (including manual-smoke, D7) 
   }
 });
 
-test("seedWorktreeSiblings: pr-triage scripts include gh-comment-capabilities.md (non-.sh file)", () => {
+test("seedWorktreeSiblings: script folders are copied recursively and not filtered by extension (a non-.sh file)", () => {
+  // pr-triage's gh-comment-capabilities.md used to prove this; pr-triage left dagrunner in v0.1.87, so the
+  // payload is a throwaway one here.
+  const root = mkdtempSync(join(tmpdir(), "dr-seed-root-"));
+  mkdirSync(join(root, "payload", "siblings", "commands"), { recursive: true });
+  mkdirSync(join(root, "payload", "siblings", "scripts", "demo"), { recursive: true });
+  writeFileSync(join(root, "payload", "siblings", "commands", "demo.md"), "demo\n");
+  writeFileSync(join(root, "payload", "siblings", "scripts", "demo", "notes.md"), "notes\n");
   const destClaude = mkdtempSync(join(tmpdir(), "dr-seed-sib-md-"));
-  mkdirSync(join(destClaude, "commands"), { recursive: true });
 
-  seedWorktreeSiblings(dagrunnerRoot, destClaude);
+  seedWorktreeSiblings(root, destClaude);
 
   assert.ok(
-    existsSync(
-      join(destClaude, "scripts", "pr-triage", "gh-comment-capabilities.md"),
-    ),
-    "expected gh-comment-capabilities.md to be included (recursive copy must not filter by extension)",
+    existsSync(join(destClaude, "scripts", "demo", "notes.md")),
+    "expected notes.md to be included (recursive copy must not filter by extension)",
   );
 });
 
@@ -440,6 +484,13 @@ test("seedWorktreeSiblings: throws if payload/siblings/commands/ is missing", ()
 // ---------------------------------------------------------------------------
 // parseGateDecision
 // ---------------------------------------------------------------------------
+
+test("parseGateDecision: a stray legacy `run-next:` line is ignored (the field no longer exists)", () => {
+  assert.deepEqual(parseGateDecision("decision: approve\nrun-next: yes\n"), {
+    decision: "approve",
+    body: "",
+  });
+});
 
 test("parseGateDecision: approve with no body → {decision:'approve', body:''}", () => {
   const result = parseGateDecision("decision: approve\n");
@@ -606,18 +657,6 @@ test("severityForcesPause: case-insensitive — 'BLOCKER' → true", () => {
   assert.equal(severityForcesPause("BLOCKER"), true);
 });
 
-// ---------------------------------------------------------------------------
-// makeBranchName: bugfix workflow
-// ---------------------------------------------------------------------------
-
-test("makeBranchName: bugfix workflow → fix/{issueNum}-{slug}", () => {
-  const result = makeBranchName(
-    "bugfix",
-    "/plans/12345-null-pointer-in-job-activation-fix-plan.md",
-  );
-  assert.equal(result, "fix/12345-null-pointer-in-job-activation");
-});
-
 test("makePrTitlePrefix: bugfix → 'fix:'", () => {
   assert.equal(makePrTitlePrefix("bugfix"), "fix:");
 });
@@ -628,34 +667,34 @@ test("makePrTitlePrefix: bugfix → 'fix:'", () => {
 
 test("archivePriorAttempt: no-op when artifactsDir does not exist", () => {
   const runDir = mkdtempSync(join(tmpdir(), "dr-archive-"));
-  const artifactsDir = join(runDir, "verify");
+  const artifactsDir = join(runDir, "fix");
 
-  archivePriorAttempt(runDir, "verify", artifactsDir);
+  archivePriorAttempt(runDir, "fix", artifactsDir);
 
-  assert.equal(existsSync(join(runDir, "verify-attempts")), false);
+  assert.equal(existsSync(join(runDir, "fix-attempts")), false);
 });
 
 test("archivePriorAttempt: no-op when artifactsDir exists but is empty", () => {
   const runDir = mkdtempSync(join(tmpdir(), "dr-archive-"));
-  const artifactsDir = join(runDir, "verify");
+  const artifactsDir = join(runDir, "fix");
   mkdirSync(artifactsDir);
 
-  archivePriorAttempt(runDir, "verify", artifactsDir);
+  archivePriorAttempt(runDir, "fix", artifactsDir);
 
-  assert.equal(existsSync(join(runDir, "verify-attempts")), false);
+  assert.equal(existsSync(join(runDir, "fix-attempts")), false);
   assert.equal(existsSync(artifactsDir), true); // left untouched, not renamed away
 });
 
 test("archivePriorAttempt: first archive lands at attempt-1 with content preserved", () => {
   const runDir = mkdtempSync(join(tmpdir(), "dr-archive-"));
-  const artifactsDir = join(runDir, "verify");
+  const artifactsDir = join(runDir, "fix");
   mkdirSync(artifactsDir);
   writeFileSync(join(artifactsDir, "transcript.log"), "attempt one log");
   writeFileSync(join(artifactsDir, "reflections.md"), "ERROR_INFRA: no docker");
 
-  archivePriorAttempt(runDir, "verify", artifactsDir);
+  archivePriorAttempt(runDir, "fix", artifactsDir);
 
-  const dest = join(runDir, "verify-attempts", "attempt-1");
+  const dest = join(runDir, "fix-attempts", "attempt-1");
   assert.equal(
     readFileSync(join(dest, "transcript.log"), "utf8"),
     "attempt one log",
@@ -668,9 +707,9 @@ test("archivePriorAttempt: first archive lands at attempt-1 with content preserv
   assert.equal(existsSync(artifactsDir), false);
 });
 
-test("archivePriorAttempt: sequential numbering across repeated reruns (mirrors run 54177-1's 7 verify attempts)", () => {
+test("archivePriorAttempt: sequential numbering across repeated reruns (a node retried several times)", () => {
   const runDir = mkdtempSync(join(tmpdir(), "dr-archive-"));
-  const nodeId = "verify";
+  const nodeId = "fix";
   const artifactsDir = join(runDir, nodeId);
 
   // Simulate 3 prior attempts, each archived then a fresh artifactsDir recreated
@@ -693,17 +732,17 @@ test("archivePriorAttempt: sequential numbering across repeated reruns (mirrors 
 test("archivePriorAttempt: different node ids get independent attempt sequences", () => {
   const runDir = mkdtempSync(join(tmpdir(), "dr-archive-"));
 
-  const verifyDir = join(runDir, "verify");
-  mkdirSync(verifyDir);
-  writeFileSync(join(verifyDir, "burn.json"), "verify attempt");
-  archivePriorAttempt(runDir, "verify", verifyDir);
+  const fixDir = join(runDir, "fix");
+  mkdirSync(fixDir);
+  writeFileSync(join(fixDir, "burn.json"), "fix attempt");
+  archivePriorAttempt(runDir, "fix", fixDir);
 
   const reviewDir = join(runDir, "review");
   mkdirSync(reviewDir);
   writeFileSync(join(reviewDir, "burn.json"), "review attempt");
   archivePriorAttempt(runDir, "review", reviewDir);
 
-  assert.equal(existsSync(join(runDir, "verify-attempts", "attempt-1")), true);
+  assert.equal(existsSync(join(runDir, "fix-attempts", "attempt-1")), true);
   assert.equal(existsSync(join(runDir, "review-attempts", "attempt-1")), true);
 });
 
@@ -727,12 +766,12 @@ test("archiveInterruptedNodeArtifacts: archives and clears a node reset from int
   );
 
   const stateBefore = runState({
-    reproduce: nodeState("done"),
     implement: nodeState("failed"),
+    review: nodeState("pending"),
   });
   const stateAfter = runState({
-    reproduce: nodeState("done"),
     implement: nodeState("pending"),
+    review: nodeState("pending"),
   });
 
   archiveInterruptedNodeArtifacts(runDir, stateBefore, stateAfter);
@@ -799,4 +838,111 @@ test("archiveInterruptedNodeArtifacts: no-op when the reset node has no prior ar
     true,
     "a clean artifacts dir must still exist for the retry to write into",
   );
+});
+
+
+// ---------------------------------------------------------------------------
+// runPrPostProcess — missing/unparseable pr deliverables must FAIL the node
+// (run 51496-1: the pr node wrote body.md/pr-meta.json into the worktree, the
+// post-process silently returned, the run reported "done", nothing was pushed).
+// ---------------------------------------------------------------------------
+
+function prRun(opts: { prStatus?: NodeState["status"]; withPrNode?: boolean } = {}): {
+  runDir: string;
+  worktree: string;
+  stateFile: string;
+} {
+  const root = mkdtempSync(join(tmpdir(), "dr-prpp-"));
+  const runDir = join(root, "run");
+  const worktree = join(root, "wt");
+  mkdirSync(join(runDir, "pr"), { recursive: true });
+  mkdirSync(worktree, { recursive: true });
+  const state: RunState = {
+    runId: "r1",
+    workflow: "bugfix",
+    createdAt: "T",
+    updatedAt: "T",
+    status: "running",
+    worktreePath: worktree,
+    branch: "b",
+    sourcePlanPath: "/p",
+    nodes:
+      opts.withPrNode === false
+        ? { fix: nodeState("done") }
+        : { fix: nodeState("done"), pr: nodeState(opts.prStatus ?? "done") },
+  };
+  const stateFile = join(runDir, "state.json");
+  writeState(stateFile, state);
+  return { runDir, worktree, stateFile };
+}
+
+function postProcess(r: { runDir: string; stateFile: string }) {
+  return runPrPostProcess(readState(r.stateFile), r.runDir, r.stateFile);
+}
+
+test("runPrPostProcess: missing body.md fails the pr node and the run, naming expected paths", () => {
+  const r = prRun();
+  writeFileSync(join(r.runDir, "pr", "pr-meta.json"), JSON.stringify({ title: "t", prUrl: "http://x/1" }));
+  const res = postProcess(r);
+  assert.equal(res.ok, false);
+  const after = readState(r.stateFile);
+  assert.equal(after.nodes["pr"]?.status, "failed");
+  assert.equal(after.status, "failed");
+  const err = after.nodes["pr"]?.error ?? "";
+  assert.match(err, /body\.md/);
+  assert.ok(err.includes(join(r.runDir, "pr")), "error names the expected directory");
+  assert.ok(existsSync(join(r.runDir, "pr", "pr-error.txt")));
+});
+
+test("runPrPostProcess: missing pr-meta.json fails loud", () => {
+  const r = prRun();
+  writeFileSync(join(r.runDir, "pr", "body.md"), "body");
+  const res = postProcess(r);
+  assert.equal(res.ok, false);
+  assert.match(readState(r.stateFile).nodes["pr"]?.error ?? "", /pr-meta\.json/);
+  assert.equal(readState(r.stateFile).status, "failed");
+});
+
+test("runPrPostProcess: unparseable pr-meta.json fails loud with the parse error", () => {
+  const r = prRun();
+  writeFileSync(join(r.runDir, "pr", "body.md"), "body");
+  writeFileSync(join(r.runDir, "pr", "pr-meta.json"), "{ not json");
+  const res = postProcess(r);
+  assert.equal(res.ok, false);
+  assert.match(readState(r.stateFile).nodes["pr"]?.error ?? "", /not valid JSON/);
+  assert.equal(readState(r.stateFile).nodes["pr"]?.status, "failed");
+});
+
+test("runPrPostProcess: deliverables only in <worktree>/.dagrun-pr-output/ fail with a hint naming that dir", () => {
+  const r = prRun();
+  mkdirSync(join(r.worktree, ".dagrun-pr-output"), { recursive: true });
+  writeFileSync(join(r.worktree, ".dagrun-pr-output", "body.md"), "body");
+  writeFileSync(join(r.worktree, ".dagrun-pr-output", "pr-meta.json"), "{}");
+  const res = postProcess(r);
+  assert.equal(res.ok, false);
+  const err = readState(r.stateFile).nodes["pr"]?.error ?? "";
+  assert.ok(err.includes(join(r.worktree, ".dagrun-pr-output")), `hint missing: ${err}`);
+  assert.match(err, /dagrun rerun r1 pr/);
+});
+
+test("runPrPostProcess: legitimate skips are unchanged (prUrl already set; pr not done; no pr node)", () => {
+  const withUrl = prRun();
+  writeFileSync(join(withUrl.runDir, "pr", "body.md"), "body");
+  writeFileSync(join(withUrl.runDir, "pr", "pr-meta.json"), JSON.stringify({ title: "t", prUrl: "http://x/1" }));
+  assert.equal(postProcess(withUrl).ok, true);
+  assert.equal(readState(withUrl.stateFile).nodes["pr"]?.status, "done");
+
+  const awaiting = prRun({ prStatus: "awaiting-gate" }); // no files at all: pr not done yet
+  assert.equal(postProcess(awaiting).ok, true);
+  assert.equal(readState(awaiting.stateFile).nodes["pr"]?.status, "awaiting-gate");
+
+  const noPr = prRun({ withPrNode: false });
+  assert.equal(postProcess(noPr).ok, true);
+});
+
+test("runPrPostProcess: miswrite fallback in the run dir root still works (unchanged)", () => {
+  const r = prRun();
+  writeFileSync(join(r.runDir, "body.md"), "body");
+  writeFileSync(join(r.runDir, "pr-meta.json"), JSON.stringify({ title: "t", prUrl: "http://x/2" }));
+  assert.equal(postProcess(r).ok, true);
 });

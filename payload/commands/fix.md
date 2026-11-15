@@ -1,33 +1,33 @@
 You are running the **fix node** of a dagrunner pipeline. Your job is to apply targeted code fixes for high-confidence review findings, self-verify the result, and write a summary artifact.
 
-> **⚠️ Do not try to print or discover the literal value of any `$DAGRUN_*` variable** (e.g. via
-> `echo`, `printenv`, `env`, or `node -e ...process.env`) — this sandbox's Bash tool blocks bare
-> variable-expansion/introspection commands outright, before any approval prompt; and even where
-> it doesn't, printing env vars requires human approval that never arrives in this unattended
-> session. Using a `$DAGRUN_*` variable inline inside a real command works fine — the shell expands
-> it as part of that command's own side effect:
+> **Run environment.** The block directly below gives the **literal absolute** `artifactsDir`,
+> `runDir`, `worktree` and `runId` for this session. Wherever this document writes `<artifactsDir>`,
+> `<runDir>`, `<worktree>` or `<runId>`, substitute those literal values — type the real path, never a
+> shell variable: the sandbox rejects Bash commands that contain a variable expansion
+> (`simple_expansion`), which cost earlier runs dozens of denied calls.
 >
-> - **Read** a `$DAGRUN_ARTIFACTS`-relative file via `cat` in Bash (e.g.
->   `cat "$DAGRUN_ARTIFACTS/../review/findings.json"`) — not the Read tool, which needs a literal
->   path you don't have.
-> - **Write** via a heredoc (`cat > "$DAGRUN_ARTIFACTS/x.md" << 'EOF' ... EOF`) — not the Write
->   tool, for the same reason.
-> - If you ever genuinely need the literal path, derive it with `cd "$DAGRUN_ARTIFACTS" && pwd` —
->   a real command, not a bare print.
+> - **Read** upstream artifacts at `<runDir>/<node>/<file>` with the Read tool (or `cat` of the literal path).
+> - **Write** your artifacts to `<artifactsDir>/<file>` with the Write tool using that exact absolute
+>   path. `runDir` is read-only.
+> - Never print or discover environment variables (`echo`, `printenv`, `env`).
+
+Run environment (engine-provided):
+
+$ARGUMENTS
 
 ---
 
 ## Step 1 — Read findings
 
-Read the review artifact via `cat` (see the note above — do not use the Read tool here):
+Read the review artifact (Read tool at `<runDir>/review/findings.json`, or `cat`):
 
 ```bash
-cat "$DAGRUN_ARTIFACTS/../review/findings.json"
+cat "<runDir>/review/findings.json"
 ```
 
 Filter to the **actionable findings**: those with `confidence: "high"` AND `severity` of `"blocker"` or `"major"`.
 
-If there are no actionable findings (the list is empty after filtering), write a summary at `$DAGRUN_ARTIFACTS/summary.md` stating "No high-confidence blocker/major findings to fix." and exit. The gate will still pause for human review.
+If there are no actionable findings (the list is empty after filtering), write a summary at `<artifactsDir>/summary.md` stating "No high-confidence blocker/major findings to fix." and exit. The gate will still pause for human review.
 
 ---
 
@@ -80,11 +80,11 @@ For each actionable finding in order:
 
 ### Step 3.0 — Read this node's own round history (before doing anything else)
 
-`$DAGRUN_ARTIFACTS` survives across gate revise-self iterations (only `dagrun rerun` wipes it —
+`<artifactsDir>` survives across gate revise-self iterations (only `dagrun rerun` wipes it —
 this session resumes with the same artifacts dir every round). Check for a prior history:
 
 ```bash
-cat "$DAGRUN_ARTIFACTS/fix-history.log" 2>/dev/null
+cat "<artifactsDir>/fix-history.log" 2>/dev/null
 ```
 
 If it exists, this tells you which round you're on (one line per prior round) and how many
@@ -123,7 +123,7 @@ If tests fail, attempt one fix per failing test. If tests still fail after the f
 
 ### Step 3c — Record this round's outcome (always, every round)
 
-Append exactly one line to `$DAGRUN_ARTIFACTS/fix-history.log` (create the file if it doesn't
+Append exactly one line to `<artifactsDir>/fix-history.log` (create the file if it doesn't
 exist yet) recording this round's build/test result from Step 3b:
 
 ```
@@ -144,7 +144,7 @@ convergence, not human satisfaction with the result.
 
 ## Step 4 — Write summary
 
-Write `$DAGRUN_ARTIFACTS/summary.md`:
+Write `<artifactsDir>/summary.md`:
 
 ```markdown
 # Fix summary
@@ -193,9 +193,10 @@ This finding/test has now failed 3 consecutive fix rounds: <name the specific fi
 Three consecutive fix attempts on the same finding, each producing a different (or the same)
 failure, is a signal that the underlying approach may be wrong — not that a 4th attempt is more
 likely to succeed than the first three were. **Consider rejecting this round** with an instruction
-to reconsider the underlying approach rather than requesting another fix attempt — e.g. send the
-run back to `/define` (feature) or `/reproduce` (bugfix) for a revised guide, rather than continuing
-to iterate on `fix`.
+to reconsider the underlying approach rather than requesting another fix attempt. If the plan
+itself is what is wrong (the approach it prescribes cannot work), say so plainly and stop: the plan
+is the contract, so the driver sends the human back to the planning session for a revised plan —
+which is a new revision and a new run, not another round of `fix`.
 ```
 
 This is a mandatory section when the trigger condition is met — do not talk yourself out of writing
@@ -207,9 +208,43 @@ this section surfaces to the human automatically — no other action is required
 
 ---
 
+## Step 4c — Declare deliverables (mandatory)
+
+The `pr` node stages **only** the paths declared in `implement/deliverables.txt` plus
+`fix/deliverables.txt` (never `git add -A`). A file you add or change here that is not declared is
+silently left out of the PR commit — a test file a fix once added was missed this way and cost a whole
+extra gate round. So:
+
+1. Write or **extend** `fix/deliverables.txt` in your artifacts dir: one repo-relative path per line,
+   listing every file you **add or change** in the worktree this round (source, tests, resources,
+   golden files). The artifacts dir survives gate revise rounds, so on a later round keep the earlier
+   lines and add the new ones — the file is the running union across rounds. Paths already listed in
+   `implement/deliverables.txt` may be repeated; `pr` unions and de-duplicates both files.
+2. Verify the list against git before you finish — every path you touched must be listed, and every
+   listed path must really differ from the base. Use plain single commands (your cwd is the
+   worktree; no pipes or loops needed):
+
+```bash
+git status --porcelain -uall
+git diff --name-only HEAD
+```
+
+   Compare that output with `<runDir>/implement/deliverables.txt` plus your
+   `<artifactsDir>/deliverables.txt` (Read tool). A path that is changed but in neither list is
+   undeclared: add it to `fix/deliverables.txt` if it belongs in the PR, or mention in `summary.md`
+   why it is deliberately left out (unrelated dirt; build output under `target/` never counts). A
+   listed path with no change is a stale entry — remove it. The pre-PR gate shows the same comparison
+   as an advisory, so an undeclared change is flagged to the reviewer — but declaring it correctly
+   here is your job.
+
+If you changed nothing in the worktree this round, write no `fix/deliverables.txt` entries and say so
+in `summary.md`.
+
+---
+
 ## Step 5 — Write reflections.md
 
-Write `$DAGRUN_ARTIFACTS/reflections.md`. This file is **required** whenever fixes were applied.
+Write `<artifactsDir>/reflections.md`. This file is **required** whenever fixes were applied.
 
 If there is nothing non-obvious to report, write a single line: `No non-obvious discoveries.`
 
@@ -244,6 +279,6 @@ The SessionEnd hook captures reflections.md automatically — you do not need to
 
 - Fix ONLY findings with `confidence: "high"` AND `severity` of `"blocker"` or `"major"`. Defer everything else.
 - Do not make speculative improvements beyond what the findings require.
-- Do not modify `$DAGRUN_ARTIFACTS/../review/findings.json` — it is the read-only input.
-- Write all artifacts to `$DAGRUN_ARTIFACTS/` (summary.md, reflections.md, fix-history.log).
+- Do not modify `<runDir>/review/findings.json` — it is the read-only input.
+- Write all artifacts to `<artifactsDir>/` (summary.md, reflections.md, fix-history.log).
 - If a build or test step is unavailable (no build tool found), note it in the summary and continue.

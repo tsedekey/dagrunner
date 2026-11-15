@@ -1,14 +1,12 @@
 #!/usr/bin/env node
 /**
- * Block 9 — 7-step smoke test for dagrunner v1 (Phase 2a + 2b).
+ * Block 9 — 6-step smoke test for dagrunner v1 (Phase 2a + 2b).
  *
  * Drives the real thin slice end-to-end using non-interactive flags.
- * Makes REAL SDK calls for steps 2-6 (verify — now autonomous, no election).
- * Step 7 uses a synthetic state (no API call) to test reconcile plumbing only.
- * verify-autonomy change: step 6 approves Gate 2 and lets verify run for
- * real; see the step-6 comment block for the toy-repo coverage gap this
- * leaves (verify's build/test/AT stages need a Maven+Docker-shaped worktree
- * that the toy repo fixture does not provide).
+ * Makes REAL SDK calls for steps 2-6 (step 2 runs implement (RED first) -> review ->
+ * fix and pauses at the fix gate, the first gate of a run; step 6 approves it and lets
+ * the pr node compose the PR body, then pauses at the pre-PR gate).
+ * Step 6 uses a synthetic state (no API call) to test reconcile plumbing only.
  *
  * Run: node --import tsx ./test/smoke/smoke.ts
  *
@@ -16,7 +14,10 @@
  *   ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN must be set in env.
  *
  * Advisory notes applied:
- *   1. cwd is always TOY_REPO_PATH so git worktree add operates on the toy repo.
+ *   1. cwd is always TOY_REPO_PATH (a MAIN checkout, so tsx resolves from the
+ *      project tree); the run adopts a linked worktree of it passed explicitly
+ *      with --worktree — dagrunner never creates the worktree (adopt.ts does,
+ *      with plain `git worktree add`).
  *   2. Auth guard is the first executable statement.
  *   3. toy-repo is provisioned at runtime (not committed); see .gitignore.
  */
@@ -32,6 +33,7 @@ import {
 } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { addLinkedWorktree } from "./adopt.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, "..", "..");
@@ -86,7 +88,7 @@ if (!existsSync(join(TOY_REPO_PATH, ".git"))) {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-/** Run the CLI via spawnSync with cwd=TOY_REPO_PATH so git worktree works. */
+/** Run the CLI via spawnSync with cwd=TOY_REPO_PATH (pass --worktree <linked worktree> to `start`). */
 function runCli(
   args: string[],
   env: Record<string, string | undefined>,
@@ -103,6 +105,7 @@ function runCli(
 const HOME = `/tmp/dagrun-smoke-${Date.now()}`;
 const HOME_ENV = { DAGRUNNER_HOME: HOME };
 let RUN_ID = "";
+let WORKTREE = "";
 
 // ---------------------------------------------------------------------------
 // Step 1 — dagrun init
@@ -112,6 +115,7 @@ let RUN_ID = "";
   const result = runCli(["init", "--home", HOME], {});
   assert.strictEqual(result.status, 0, `init failed: ${result.stderr}`);
   assert.ok(existsSync(join(HOME, "runs")), "runs dir must exist after init");
+  // worktrees/ is legacy-only (runs adopt an existing worktree) but init still creates it.
   assert.ok(
     existsSync(join(HOME, "worktrees")),
     "worktrees dir must exist after init",
@@ -121,7 +125,8 @@ let RUN_ID = "";
 
 // ---------------------------------------------------------------------------
 // Step 2 — dagrun start feature --plan toy-plan.md
-//          expand (Gate 1) → awaiting-gate → exits
+//          implement (proves RED first) -> review -> fix (first gate) -> awaiting-gate -> exits
+//          The plan is the guide: there is no define/reproduce node and no gate before implement.
 // ---------------------------------------------------------------------------
 
 {
@@ -132,10 +137,21 @@ let RUN_ID = "";
     "utf8",
   );
 
+  // The run ADOPTS a worktree created outside dagrunner (what `wm add` does).
+  WORKTREE = addLinkedWorktree(TOY_REPO_PATH, HOME, "live");
+
   const result = runCli(
-    ["start", "feature", "--plan", TOY_PLAN_PATH],
+    [
+      "start",
+      "feature",
+      "--plan",
+      TOY_PLAN_PATH,
+      "--worktree",
+      WORKTREE,
+      "--no-companion",
+    ],
     HOME_ENV,
-    180_000, // 3 minutes for one real API call (expand)
+    900_000, // 15 minutes: implement (RED -> GREEN) + review (multi-subagent fan-out) + fix, real API calls
   );
 
   assert.strictEqual(
@@ -157,11 +173,61 @@ let RUN_ID = "";
   RUN_ID = runs[0] as string;
   const runDir = join(HOME, "runs", RUN_ID);
 
-  // Confirm guide.md was produced by expand.
-  const guidePath = join(runDir, "expand", "guide.md");
-  assert.ok(existsSync(guidePath), `guide.md must exist at ${guidePath}`);
+  // The run recorded the worktree it was handed (never created one).
+  const st2 = JSON.parse(
+    readFileSync(join(runDir, "state.json"), "utf8"),
+  ) as { worktreePath: string; worktreeOrigin?: string; nodes: Record<string, { status: string }> };
+  assert.strictEqual(st2.worktreePath, WORKTREE, "state.worktreePath is the adopted worktree");
+  assert.strictEqual(st2.worktreeOrigin, "adopted", "state.worktreeOrigin is adopted");
 
-  console.log(`step 2 passed: start -> expand -> gate (run: ${RUN_ID})`);
+  // The first pause is the fix gate; no define/reproduce node exists.
+  assert.strictEqual(
+    st2.nodes["fix"]?.status,
+    "awaiting-gate",
+    `the first pause must be the fix gate, got: ${String(st2.nodes["fix"]?.status)}`,
+  );
+  assert.strictEqual(st2.nodes["define"], undefined, "no define node");
+  assert.strictEqual(st2.nodes["reproduce"], undefined, "no reproduce node");
+
+  // implement proved RED first: red.json confirmed + the evidence + summary.
+  for (const f of ["summary.md", "red-evidence.md", "red.json"]) {
+    assert.ok(existsSync(join(runDir, "implement", f)), `implement/${f} must exist`);
+  }
+  const red = JSON.parse(
+    readFileSync(join(runDir, "implement", "red.json"), "utf8"),
+  ) as { red?: string };
+  assert.strictEqual(red.red, "confirmed", `implement must have proved RED, red.json: ${JSON.stringify(red)}`);
+
+  // review ran and wrote valid findings.json
+  assert.ok(
+    existsSync(join(runDir, "review", "findings.json")),
+    "review/findings.json must exist after review node",
+  );
+  const findingsRaw = JSON.parse(
+    readFileSync(join(runDir, "review", "findings.json"), "utf8"),
+  ) as Record<string, unknown>;
+  for (const key of [
+    "run_id",
+    "timestamp",
+    "reviewers_run",
+    "reviewers_skipped",
+    "adversarial_verifier_run",
+    "findings",
+  ]) {
+    assert.ok(key in findingsRaw, `findings.json must have key "${key}"`);
+  }
+  assert.ok(
+    Array.isArray(findingsRaw["findings"]),
+    "findings.json findings must be an array",
+  );
+  assert.ok(
+    existsSync(join(runDir, "fix", "summary.md")),
+    "fix/summary.md must exist after fix node",
+  );
+
+  console.log(
+    `step 2 passed: start -> implement (RED confirmed) -> review -> fix -> fix gate pause (run: ${RUN_ID})`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -185,7 +251,7 @@ let RUN_ID = "";
 }
 
 // ---------------------------------------------------------------------------
-// Step 4 — dagrun resume --reject "add error handling section"
+// Step 4 — dagrun resume --reject "add error handling section" (at the fix gate)
 // ---------------------------------------------------------------------------
 
 {
@@ -201,7 +267,7 @@ let RUN_ID = "";
   );
 
   const runDir = join(HOME, "runs", RUN_ID);
-  const feedback1 = join(runDir, "expand", "feedback-1.md");
+  const feedback1 = join(runDir, "fix", "feedback-1.md");
   assert.ok(existsSync(feedback1), `feedback-1.md must exist at ${feedback1}`);
   // Run must be paused again after revise.
   assert.ok(
@@ -212,101 +278,29 @@ let RUN_ID = "";
 }
 
 // ---------------------------------------------------------------------------
-// Step 5 — dagrun resume --approve (Gate 1) -> implement -> review -> fix -> Gate 2
-// ---------------------------------------------------------------------------
-
-{
-  const result = runCli(
-    ["resume", RUN_ID, "--approve"],
-    HOME_ENV,
-    600_000, // 10 minutes: implement + review (multi-subagent fan-out) + fix
-  );
-  assert.strictEqual(
-    result.status,
-    0,
-    `approve Gate 1 failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
-  );
-
-  const runDir = join(HOME, "runs", RUN_ID);
-  const stateRaw = JSON.parse(
-    readFileSync(join(runDir, "state.json"), "utf8"),
-  ) as { status: string; nodes: Record<string, { status: string }> };
-
-  // After Gate 1 approve: implement runs, review runs, fix hits Gate 2 and pauses.
-  assert.ok(
-    stateRaw.status === "paused" || stateRaw.status === "running",
-    `run must be paused at Gate 2 or running, got: ${stateRaw.status}`,
-  );
-  assert.ok(
-    existsSync(join(runDir, "implement", "summary.md")),
-    "implement/summary.md must exist",
-  );
-  assert.ok(
-    existsSync(join(runDir, "review", "findings.json")),
-    "review/findings.json must exist after review node",
-  );
-  // findings.json must be valid JSON with required top-level keys
-  const findingsRaw = JSON.parse(
-    readFileSync(join(runDir, "review", "findings.json"), "utf8"),
-  ) as Record<string, unknown>;
-  for (const key of [
-    "run_id",
-    "timestamp",
-    "reviewers_run",
-    "reviewers_skipped",
-    "adversarial_verifier_run",
-    "findings",
-  ]) {
-    assert.ok(key in findingsRaw, `findings.json must have key "${key}"`);
-  }
-  assert.ok(
-    Array.isArray(findingsRaw["findings"]),
-    "findings.json findings must be an array",
-  );
-  assert.ok(
-    existsSync(join(runDir, "fix", "summary.md")),
-    "fix/summary.md must exist after fix node",
-  );
-  console.log(
-    "step 5 passed: approve Gate 1 -> implement -> review -> fix -> Gate 2 pause",
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Step 6 — dagrun resume --approve (Gate 2) -> verify runs autonomously
+// Step 5 — dagrun resume --approve (fix gate) -> pr composes -> pre-PR gate pause
 //
-// verify-autonomy change: there is no more election/--verify flag. Gate 2
-// approval now runs verify directly (required, blocking, no human gate).
-//
-// KNOWN SMOKE:LIVE GAP (see DECISIONS.md § verify-autonomy-smoke-live-gap):
-// the toy repo fixture (test/smoke/fixtures/toy-repo) is a bare git init with
-// only README.md — no pom.xml, no Maven wrapper, no qa/acceptance-tests
-// module, no Docker/testcontainers scaffolding. verify's D4 (independent
-// build+test rerun) and D5 (run the authored @MultiDbTest) CANNOT pass
-// against this fixture — that is verify doing its job correctly (fail loud
-// on a broken/absent build), not a smoke-test bug. This step therefore does
-// NOT assert a PASS outcome or that pr ran; it asserts that verify's real SDK
-// session starts, completes (any terminal status), and that the SessionEnd
-// hook fires during that session — the same deterministic-hook-wiring proof
-// step 6 has always carried, just re-anchored to verify's session instead of
-// pr's now that pr no longer unconditionally runs. A full green verify run
-// requires smoke:live against a real Camunda-shaped worktree (Maven+Docker+
-// qa/acceptance-tests) — out of scope for this build; deferred to Eddie.
+// The pipeline is implement -> review -> fix (gate) -> pr (gate): approving
+// the fix gate runs pr directly, which composes body.md/pr-meta.json and then pauses
+// at the pre-PR gate (push + draft-PR creation only happen after that gate is
+// approved, so DAGRUN_NO_PR is belt-and-braces here). This step asserts that
+// pr's real SDK session starts and ends in a post-run status, and that the
+// SessionEnd hook fires during that session.
 //
 // Reflection wiring check (option b — deterministic):
-//   Seed a known reflections.md into the verify artifact dir BEFORE resume so
+//   Seed a known reflections.md into the pr artifact dir BEFORE resume so
 //   the SessionEnd hook has a file to capture regardless of what the model
-//   writes, and regardless of whether verify's own outcome is PASS or not.
+//   writes.
 // ---------------------------------------------------------------------------
 
 {
-  // Seed verify/reflections.md BEFORE the resume call so the SessionEnd hook
+  // Seed pr/reflections.md BEFORE the resume call so the SessionEnd hook
   // captures it deterministically. The sdk-runner uses mkdir -p (not rm+mkdir)
   // so the file survives into the session.
-  const verifyArtifactsDir = join(HOME, "runs", RUN_ID, "verify");
-  mkdirSync(verifyArtifactsDir, { recursive: true });
+  const prArtifactsDir = join(HOME, "runs", RUN_ID, "pr");
+  mkdirSync(prArtifactsDir, { recursive: true });
   writeFileSync(
-    join(verifyArtifactsDir, "reflections.md"),
+    join(prArtifactsDir, "reflections.md"),
     "smoke:live seeded reflection — deterministic hook wiring check",
     "utf8",
   );
@@ -315,12 +309,12 @@ let RUN_ID = "";
     ["resume", RUN_ID, "--approve"],
     // DAGRUN_NO_PR prevents real gh pr create if pr does end up running.
     { ...HOME_ENV, DAGRUN_NO_PR: "1" },
-    600_000, // 10 minutes: verify (build/test rerun + AT authoring/execution attempt)
+    600_000, // 10 minutes: pr composes the body (haiku) in a real session
   );
   assert.strictEqual(
     result.status,
     0,
-    `Gate 2 approve failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
+    `fix gate approve failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
   );
 
   const runDir = join(HOME, "runs", RUN_ID);
@@ -331,16 +325,16 @@ let RUN_ID = "";
     nodes: Record<string, { status: string }>;
   };
 
-  // verify must have run (no longer "pending") — its own session decides the
-  // terminal status; a toy repo with no build tooling cannot legitimately PASS.
+  // pr must have run (no longer "pending"): it either composed the body and is
+  // now awaiting the pre-PR gate, or failed its own produces contract.
   assert.notStrictEqual(
-    stateRaw.nodes["verify"]?.status,
+    stateRaw.nodes["pr"]?.status,
     "pending",
-    `verify must have run, got: ${String(stateRaw.nodes["verify"]?.status)}`,
+    `pr must have run, got: ${String(stateRaw.nodes["pr"]?.status)}`,
   );
   assert.ok(
-    ["done", "failed"].includes(stateRaw.status),
-    `run must reach a terminal status after verify's session ends, got: ${stateRaw.status}`,
+    ["paused", "failed"].includes(stateRaw.status),
+    `run must be paused at the pre-PR gate (or failed) after pr's session ends, got: ${stateRaw.status}`,
   );
   // Assert the seeded reflections.md was captured by the SessionEnd hook.
   // Deterministic: this entry was pre-written by smoke, not by the model.
@@ -377,12 +371,12 @@ let RUN_ID = "";
     `  reflection-log has ${lines.length} entries — hook-driven capture verified (seeded entry found)`,
   );
   console.log(
-    "step 6 passed: Gate 2 approve -> verify ran autonomously (real SDK session, hook wiring proven)",
+    "step 5 passed: fix gate approve -> pr ran (real SDK session, hook wiring proven) -> pre-PR gate",
   );
 }
 
 // ---------------------------------------------------------------------------
-// Step 7 — reconcile: running node -> failed (synthetic, no API call)
+// Step 6 — reconcile: running node -> failed (synthetic, no API call)
 // ---------------------------------------------------------------------------
 
 {
@@ -427,6 +421,31 @@ let RUN_ID = "";
     status: "running",
     nodes: {
       ...finalState.nodes,
+      // A run killed mid-implement has nothing downstream of implement done:
+      // review/fix/pr are pending again. (Leaving fix "done" from the real final
+      // state would make `pr` ready now that it depends on fix only, and the
+      // resume below would start a real SDK session instead of ending failed.)
+      review: {
+        status: "pending",
+        artifacts: [],
+        iteration: 0,
+        cost: 0,
+        gateHistory: [],
+      },
+      fix: {
+        status: "pending",
+        artifacts: [],
+        iteration: 0,
+        cost: 0,
+        gateHistory: [],
+      },
+      pr: {
+        status: "pending",
+        artifacts: [],
+        iteration: 0,
+        cost: 0,
+        gateHistory: [],
+      },
       implement: {
         ...implementNode,
         status: "running",
@@ -489,7 +508,7 @@ let RUN_ID = "";
   );
 
   console.log(
-    `step 7 passed: interrupt-retry cap hit — implement stayed failed, no SDK call fired`,
+    `step 6 passed: interrupt-retry cap hit — implement stayed failed, no SDK call fired`,
   );
 }
 
@@ -497,4 +516,4 @@ let RUN_ID = "";
 // Done
 // ---------------------------------------------------------------------------
 
-console.log("\nall 7 smoke test steps passed");
+console.log("\nall 6 smoke test steps passed");

@@ -15,6 +15,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import {
   mkdtempSync,
   mkdirSync,
@@ -34,7 +35,7 @@ import {
   checkClaudeConfigDir,
   checkNodeVersion,
   checkStaleLock,
-  checkDevharnessNotInWorktreeRoot,
+  checkDevharnessIsMainCheckout,
   type AgentContext,
 } from "./preflight.js";
 import type { DagrunnerConfig } from "../config/xdg.js";
@@ -255,10 +256,9 @@ test("formatAgentContext: version line reflects dev mode", () => {
 // ---------------------------------------------------------------------------
 
 test("runPreflight: missing home subdirectory produces a failure", () => {
-  // Create a home dir with only "runs" and "worktrees" but not "inbox" or "store"
+  // Create a home dir with only "runs" but not "inbox" or "store"
   const homeDir = mkdtempSync(join(tmpdir(), "dr-pf-chk-"));
   mkdirSync(join(homeDir, "runs"), { recursive: true });
-  mkdirSync(join(homeDir, "worktrees"), { recursive: true });
   // inbox and store intentionally absent
 
   // DEVHARNESS_SRC: use a real existing dir to not trigger that check
@@ -277,9 +277,23 @@ test("runPreflight: missing home subdirectory produces a failure", () => {
   }
 });
 
+test("runPreflight: a missing worktrees/ subdirectory is NOT a failure (runs adopt worktrees; worktrees/ is legacy-only)", () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "dr-pf-chk-"));
+  for (const sub of ["runs", "inbox", "store"]) {
+    mkdirSync(join(homeDir, sub), { recursive: true });
+  }
+  const devharnessSrc = mkdtempSync(join(tmpdir(), "dr-pf-src-"));
+  const result = runPreflight({ DEVHARNESS_SRC: devharnessSrc }, homeDir);
+  const failureText = result.ok ? "" : result.failures.join("\n");
+  assert.ok(
+    !/Dagrunner home missing/.test(failureText),
+    `home with runs/inbox/store must satisfy the subdir check, got: ${failureText}`,
+  );
+});
+
 test("runPreflight: nonexistent DEVHARNESS_SRC produces a failure", () => {
   const homeDir = mkdtempSync(join(tmpdir(), "dr-pf-chk-"));
-  for (const sub of ["runs", "worktrees", "inbox", "store"]) {
+  for (const sub of ["runs", "inbox", "store"]) {
     mkdirSync(join(homeDir, sub), { recursive: true });
   }
 
@@ -304,7 +318,7 @@ test("runPreflight: nonexistent DEVHARNESS_SRC produces a failure", () => {
 
 test("runPreflight: DEVHARNESS_SRC exists but is not a git repo produces a failure", () => {
   const homeDir = mkdtempSync(join(tmpdir(), "dr-pf-chk-"));
-  for (const sub of ["runs", "worktrees", "inbox", "store"]) {
+  for (const sub of ["runs", "inbox", "store"]) {
     mkdirSync(join(homeDir, sub), { recursive: true });
   }
 
@@ -458,45 +472,57 @@ test("checkStaleLock: failure with active lock (current process PID)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// checkDevharnessNotInWorktreeRoot — pure path check
+// checkDevharnessIsMainCheckout — DEVHARNESS_SRC must be the main checkout
 // ---------------------------------------------------------------------------
 
-test("checkDevharnessNotInWorktreeRoot: no failures when DEVHARNESS_SRC is outside worktree root", () => {
-  const homeDir = mkdtempSync(join(tmpdir(), "dr-pf-wt-"));
-  const srcDir = mkdtempSync(join(tmpdir(), "dr-pf-src-"));
-  const config: DagrunnerConfig = { DEVHARNESS_SRC: srcDir };
-  assert.deepStrictEqual(checkDevharnessNotInWorktreeRoot(config, homeDir), []);
+function gitIn(cwd: string, ...args: string[]): void {
+  execFileSync(
+    "git",
+    ["-c", "user.name=dr-test", "-c", "user.email=dr-test@example.com", ...args],
+    { cwd, stdio: "ignore" },
+  );
+}
+
+function makeMainCheckout(): string {
+  const repo = mkdtempSync(join(tmpdir(), "dr-pf-main-"));
+  gitIn(repo, "init", "-q", "-b", "main");
+  writeFileSync(join(repo, "a.txt"), "x\n");
+  gitIn(repo, "add", "a.txt");
+  gitIn(repo, "commit", "-q", "-m", "init");
+  return repo;
+}
+
+test("checkDevharnessIsMainCheckout: no failure when DEVHARNESS_SRC is the main checkout", () => {
+  const repo = makeMainCheckout();
+  assert.deepStrictEqual(checkDevharnessIsMainCheckout({ DEVHARNESS_SRC: repo }), []);
 });
 
-test("checkDevharnessNotInWorktreeRoot: failure when DEVHARNESS_SRC is inside homeDir/worktrees", () => {
-  const homeDir = mkdtempSync(join(tmpdir(), "dr-pf-wt-"));
-  const fakeSrc = join(homeDir, "worktrees", "my-run", "repo");
-  const config: DagrunnerConfig = { DEVHARNESS_SRC: fakeSrc };
-  const result = checkDevharnessNotInWorktreeRoot(config, homeDir);
+test("checkDevharnessIsMainCheckout: failure when DEVHARNESS_SRC is a linked worktree", () => {
+  const repo = makeMainCheckout();
+  const linked = join(mkdtempSync(join(tmpdir(), "dr-pf-linked-")), "wt");
+  gitIn(repo, "worktree", "add", "-q", linked, "-b", "feat/x", "main");
+  const result = checkDevharnessIsMainCheckout({ DEVHARNESS_SRC: linked });
   assert.equal(result.length, 1);
   assert.ok(
-    result[0]!.toLowerCase().includes("worktree"),
-    `Expected worktree mention, got: ${result[0]}`,
+    /linked worktree/.test(result[0]!) && result[0]!.includes(linked),
+    `Expected linked-worktree message naming the path, got: ${result[0]}`,
   );
 });
 
-test("checkDevharnessNotInWorktreeRoot: failure when DEVHARNESS_SRC is the worktree root itself", () => {
-  const homeDir = mkdtempSync(join(tmpdir(), "dr-pf-wt-"));
-  const config: DagrunnerConfig = {
-    DEVHARNESS_SRC: join(homeDir, "worktrees"),
-  };
-  const result = checkDevharnessNotInWorktreeRoot(config, homeDir);
-  assert.equal(result.length, 1);
+test("checkDevharnessIsMainCheckout: not a git repo → no failure from THIS check (the git-repo check reports it)", () => {
+  const notARepo = mkdtempSync(join(tmpdir(), "dr-pf-notrepo-"));
+  assert.deepStrictEqual(checkDevharnessIsMainCheckout({ DEVHARNESS_SRC: notARepo }), []);
 });
 
-test("checkDevharnessNotInWorktreeRoot: respects custom worktreeRoot from config", () => {
-  const homeDir = mkdtempSync(join(tmpdir(), "dr-pf-wt-"));
-  const customWtRoot = mkdtempSync(join(tmpdir(), "dr-pf-custom-wt-"));
-  const fakeSrc = join(customWtRoot, "some-run", "repo");
-  const config: DagrunnerConfig = {
-    DEVHARNESS_SRC: fakeSrc,
-    worktreeRoot: customWtRoot,
-  };
-  const result = checkDevharnessNotInWorktreeRoot(config, homeDir);
-  assert.equal(result.length, 1);
+test("runPreflight: DEVHARNESS_SRC that is a linked worktree is reported", () => {
+  const repo = makeMainCheckout();
+  const linked = join(mkdtempSync(join(tmpdir(), "dr-pf-linked-")), "wt");
+  gitIn(repo, "worktree", "add", "-q", linked, "-b", "feat/y", "main");
+  const homeDir = mkdtempSync(join(tmpdir(), "dr-pf-chk-"));
+  for (const sub of ["runs", "inbox", "store"]) mkdirSync(join(homeDir, sub), { recursive: true });
+  const result = runPreflight({ DEVHARNESS_SRC: linked }, homeDir);
+  assert.equal(result.ok, false);
+  if (result.ok === false) {
+    assert.ok(result.failures.some((f) => /linked worktree/.test(f)), result.failures.join("\n"));
+  }
 });

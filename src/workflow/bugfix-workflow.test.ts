@@ -31,37 +31,31 @@ test("bugfixWorkflow: name is 'bugfix'", () => {
 // Node shape
 // ---------------------------------------------------------------------------
 
-test("bugfixWorkflow: has exactly 7 nodes", () => {
-  assert.equal(bugfixWorkflow.nodes.length, 7);
+test("bugfixWorkflow: has exactly 4 nodes", () => {
+  assert.equal(bugfixWorkflow.nodes.length, 4);
 });
 
-test("bugfixWorkflow: node ids are reproduce, implement, review, fix, verify, pr, digest", () => {
+test("bugfixWorkflow: node ids are implement, review, fix, pr (the plan is the guide — no reproduce node)", () => {
   const ids = bugfixWorkflow.nodes.map((n) => n.id);
-  assert.deepEqual(ids, [
-    "reproduce",
-    "implement",
-    "review",
-    "fix",
-    "verify",
-    "pr",
-    "digest",
-  ]);
+  assert.deepEqual(ids, ["implement", "review", "fix", "pr"]);
+  assert.equal(bugfixWorkflow.nodes.find((n) => n.id === "reproduce"), undefined);
+  assert.equal(bugfixWorkflow.nodes.find((n) => n.id === "define"), undefined);
 });
 
-test("bugfixWorkflow: reproduce produces guide.md and has a gate", () => {
-  const node = bugfixWorkflow.nodes.find((n) => n.id === "reproduce");
-  assert.ok(node !== undefined, "reproduce node must exist");
-  assert.deepEqual(node.produces, ["guide.md"]);
-  assert.ok(node.gate !== undefined, "reproduce must have a gate");
+test("bugfixWorkflow: implement is the root (no dependsOn) and the only root", () => {
+  const roots = bugfixWorkflow.nodes.filter((n) => (n.dependsOn ?? []).length === 0);
+  assert.deepEqual(roots.map((n) => n.id), ["implement"]);
 });
 
-test("bugfixWorkflow: implement depends on reproduce", () => {
+test("bugfixWorkflow: implement proves RED first — outcomeGate on red.json, red-evidence.md produced", () => {
   const node = bugfixWorkflow.nodes.find((n) => n.id === "implement");
   assert.ok(node !== undefined);
-  assert.ok(
-    node.dependsOn?.includes("reproduce"),
-    "implement must depend on reproduce",
-  );
+  assert.deepEqual(node.outcomeGate, { file: "red.json", field: "red", passValues: ["confirmed"] });
+  assert.ok(node.produces?.includes("summary.md"));
+  assert.ok(node.produces?.includes("red-evidence.md"));
+  // red.json is produced too: the mock executor and the gate evidence only see `produces`.
+  assert.ok(node.produces?.includes("red.json"));
+  assert.equal(node.gate, undefined, "implement is not gated — the first human gate is fix");
 });
 
 test("bugfixWorkflow: review depends on implement", () => {
@@ -80,46 +74,31 @@ test("bugfixWorkflow: fix depends on review and has a gate", () => {
   assert.ok(node.gate !== undefined, "fix must have a gate");
 });
 
-test("bugfixWorkflow: verify depends on fix, is required (non-optional), and has an outcomeGate", () => {
-  const node = bugfixWorkflow.nodes.find((n) => n.id === "verify");
-  assert.ok(node !== undefined, "verify node must exist");
-  assert.ok(node.dependsOn?.includes("fix"), "verify must depend on fix");
-  assert.notEqual(
-    node.optional,
-    true,
-    "verify must be required (non-optional) — it blocks pr on a bad outcome",
+test("bugfixWorkflow: there is no verify node and no node declares decidesNode / joinRule / evidenceCheck", () => {
+  assert.equal(bugfixWorkflow.nodes.find((n) => n.id === "verify"), undefined);
+  for (const n of bugfixWorkflow.nodes) {
+    assert.equal((n.gate as Record<string, unknown> | undefined)?.decidesNode, undefined, `${n.id}: no gate decides a downstream node`);
+    assert.equal((n as Record<string, unknown>).joinRule, undefined, `${n.id}: no joinRule`);
+    assert.equal((n as Record<string, unknown>).evidenceCheck, undefined, `${n.id}: no evidenceCheck`);
+    assert.equal(n.when, undefined, `${n.id}: every node always runs`);
+  }
+});
+
+test("bugfixWorkflow: every gate returns to the companion; pr is a pre-PR gate that can amend fix", () => {
+  assert.equal(bugfixWorkflow.companionGates, true);
+  const pr = bugfixWorkflow.nodes.find((n) => n.id === "pr");
+  assert.ok(pr?.gate !== undefined, "pr must be gated (pre-PR decision)");
+  assert.deepEqual(pr.gate.amendTargets, ["fix"]);
+  assert.deepEqual(
+    bugfixWorkflow.nodes.filter((n) => n.gate !== undefined).map((n) => n.id),
+    ["fix", "pr"],
   );
-  assert.equal(node.gate, undefined, "verify must have no human gate");
-  // DEFERRED_TO_CI (added by the verify-defer-to-ci change, see DECISIONS.md
-  // § verify-defer-to-ci-and-drop-diff-scoped-rerun) is a non-blocking outcome:
-  // a confirmed pre-existing, diff-unrelated build break in Step 4 must not
-  // hard-fail the node and block pr the way a genuine FAIL_BUILD does.
-  assert.deepEqual(node.outcomeGate, {
-    file: "verify-report.json",
-    field: "outcome",
-    passValues: ["PASS", "DEFERRED_TO_CI"],
-  });
 });
 
-// Run 56962-1 forensic fix (bug 1): verify.md documents legitimate
-// short-circuit paths (Docker unreachable at Step 0; unrecoverable stall
-// with no usable report, ERROR_INFRA) where it explicitly instructs "Do NOT
-// write a verify-plan.md — no authoring work happened." A hard produces
-// requirement on verify-plan.md trips the DAG's produces-contract check even
-// on these correct, prompt-following paths. verify-report.json remains
-// load-bearing (already gated via outcomeGate above); only the unconditional
-// verify-plan.md requirement is dropped.
-test("bugfixWorkflow: verify's produces contract does not hard-require verify-plan.md (conditional per verify.md's short-circuit paths)", () => {
-  const node = bugfixWorkflow.nodes.find((n) => n.id === "verify");
-  assert.ok(node !== undefined);
-  assert.deepEqual(node.produces, ["verify-report.json"]);
-});
-
-test("bugfixWorkflow: pr depends on fix and verify", () => {
+test("bugfixWorkflow: pr depends on fix only", () => {
   const node = bugfixWorkflow.nodes.find((n) => n.id === "pr");
   assert.ok(node !== undefined);
-  assert.ok(node.dependsOn?.includes("fix"), "pr must depend on fix");
-  assert.ok(node.dependsOn?.includes("verify"), "pr must depend on verify");
+  assert.deepEqual(node.dependsOn, ["fix"]);
 });
 
 test("bugfixWorkflow: pr uses haiku model", () => {
@@ -166,36 +145,7 @@ test("bugfixWorkflow: implement and fix pin effort to 'medium'", () => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// digest node — terminal-adjacent, parallel with pr (see DECISIONS.md
-// § digest-node)
-// ---------------------------------------------------------------------------
-
-test("bugfixWorkflow: digest depends on both fix and verify (same deps as pr, runs in parallel)", () => {
-  const node = bugfixWorkflow.nodes.find((n) => n.id === "digest");
-  assert.ok(node !== undefined, "digest node must exist");
-  assert.ok(node.dependsOn?.includes("fix"), "digest must depend on fix");
-  assert.ok(node.dependsOn?.includes("verify"), "digest must depend on verify");
-});
-
-test("bugfixWorkflow: digest uses sonnet, produces knowledge-map.md, and has no gate", () => {
-  const node = bugfixWorkflow.nodes.find((n) => n.id === "digest");
-  assert.ok(node !== undefined);
-  assert.equal(node.model, "sonnet");
-  assert.deepEqual(node.produces, ["knowledge-map.md"]);
-  assert.equal(
-    node.gate,
-    undefined,
-    "digest must have no human gate — informational/read-only, same pattern as review",
-  );
-});
-
-test("bugfixWorkflow: digest is optional — a produces-contract failure must degrade to skipped, never fail a run whose pr already shipped", () => {
-  const node = bugfixWorkflow.nodes.find((n) => n.id === "digest");
-  assert.ok(node !== undefined);
-  assert.equal(
-    node.optional,
-    true,
-    "digest must be optional — unlike verify (deliberately required/blocking), digest is informational-only and nothing downstream depends on it",
-  );
-});
+// digest node removed (DECISIONS.md § digest-removed-folded-into-companion) —
+// its two-section content (deferred findings/risks, open reviewer questions)
+// is now folded into the companion's gate-reading step at the fix/pr gates;
+// the companion gate conversation it used to duplicate now covers it live.

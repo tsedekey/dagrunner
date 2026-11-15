@@ -11,12 +11,19 @@
 import {
   computeHomePath,
   initHome,
+  legacyHomeLeftoverWarning,
   resolveHome,
   resolveConfig,
 } from "../config/xdg.js";
-import { releaseLock, readLock } from "../core/lock.js";
+import {
+  assertLockAvailable,
+  assertNoLiveDriver,
+  releaseLock,
+  readLock,
+} from "../core/lock.js";
 import {
   existsSync,
+  mkdirSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -26,14 +33,16 @@ import {
 import { appendReflection } from "./reflect-append.js";
 import { generateReport } from "./report.js";
 import type { BurnDoc } from "../runtime/burn.js";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
-import { execSync } from "node:child_process";
 import { assertAuth } from "../runtime/launcher.js";
 import { featureWorkflow } from "../workflow/feature-workflow.js";
 import { bugfixWorkflow } from "../workflow/bugfix-workflow.js";
 import {
   startRun,
+  makeRunId,
+  parseFrontmatter,
+  validateStartOptions,
   resumeRun,
   rerunNode,
   scaffoldRun,
@@ -42,6 +51,34 @@ import {
   seedWorktreeSiblings,
 } from "../runtime/run-engine.js";
 import { readState, writeState } from "../core/state.js";
+import { cleanupAll, cleanupRun } from "../runtime/cleanup.js";
+import {
+  assertRunWorktreeExists,
+  resolveWorktreeArg,
+  validateAdoptedWorktree,
+  WorktreeAdoptionError,
+} from "../runtime/worktree.js";
+import { defaultExec, suggestReviewers } from "../runtime/reviewers-cli.js";
+import { parseReviewersConfig } from "../config/reviewers-config.js";
+import {
+  gateAttach,
+  gateDecide,
+  gateOpen,
+  gateShow,
+  resumeNeedsInteractiveReview,
+  resumeOpensCompanion,
+} from "../runtime/gate-cli.js";
+import {
+  selfInvocation,
+  spawnDetached,
+  withoutFlag,
+  withoutFlagAndValue,
+} from "../runtime/detach.js";
+import { buildStatusJson } from "./status-json.js";
+import {
+  createMockExecutor,
+  type ScenarioMap,
+} from "../runtime/mock-executor.js";
 import {
   runPreflight,
   printPreflightResult,
@@ -50,6 +87,10 @@ import {
   writeAgentContextFile,
 } from "./preflight.js";
 import { getVersionInfo, formatVersionBanner } from "../config/version.js";
+import { openBrowser, resolveUiHome, startUiServer } from "../ui/server.js";
+
+/** Unassigned-looking default in the 4000s, distinct from OTLP's 4317/4318 — see DECISIONS.md § agent-driven-slice3-ui. */
+const DEFAULT_UI_PORT = 4740;
 
 // ---------------------------------------------------------------------------
 // Arg-parsing helpers
@@ -65,6 +106,60 @@ function flagValue(argv: string[], flag: string): string | undefined {
 /** Return true if `flag` is present in argv. */
 function hasFlag(argv: string[], flag: string): boolean {
   return argv.includes(flag);
+}
+
+/**
+ * Run `fn`; a WorktreeAdoptionError (a refusal the user can act on) prints its
+ * message and exits 1 with no stack trace. Anything else propagates.
+ */
+async function orFailAdoption<T>(fn: () => T | Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof WorktreeAdoptionError) {
+      process.stderr.write(`${err.message}\n`);
+      process.exit(1);
+    }
+    throw err;
+  }
+}
+
+/**
+ * TEST-ONLY seam: DAGRUN_MOCK_SCENARIOS='{"fix":"gate-pause",...}' swaps the
+ * SDK runner for the mock executor, so smoke tests can drive the REAL CLI (and
+ * `--detach` children) without any API call. Loud on stderr; never set in real use.
+ */
+function mockExecutorFactoryFromEnv():
+  (() => ReturnType<typeof createMockExecutor>) | undefined {
+  const raw = process.env["DAGRUN_MOCK_SCENARIOS"];
+  if (raw === undefined || raw === "") return undefined;
+  let scenarios: ScenarioMap;
+  try {
+    scenarios = JSON.parse(raw) as ScenarioMap;
+  } catch {
+    process.stderr.write(`dagrun: DAGRUN_MOCK_SCENARIOS is not valid JSON\n`);
+    process.exit(1);
+  }
+  process.stderr.write(
+    `dagrun: *** MOCK EXECUTOR active (DAGRUN_MOCK_SCENARIOS) — no real agent runs ***\n`,
+  );
+  return () => createMockExecutor(scenarios);
+}
+
+/** Announce a detached driver: run id, pid, log path, and how to poll. */
+function printDetached(runId: string, pid: number, logPath: string): void {
+  process.stdout.write(
+    `dagrun: detached — run ${runId}  pid ${pid}  log ${logPath}\n` +
+      `dagrun: poll with: dagrun status ${runId} --json\n`,
+  );
+}
+
+/** Spawn this same CLI command (minus --detach) as a detached driver logging to <runDir>/driver.log. */
+function detachSelf(homeDir: string, runId: string, cliArgs: string[]): void {
+  const logPath = join(homeDir, "runs", runId, "driver.log");
+  const inv = selfInvocation(withoutFlag(cliArgs, "--detach"));
+  const pid = spawnDetached({ command: inv.command, args: inv.args, logPath });
+  printDetached(runId, pid, logPath);
 }
 
 // ---------------------------------------------------------------------------
@@ -83,6 +178,10 @@ async function cmdPreflight(argv: string[]): Promise<void> {
   const baseBranch = flagValue(argv, "--base-branch");
   const homeDir = resolveHome();
   const config = resolveConfig(homeDir, configFlag);
+
+  // A leftover pre-v0.1.85 home is a warning, never a failure: the new home wins.
+  const leftover = legacyHomeLeftoverWarning(homeDir);
+  if (leftover !== null) process.stderr.write(`dagrun preflight: WARNING: ${leftover}\n`);
 
   const result = runPreflight(config, homeDir, {
     ...(baseBranch !== undefined ? { baseBranch } : {}),
@@ -113,7 +212,7 @@ async function cmdStart(argv: string[]): Promise<void> {
   if (workflowName === undefined || workflowName.startsWith("--")) {
     process.stderr.write(
       `dagrun start: missing <workflow> argument.\n` +
-        `Usage: dagrun start <workflow> --plan <file> [--max-budget-usd <n>] [--force] [--night]\n`,
+        `Usage: dagrun start <workflow> --plan <file> [--worktree <path>] [--max-budget-usd <n>] [--force] [--night] [--companion-session <id> | --no-companion] [--detach]\n`,
     );
     process.exit(1);
   }
@@ -135,6 +234,14 @@ async function cmdStart(argv: string[]): Promise<void> {
   const maxBudgetUsd =
     maxBudgetStr !== undefined ? parseFloat(maxBudgetStr) : undefined;
   const configFlag = flagValue(argv, "--config");
+  const companionSession = flagValue(argv, "--companion-session");
+  const noCompanion = hasFlag(argv, "--no-companion");
+
+  // The run ADOPTS an existing worktree: --worktree <path>, default = the git
+  // toplevel of cwd (fails loud outside a git repo). The engine never reads cwd.
+  const worktreePath = await orFailAdoption(() =>
+    resolveWorktreeArg(flagValue(argv, "--worktree"), process.cwd()),
+  );
 
   // Resolve home (fails loud if missing).
   const homeDir = resolveHome();
@@ -165,15 +272,74 @@ async function cmdStart(argv: string[]): Promise<void> {
 
   const workflow = workflowName === "bugfix" ? bugfixWorkflow : featureWorkflow;
 
-  await startRun({
-    workflow,
-    planPath: planFile,
-    homeDir,
-    config,
-    ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
-    ...(force ? { force: true } : {}),
-    ...(nightMode ? { nightMode: true } : {}),
-  });
+  const mockFactory = mockExecutorFactoryFromEnv();
+  const preClaimed = flagValue(argv, "--run-id");
+
+  if (hasFlag(argv, "--detach")) {
+    if (preClaimed !== undefined) {
+      process.stderr.write(
+        `dagrun start: --run-id is internal to --detach; do not pass both.\n`,
+      );
+      process.exit(1);
+    }
+    // Fail synchronously on everything the child would refuse — a detached
+    // parent must never report success for a run that cannot start.
+    validateStartOptions({
+      workflow,
+      config,
+      ...(nightMode ? { nightMode: true } : {}),
+      ...(companionSession !== undefined
+        ? { companionSessionId: companionSession }
+        : {}),
+      ...(noCompanion ? { noCompanion: true } : {}),
+    });
+    // Same for the worktree: adoption is refused here, synchronously, not in the child.
+    const { worktreePath: adoptedPath } = await orFailAdoption(() =>
+      validateAdoptedWorktree({
+        worktreePath,
+        devharnessSrc: config.DEVHARNESS_SRC,
+        baseBranch:
+          parseFrontmatter(readFileSync(planFile, "utf8"))["base_branch"] ??
+          "main",
+        homeDir,
+      }),
+    );
+    const runsDir = join(homeDir, "runs");
+    mkdirSync(runsDir, { recursive: true });
+    const runId = makeRunId(planFile, runsDir);
+    if (!force) assertLockAvailable(homeDir, runId);
+    // Claim the id (non-recursive: fails if it appeared meanwhile) so driver.log has a home.
+    mkdirSync(join(runsDir, runId));
+    // The child gets the resolved worktree explicitly — it must not depend on its own cwd.
+    detachSelf(homeDir, runId, [
+      "start",
+      ...withoutFlagAndValue(argv, "--worktree"),
+      "--worktree",
+      adoptedPath,
+      "--run-id",
+      runId,
+    ]);
+    return;
+  }
+
+  await orFailAdoption(() =>
+    startRun({
+      workflow,
+      planPath: planFile,
+      homeDir,
+      config,
+      worktreePath,
+      ...(preClaimed !== undefined ? { runId: preClaimed } : {}),
+      ...(mockFactory !== undefined ? { executorFactory: mockFactory } : {}),
+      ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
+      ...(force ? { force: true } : {}),
+      ...(nightMode ? { nightMode: true } : {}),
+      ...(companionSession !== undefined
+        ? { companionSessionId: companionSession }
+        : {}),
+      ...(noCompanion ? { noCompanion: true } : {}),
+    }),
+  );
 }
 
 async function cmdResume(argv: string[]): Promise<void> {
@@ -181,7 +347,7 @@ async function cmdResume(argv: string[]): Promise<void> {
   if (runId === undefined || runId.startsWith("--")) {
     process.stderr.write(
       `dagrun resume: missing <run-id> argument.\n` +
-        `Usage: dagrun resume <run-id> [--approve] [--reject "<comment>"]\n`,
+        `Usage: dagrun resume <run-id> [--approve] [--reject "<comment>"] [--detach]\n`,
     );
     process.exit(1);
   }
@@ -189,37 +355,228 @@ async function cmdResume(argv: string[]): Promise<void> {
   const approve = hasFlag(argv, "--approve");
   const rejectComment = flagValue(argv, "--reject");
   const configFlag = flagValue(argv, "--config");
-
   const homeDir = resolveHome();
   const config = resolveConfig(homeDir, configFlag);
   assertAuth(config.claudeConfigDir);
 
-  await resumeRun({
-    runId,
-    homeDir,
-    config,
-    ...(approve ? { approve: true } : {}),
-    ...(rejectComment !== undefined ? { rejectComment } : {}),
+  if (hasFlag(argv, "--detach")) {
+    const hasDecisionFlags = approve || rejectComment !== undefined;
+    if (resumeNeedsInteractiveReview({ homeDir, runId, hasDecisionFlags })) {
+      process.stderr.write(
+        `dagrun resume: --detach refused — run "${runId}" is at a legacy (non-companion) gate whose review needs an interactive terminal. ` +
+          `Decide with --approve / --reject "<comment>" (then --detach applies), or resume without --detach.\n`,
+      );
+      process.exit(1);
+    }
+    assertNoLiveDriver(homeDir, runId);
+    // The child would throw on a removed worktree into driver.log while state.json still
+    // says paused — refuse here, synchronously, like `start --detach` does for adoption.
+    const stateFileR = join(homeDir, "runs", runId, "state.json");
+    if (existsSync(stateFileR)) {
+      await orFailAdoption(() =>
+        assertRunWorktreeExists(readState(stateFileR), config.DEVHARNESS_SRC),
+      );
+    }
+    detachSelf(homeDir, runId, ["resume", ...argv]);
+    return;
+  }
+
+  // Bare `resume` on a companion-gate run re-enters the originating conversation.
+  if (!approve && rejectComment === undefined) {
+    const handled = resumeOpensCompanion({
+      homeDir,
+      config,
+      runId,
+      interactive:
+        process.stdin.isTTY === true && process.stdout.isTTY === true,
+    });
+    if (handled !== null) {
+      if (handled !== 0) process.exit(handled);
+      return;
+    }
+  }
+
+  const mockFactoryR = mockExecutorFactoryFromEnv();
+  await orFailAdoption(() =>
+    resumeRun({
+      runId,
+      homeDir,
+      config,
+      ...(mockFactoryR !== undefined ? { executorFactory: mockFactoryR } : {}),
+      ...(approve ? { approve: true } : {}),
+      ...(rejectComment !== undefined ? { rejectComment } : {}),
+    }),
+  );
+}
+
+async function cmdGate(argv: string[]): Promise<void> {
+  const sub = argv[0];
+  const runId = argv[1];
+  if (
+    (sub !== "show" &&
+      sub !== "decide" &&
+      sub !== "attach" &&
+      sub !== "open") ||
+    runId === undefined ||
+    runId.startsWith("--")
+  ) {
+    process.stderr.write(
+      `Usage:\n` +
+        `  dagrun gate show <run-id>\n` +
+        `  dagrun gate open <run-id> [--cwd <dir>]      (resume the originating companion conversation, told a gate is waiting)\n` +
+        `  dagrun gate decide <run-id> --gate <node> --revision <rev> --action approve|amend|hold\n` +
+        `      [--target <node>] [--comment "<text>"] [--session <id>] [--confirm <decision-id> [--detach]]\n` +
+        `  dagrun gate attach <run-id> --session <id> [--reconstructed] [--replace] [--reseed]\n`,
+    );
+    process.exit(1);
+  }
+  const homeDir = resolveHome();
+  const config = resolveConfig(homeDir, flagValue(argv, "--config"));
+  let code = 0;
+  if (sub === "show") {
+    code = gateShow({ homeDir, config, runId });
+  } else if (sub === "open") {
+    const cwdFlag = flagValue(argv, "--cwd");
+    code = gateOpen({
+      homeDir,
+      config,
+      runId,
+      ...(cwdFlag !== undefined ? { cwd: cwdFlag } : {}),
+    });
+  } else if (sub === "attach") {
+    const session = flagValue(argv, "--session");
+    if (session === undefined) {
+      process.stderr.write(`dagrun gate attach: --session <id> is required\n`);
+      process.exit(1);
+    }
+    code = await orFailAdoption(() =>
+      gateAttach({
+        homeDir,
+        config,
+        runId,
+        session,
+        reconstructed: hasFlag(argv, "--reconstructed"),
+        replace: hasFlag(argv, "--replace"),
+        reseed: hasFlag(argv, "--reseed"),
+      }),
+    );
+  } else {
+    const gate = flagValue(argv, "--gate");
+    const revision = flagValue(argv, "--revision");
+    const action = flagValue(argv, "--action");
+    if (gate === undefined || revision === undefined || action === undefined) {
+      process.stderr.write(
+        `dagrun gate decide: --gate, --revision and --action are all required\n`,
+      );
+      process.exit(1);
+    }
+    const target = flagValue(argv, "--target");
+    const comment = flagValue(argv, "--comment");
+    // Default to the caller's own Claude session so any OTHER Claude session (a dev
+    // agent, a node) cannot confirm a decision by omitting --session. A bare
+    // terminal has no such env var and stays allowed.
+    const session =
+      flagValue(argv, "--session") ?? process.env["CLAUDE_CODE_SESSION_ID"];
+    const confirm = flagValue(argv, "--confirm");
+    if (confirm !== undefined) assertAuth(config.claudeConfigDir);
+    const detach = hasFlag(argv, "--detach");
+    if (detach && confirm === undefined) {
+      process.stderr.write(
+        `dagrun gate decide: --detach only applies with --confirm <id> (a proposal changes nothing and returns at once)\n`,
+      );
+      process.exit(1);
+    }
+    const mockFactoryG = mockExecutorFactoryFromEnv();
+    code = await orFailAdoption(() => gateDecide({
+      ...(mockFactoryG !== undefined ? { executorFactory: mockFactoryG } : {}),
+      ...(detach
+        ? {
+            detach: () => {
+              assertNoLiveDriver(homeDir, runId);
+              detachSelf(homeDir, runId, ["gate", ...argv]);
+              return 0;
+            },
+          }
+        : {}),
+      homeDir,
+      config,
+      runId,
+      gate,
+      revision,
+      action,
+      ...(target !== undefined ? { target } : {}),
+      ...(comment !== undefined ? { comment } : {}),
+      ...(session !== undefined ? { session } : {}),
+      ...(confirm !== undefined ? { confirm } : {}),
+    }));
+  }
+  if (code !== 0) process.exit(code);
+}
+
+/**
+ * `dagrun reviewers (<run-id> | --run-dir <abs path>)` — REPORT-ONLY reviewer
+ * suggestion for a run's PR (see runtime/reviewers-cli.ts). The pr node passes
+ * the literal runDir from its run-environment block, so no DAGRUNNER_HOME is
+ * needed: the home is `<runDir>/../..`. Exits 1 on any lookup failure.
+ */
+function cmdReviewers(argv: string[]): void {
+  const runDirFlag = flagValue(argv, "--run-dir");
+  const positional = argv.find((a) => !a.startsWith("--") && a !== runDirFlag);
+  if (runDirFlag === undefined && positional === undefined) {
+    process.stderr.write(
+      "Usage: dagrun reviewers <run-id> | dagrun reviewers --run-dir <abs-run-dir>   (suggest an Expert + a Stretch reviewer; report-only)\n",
+    );
+    process.exit(1);
+  }
+  const homeDir = runDirFlag !== undefined ? dirname(dirname(resolve(runDirFlag))) : resolveHome();
+  const runDir = runDirFlag !== undefined ? resolve(runDirFlag) : join(homeDir, "runs", positional ?? "");
+  if (!existsSync(join(runDir, "state.json"))) {
+    process.stderr.write(`dagrun reviewers: no run state at "${runDir}"\n`);
+    process.exit(1);
+  }
+  const config = resolveConfig(homeDir);
+  const r = suggestReviewers({
+    runDir,
+    config: config.reviewers ?? parseReviewersConfig(undefined),
+    exec: defaultExec(),
   });
+  (r.exitCode === 0 ? process.stdout : process.stderr).write(r.md);
+  process.stdout.write(`dagrun reviewers: wrote ${join(runDir, "pr", "reviewers.json")} and reviewers.md\n`);
+  if (r.exitCode !== 0) process.exit(r.exitCode);
 }
 
 function cmdStatus(argv: string[]): void {
   const homeDir = resolveHome();
+  const json = hasFlag(argv, "--json");
 
   // Determine which run to show.
   let runId = argv[0];
   if (runId === undefined || runId.startsWith("--")) {
     // No run-id given: use most recent.
     const runs = listRuns(homeDir);
-    if (runs.length === 0) {
-      process.stdout.write("dagrun: no runs found\n");
-      return;
-    }
     runId = runs[0]?.runId;
     if (runId === undefined) {
+      if (json) {
+        process.stderr.write("dagrun: no runs found\n");
+        process.exit(1);
+      }
       process.stdout.write("dagrun: no runs found\n");
       return;
     }
+  }
+
+  if (json) {
+    try {
+      process.stdout.write(
+        JSON.stringify(buildStatusJson(homeDir, runId), null, 2) + "\n",
+      );
+    } catch (e) {
+      process.stderr.write(
+        `dagrun: ${e instanceof Error ? e.message : String(e)}\n`,
+      );
+      process.exit(1);
+    }
+    return;
   }
 
   const stateFile = join(homeDir, "runs", runId, "state.json");
@@ -307,7 +664,7 @@ async function cmdRerun(argv: string[]): Promise<void> {
   const homeDir = resolveHome();
   const config = resolveConfig(homeDir);
   assertAuth(config.claudeConfigDir);
-  await rerunNode({ runId, nodeId, homeDir, config });
+  await orFailAdoption(() => rerunNode({ runId, nodeId, homeDir, config }));
 }
 
 function cmdAbort(argv: string[]): void {
@@ -350,30 +707,7 @@ function cmdCleanup(argv: string[]): void {
   const config = resolveConfig(homeDir, configFlag);
 
   if (hasFlag(argv, "--all")) {
-    const worktreeRoot = config.worktreeRoot ?? join(homeDir, "worktrees");
-    const dirs = existsSync(worktreeRoot) ? readdirSync(worktreeRoot) : [];
-    if (dirs.length === 0) {
-      process.stdout.write("dagrun: no worktrees to clean up\n");
-      return;
-    }
-    let removed = 0;
-    for (const d of dirs) {
-      const wt = join(worktreeRoot, d);
-      try {
-        execSync(`git worktree remove "${wt}" --force`, {
-          cwd: config.DEVHARNESS_SRC,
-          stdio: "inherit",
-        });
-        removed++;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        process.stderr.write(
-          `dagrun cleanup: failed to remove ${wt}: ${msg}\n`,
-        );
-      }
-    }
-    releaseLock(homeDir);
-    process.stdout.write(`dagrun: removed ${removed} worktree(s)\n`);
+    cleanupAll({ homeDir, devharnessSrc: config.DEVHARNESS_SRC });
     return;
   }
 
@@ -394,25 +728,8 @@ function cmdCleanup(argv: string[]): void {
     process.exit(1);
   }
 
-  const state = readState(stateFile);
-  const worktreePath = state.worktreePath;
-
-  try {
-    // Must run in the source repo so git can find the worktree registration.
-    execSync(`git worktree remove "${worktreePath}" --force`, {
-      cwd: config.DEVHARNESS_SRC,
-      stdio: "inherit",
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(
-      `dagrun cleanup: git worktree remove failed: ${msg}\n`,
-    );
-    // Continue — don't block lock release on git failure.
-  }
-
-  releaseLock(homeDir);
-  process.stdout.write(`dagrun: cleaned up ${runId}\n`);
+  // Adopted run: release only (the worktree is not ours). Legacy: remove it.
+  cleanupRun({ homeDir, devharnessSrc: config.DEVHARNESS_SRC, runId });
 }
 
 function cmdClear(argv: string[]): void {
@@ -677,23 +994,77 @@ function cmdSeed(argv: string[]): void {
 
 async function cmdScaffold(argv: string[]): Promise<void> {
   const nodeId = argv[0];
-  const branch = flagValue(argv, "--branch");
   const mocksDir = flagValue(argv, "--mocks");
-  if (!nodeId || nodeId.startsWith("--") || !branch) {
+  if (hasFlag(argv, "--branch")) {
     process.stderr.write(
-      "Usage: dagrun scaffold <node-id> --branch <feature-branch> [--mocks <dir>]\n",
+      "dagrun scaffold: --branch was removed — scaffold no longer creates a branch or worktree. " +
+        "Check the branch out in a worktree (`wm add <branch>` / `git worktree add`) and run from there, " +
+        "or pass --worktree <path>.\n",
     );
     process.exit(1);
   }
+  if (!nodeId || nodeId.startsWith("--")) {
+    process.stderr.write(
+      "Usage: dagrun scaffold <node-id> [--worktree <path>] [--mocks <dir>]\n",
+    );
+    process.exit(1);
+  }
+  const worktreePath = await orFailAdoption(() =>
+    resolveWorktreeArg(flagValue(argv, "--worktree"), process.cwd()),
+  );
   const homeDir = resolveHome();
   const config = resolveConfig(homeDir);
-  await scaffoldRun({
-    nodeId,
-    homeDir,
-    config,
-    branch,
-    ...(mocksDir !== undefined ? { mocksDir } : {}),
-  });
+  await orFailAdoption(() =>
+    scaffoldRun({
+      nodeId,
+      homeDir,
+      config,
+      worktreePath,
+      ...(mocksDir !== undefined ? { mocksDir } : {}),
+    }),
+  );
+}
+
+async function cmdUi(argv: string[]): Promise<void> {
+  const homeFlag = flagValue(argv, "--home");
+  const portFlag = flagValue(argv, "--port");
+  let port = DEFAULT_UI_PORT;
+  if (portFlag !== undefined) {
+    const parsed = Number(portFlag);
+    if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65535) {
+      process.stderr.write(
+        `dagrun ui: --port must be an integer 0-65535 (got "${portFlag}")\n`,
+      );
+      process.exit(1);
+    }
+    port = parsed;
+  }
+
+  let homeDir: string;
+  try {
+    homeDir = resolveUiHome(homeFlag);
+  } catch (e) {
+    process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`);
+    process.exit(1);
+  }
+
+  let handle: Awaited<ReturnType<typeof startUiServer>>;
+  try {
+    handle = await startUiServer({ homeDir, port });
+  } catch (e) {
+    // Loud, with the exact retry command — never silently pick another port.
+    process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`);
+    process.exit(1);
+  }
+
+  process.stdout.write(
+    `dagrun ui: serving ${handle.url} (home: ${homeDir})\n` +
+      `dagrun ui: read-only — Ctrl+C to stop\n`,
+  );
+  if (hasFlag(argv, "--open")) openBrowser(handle.url);
+
+  // Runs until killed (Ctrl+C / SIGINT) — the SIGINT handler in main() exits the process directly.
+  await new Promise<void>(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -708,19 +1079,25 @@ function printHelp(): void {
       "Commands:",
       "  dagrun init [--home <path>]",
       "  dagrun preflight [--base-branch <branch>] [--config <file>]",
-      "  dagrun start <workflow> --plan <file> [--max-budget-usd <n>] [--force] [--night]",
-      '  dagrun resume <run-id> [--approve] [--reject "<comment>"]',
-      "  dagrun status [<run-id>]",
+      "  dagrun start <workflow> --plan <file> [--worktree <path>] [--max-budget-usd <n>] [--force] [--night] [--companion-session <id> | --no-companion] [--detach]   (adopts an existing worktree; default = git toplevel of cwd)",
+      '  dagrun resume <run-id> [--approve] [--reject "<comment>"] [--detach]   (continue a run; --approve/--reject = direct-decision flags, same engine as gate decide)',
+      "  dagrun gate show <run-id>                                    (companion flow: show, then propose-and-confirm decide)",
+      "  dagrun gate open <run-id>                                    (resume the originating companion, with a gate prompt)",
+      "  dagrun gate decide <run-id> --gate <node> --revision <rev> --action approve|amend|hold [--target <node>] [--comment <text>] [--confirm <id> [--detach]]",
+      "  dagrun gate attach <run-id> --session <id> [--reconstructed] [--replace] [--reseed]",
+      "  dagrun reviewers <run-id> | --run-dir <abs-run-dir>          (suggest an Expert + a Stretch reviewer for the PR; report-only, never posts)",
+      "  dagrun status [<run-id>] [--json]                            (--json: read-only machine-readable status; poll this after --detach)",
+      `  dagrun ui [--port <n>] [--open] [--home <dir>]               (read-only timeline viewer, loopback-only; default port ${DEFAULT_UI_PORT})`,
       "  dagrun list",
       "  dagrun abort <run-id>",
-      "  dagrun cleanup <run-id>",
+      "  dagrun cleanup <run-id>                                      (adopted run: releases only, the worktree is yours to remove; legacy run: removes its worktree)",
       "  dagrun cleanup --all",
       "  dagrun clear <run-id>",
       "  dagrun clear --all [--yes]",
       "  dagrun report <run-id>",
       "  dagrun logs <run-id> <node>",
       "  dagrun rerun <run-id> <node-id>",
-      "  dagrun scaffold <node-id> --branch <feature-branch> [--mocks <dir>]",
+      "  dagrun scaffold <node-id> [--worktree <path>] [--mocks <dir>]",
       "  dagrun seed <repo-path>",
       '  dagrun reflect --source <node> --body "<text>" [--run-id <id>]',
       "",
@@ -774,8 +1151,20 @@ async function main(argv: string[]): Promise<number> {
       await cmdResume(rest);
       return 0;
 
+    case "gate":
+      await cmdGate(rest);
+      return 0;
+
+    case "reviewers":
+      cmdReviewers(rest);
+      return 0;
+
     case "status":
       cmdStatus(rest);
+      return 0;
+
+    case "ui":
+      await cmdUi(rest);
       return 0;
 
     case "list":

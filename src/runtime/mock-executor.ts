@@ -28,7 +28,7 @@
  *   may relocate them to a shared types module in Block 4.
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Node } from "../core/types.js";
 
@@ -36,10 +36,9 @@ import type { Node } from "../core/types.js";
  * Content to write for a produces filename. Every produces file gets canned
  * markdown EXCEPT the node's declared outcomeGate.file, which must be valid
  * JSON with the gate's field set to its first passValue — otherwise a node
- * with an outcomeGate (e.g. verify) would fail smoke:mock's happy path when
+ * with an outcomeGate would fail smoke:mock's happy path when
  * checkOutcomeGate tries to JSON.parse a markdown string. A node under test
- * for a non-PASS outcome should write verify-report.json itself via a
- * dedicated executor rather than the generic 'success'/'gate-pause' scenarios.
+ * for a non-PASS outcome uses the 'outcome-gate-fail' scenario.
  */
 function producesFileContent(node: Node, filename: string): string {
   const gate = node.outcomeGate;
@@ -65,7 +64,7 @@ export type NodeExecResult =
     };
 
 export type ExecutionCtx = {
-  /** Root run directory: ~/.local/share/dagrunner/runs/<run-id>/ */
+  /** Root run directory: ~/.local/share/camunda/dagrunner/runs/<run-id>/ */
   runDir: string;
   /** Per-node artifact directory: runDir/<nodeId>/ */
   artifactsDir: string;
@@ -118,6 +117,46 @@ const MOCK_GATE_ARTIFACT = "awaiting-review.md";
  * behaviour. Unrecognised node ids default to 'success'.
  */
 export function createMockExecutor(scenarios: ScenarioMap = {}): NodeExecutor {
+  const base = createScenarioExecutor(scenarios);
+  return async function mockExecutor(nodeId, node, ctx) {
+    const res = await base(nodeId, node, ctx);
+    // A real /pr session writes pr-meta.json (title; no prUrl yet) next to body.md,
+    // and runPrPostProcess now FAILS the run when it is missing — so a mock pr
+    // node that "wrote its output" must model that too. Not for missing-produces
+    // (that scenario models a node that wrote nothing).
+    if (
+      nodeId === "pr" &&
+      scenarios[nodeId] !== "missing-produces" &&
+      (res.status === "done" || res.status === "awaiting-gate") &&
+      existsSync(ctx.artifactsDir) &&
+      !existsSync(join(ctx.artifactsDir, "pr-meta.json"))
+    ) {
+      writeFileSync(
+        join(ctx.artifactsDir, "pr-meta.json"),
+        JSON.stringify({ title: "feat: mock pr" }, null, 2),
+        "utf8",
+      );
+    }
+    // …and (since the reviewer suggestion) a canned pr/reviewers.json, so the pre-PR
+    // gate's "absent file is a ✗" advisory is not tripped by mock runs.
+    if (
+      nodeId === "pr" &&
+      scenarios[nodeId] !== "missing-produces" &&
+      (res.status === "done" || res.status === "awaiting-gate") &&
+      existsSync(ctx.artifactsDir) &&
+      !existsSync(join(ctx.artifactsDir, "reviewers.json"))
+    ) {
+      writeFileSync(
+        join(ctx.artifactsDir, "reviewers.json"),
+        JSON.stringify({ status: "insufficient", mock: true, expert: null, stretch: null, notes: ["mock executor — no lookup performed"] }, null, 2),
+        "utf8",
+      );
+    }
+    return res;
+  };
+}
+
+function createScenarioExecutor(scenarios: ScenarioMap): NodeExecutor {
   return async function mockExecutor(
     nodeId: string,
     node: Node,
@@ -249,7 +288,7 @@ export function createMockExecutor(scenarios: ScenarioMap = {}): NodeExecutor {
       case "gate-pause-with-placeholder": {
         // Same as gate-pause but the first artifact contains an unresolved
         // "TODO" placeholder marker outside any fenced code block — models a
-        // guide.md that was never finished, so checkNoPlaceholders must fail
+        // document that was never finished, so checkNoPlaceholders must fail
         // this node on the gate-approve transition (it never reaches 'done'
         // via runDag's own done-branch — see run-engine.ts's approve paths).
         if (node.produces !== undefined) {
@@ -293,7 +332,7 @@ export function createMockExecutor(scenarios: ScenarioMap = {}): NodeExecutor {
       case "outcome-gate-fail": {
         // Write every produces file normally EXCEPT the node's declared
         // outcomeGate.file, which gets a deliberately non-passing value —
-        // models a real verify session that ran to completion but classified
+        // models a real session that ran to completion but classified
         // a non-PASS outcome (e.g. FAIL_ASSERTION). The engine's checkOutcomeGate
         // must fail this node even though the SDK session itself "succeeded".
         const artifacts: string[] = [];
@@ -327,7 +366,7 @@ export function createMockExecutor(scenarios: ScenarioMap = {}): NodeExecutor {
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const MOCK_NODE: Node = {

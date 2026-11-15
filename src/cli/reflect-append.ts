@@ -17,7 +17,7 @@ import { join, dirname } from "node:path";
 // ---------------------------------------------------------------------------
 
 export interface ReflectionEntry {
-  /** Node or agent that is appending (e.g. "define", "review", "ci-babysit"). */
+  /** Node or agent that is appending (e.g. "implement", "review", "ci-babysit"). */
   source: string;
   /** The raw tip or gotcha text. */
   body: string;

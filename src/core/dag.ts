@@ -10,8 +10,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Node, Workflow, Ctx } from "./types.js";
-import type { NodeStatus, RunState } from "./state.js";
-import { writeState } from "./state.js";
+import type { NodeState, NodeStatus, RunState } from "./state.js";
+import { accrueSessionCost, writeState } from "./state.js";
 import type { NodeExecutor } from "../runtime/mock-executor.js";
 
 // ---------------------------------------------------------------------------
@@ -24,10 +24,7 @@ import type { NodeExecutor } from "../runtime/mock-executor.js";
  * A node is ready when:
  *   (a) status === 'pending'
  *   (b) when predicate (if present and ctx provided) returns true
- *   (c) all deps are terminal (done|skipped|failed|awaiting-gate)
- *   (d) no required dep is failed or skipped (skipped = not-done, blocks non-optional)
- *
- * joinRule 'none-failed-min-one-success': all deps terminal, ≥1 done, no required dep failed.
+ *   (c) every dep is done (an optional dep that is skipped/failed is non-blocking)
  */
 export function computeReadyNodes(
   nodes: Node[],
@@ -36,56 +33,34 @@ export function computeReadyNodes(
 ): string[] {
   // Build a quick id → node map for optional lookups.
   const nodeMap = new Map<string, Node>(nodes.map((n) => [n.id, n]));
-  const terminal: ReadonlySet<NodeStatus> = new Set([
-    "done",
-    "skipped",
-    "failed",
-    "awaiting-gate",
-  ]);
-
   const ready: string[] = [];
 
   for (const node of nodes) {
     const status = statuses[node.id];
     if (status !== "pending") continue;
 
-    // Evaluate when predicate → skip (mark pending caller's job; just exclude from ready).
-    if (node.when !== undefined && ctx !== undefined && !node.when(ctx))
-      continue;
-
     const deps = node.dependsOn ?? [];
 
-    if (node.joinRule === "none-failed-min-one-success") {
-      // All deps must be terminal; ≥1 must be done; no required dep may be failed.
-      const allTerminal = deps.every((d) =>
-        terminal.has(statuses[d] ?? "pending"),
-      );
-      if (!allTerminal) continue;
-      const atLeastOneDone = deps.some((d) => statuses[d] === "done");
-      if (!atLeastOneDone) continue;
-      const requiredFailed = deps.some((d) => {
-        const depStatus = statuses[d];
-        const depNode = nodeMap.get(d);
-        return depStatus === "failed" && depNode?.optional !== true;
-      });
-      if (requiredFailed) continue;
-    } else {
-      // Default rule: every dep must be done; skipped/failed deps on non-optional block.
-      let blocked = false;
-      for (const depId of deps) {
-        const depStatus = statuses[depId] ?? "pending";
-        const depNode = nodeMap.get(depId);
-        const isOptional = depNode?.optional === true;
+    // Every dep must be done; skipped/failed deps on non-optional block.
+    let blocked = false;
+    for (const depId of deps) {
+      const depStatus = statuses[depId] ?? "pending";
+      const depNode = nodeMap.get(depId);
+      const isOptional = depNode?.optional === true;
 
-        if (depStatus === "done") continue;
-        if (depStatus === "failed" && isOptional) continue; // optional fail → treat as skipped, non-blocking for deps check
-        if (depStatus === "skipped" && isOptional) continue; // optional skipped dep is terminal and non-blocking
-        // Any other non-done status (pending, running, awaiting-gate, skipped, failed-required) blocks.
-        blocked = true;
-        break;
-      }
-      if (blocked) continue;
+      if (depStatus === "done") continue;
+      if (depStatus === "failed" && isOptional) continue; // optional fail → treat as skipped, non-blocking for deps check
+      if (depStatus === "skipped" && isOptional) continue; // optional skipped dep is terminal and non-blocking
+      // Any other non-done status (pending, running, awaiting-gate, skipped, failed-required) blocks.
+      blocked = true;
+      break;
     }
+    if (blocked) continue;
+
+    // Evaluate `when` only AFTER dependencies are satisfied: a predicate may read
+    // an upstream artifact that does not exist yet.
+    if (node.when !== undefined && ctx !== undefined && !node.when(ctx))
+      continue;
 
     ready.push(node.id);
   }
@@ -155,7 +130,7 @@ export function checkOutcomeGate(
 // noPlaceholders — mechanical scan for unresolved placeholder markers
 // ---------------------------------------------------------------------------
 
-/** Whole-word, case-sensitive placeholder markers a finished guide must not contain. */
+/** Whole-word, case-sensitive placeholder markers a finished document must not contain. */
 const PLACEHOLDER_RE = /\b(TBD|TODO|FIXME|XXX)\b/;
 
 /**
@@ -163,12 +138,14 @@ const PLACEHOLDER_RE = /\b(TBD|TODO|FIXME|XXX)\b/;
  * When `node.noPlaceholders` is absent or empty, always ok (no expectation to
  * violate). When present, for each named filename (relative to the node's
  * artifact dir): reads the file, blanks out fenced code-block content (a
- * guide may legitimately quote an existing `// TODO` from the codebase it
- * describes — that is not an unresolved placeholder authored by the guide),
+ * document may legitimately quote an existing `// TODO` from the codebase it
+ * describes — that is not an unresolved placeholder authored by the document),
  * then scans the remaining text for a whole-word match of TBD/TODO/FIXME/XXX.
  * A missing/unreadable file, or any match, fails loud with the filename,
  * matched token, and offending line — never a silent pass. Sibling to
- * checkOutcomeGate; same failure shape, same call site.
+ * checkOutcomeGate; same failure shape, same call site. No shipped node declares
+ * `noPlaceholders` today (its only users, the define/reproduce guides, were
+ * removed — DECISIONS.md § plan-is-the-guide); the primitive stays generic.
  */
 export function checkNoPlaceholders(
   runDir: string,
@@ -261,6 +238,54 @@ export function resetInterruptedNodes(
 }
 
 // ---------------------------------------------------------------------------
+// reenableBlockedDependents
+// ---------------------------------------------------------------------------
+
+/**
+ * A node that was rerun may now finish; the transitive dependents the end-of-run sweep
+ * marked `skipped` (`skipReason: "blocked-dependency"`) were skipped only because it
+ * had not. Return them to `pending` (endedAt/error/skipReason cleared; cost, attempts
+ * and gateHistory kept) so a `resume` runs them instead of ending the run `done` with
+ * them still skipped. Anything else is returned untouched: `when`-skipped and
+ * optional-failed nodes (skipped by their own rule), `done` dependents, and legacy
+ * skips with no marker. If the node is still blocked by something else, resume's
+ * sweep simply marks it again. Pure; `rerunNode` archives the reset nodes' artifacts.
+ */
+export function reenableBlockedDependents(
+  workflow: Workflow,
+  state: RunState,
+  nodeId: string,
+): { state: RunState; reset: string[] } {
+  const down = new Set<string>([nodeId]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const n of workflow.nodes) {
+      if (!down.has(n.id) && (n.dependsOn ?? []).some((d) => down.has(d))) {
+        down.add(n.id);
+        grew = true;
+      }
+    }
+  }
+  const reset = workflow.nodes
+    .map((n) => n.id)
+    .filter(
+      (id) =>
+        id !== nodeId &&
+        down.has(id) &&
+        state.nodes[id]?.status === "skipped" &&
+        state.nodes[id]?.skipReason === "blocked-dependency",
+    );
+  if (reset.length === 0) return { state, reset };
+  const nodes = { ...state.nodes };
+  for (const id of reset) {
+    // Omit, never assign undefined — exactOptionalPropertyTypes forbids it.
+    const { endedAt: _e, error: _x, skipReason: _s, ...rest } = nodes[id] as NodeState;
+    nodes[id] = { ...rest, status: "pending" };
+  }
+  return { state: { ...state, nodes }, reset };
+}
+
+// ---------------------------------------------------------------------------
 // reconcileRunningNodes
 // ---------------------------------------------------------------------------
 
@@ -314,6 +339,12 @@ export async function runDag(
   // Track retries: nodeId → retry count used.
   const retries = new Map<string, number>();
 
+  // Session id each node was handed this round (cost accrual: resume vs new session),
+  // and the cost delta each completed execution added (recorded on its attempt).
+  const resumedFrom = new Map<string, string | undefined>();
+  const attemptCost = new Map<string, number>();
+  const priorSessionOf = (id: string): string | undefined => resumedFrom.get(id);
+
   // Build per-node artifact dirs from the stateFile path (parent = run dir).
   const runDir = stateFile.replace(/\/state\.json$/, "");
 
@@ -346,6 +377,24 @@ export async function runDag(
 
   function save(): void {
     writeState(stateFile, run);
+  }
+
+  /**
+   * Append this execution to the node's attempts history (call once the node
+   * has left "running" with startedAt/endedAt set). The top-level fields keep
+   * only the latest execution; a re-run (gate revise / amend) must not erase
+   * the timing of earlier iterations.
+   */
+  function closeAttempt(id: string, cost: number): void {
+    const ns = run.nodes[id];
+    if (ns?.startedAt === undefined || ns.endedAt === undefined) return;
+    const durationMs = Math.max(0, Date.parse(ns.endedAt) - Date.parse(ns.startedAt));
+    updateNode(id, {
+      attempts: [
+        ...(ns.attempts ?? []),
+        { iteration: ns.iteration, status: ns.status, startedAt: ns.startedAt, endedAt: ns.endedAt, durationMs, cost },
+      ],
+    });
   }
 
   // Main scheduling loop.
@@ -405,6 +454,7 @@ export async function runDag(
           throw new Error(`runDag: node "${id}" not in workflow`);
         const artifactsDir = join(runDir, id);
         const priorSessionId = run.nodes[id]?.sessionId;
+        resumedFrom.set(id, priorSessionId);
         const execCtx = {
           runDir,
           artifactsDir,
@@ -460,10 +510,13 @@ export async function runDag(
                 endedAt: now,
               });
             } else {
+              const acc = accrueSessionCost(run.nodes[id], priorSessionOf(id), result);
+              attemptCost.set(id, acc.delta);
               updateNode(id, {
                 status: "done",
                 artifacts: result.artifacts,
-                cost: result.cost,
+                cost: acc.cost,
+                priorSessionsCost: acc.priorSessionsCost,
                 sessionId: result.sessionId,
                 endedAt: now,
               });
@@ -492,12 +545,18 @@ export async function runDag(
             error: result.error,
             endedAt: now,
           });
+          closeAttempt(id, 0);
           run = { ...run, status: "failed" };
           save();
           return run;
         }
       }
 
+      // A retry resets to pending (same attempt continues); anything else closes it.
+      if (run.nodes[id]?.status !== "pending") {
+        closeAttempt(id, attemptCost.get(id) ?? 0);
+        attemptCost.delete(id);
+      }
       save();
     }
 
@@ -510,13 +569,18 @@ export async function runDag(
         typeof result,
         { status: "awaiting-gate" }
       >;
+      // gateRes.cost is the session's CUMULATIVE total (a gate round resumes
+      // the same session) — accrueSessionCost replaces, never re-adds.
+      const acc = accrueSessionCost(run.nodes[id], priorSessionOf(id), gateRes);
       updateNode(id, {
         status: "awaiting-gate",
         sessionId: gateRes.sessionId,
         iteration: gateRes.iteration,
-        cost: (run.nodes[id]?.cost ?? 0) + gateRes.cost,
+        cost: acc.cost,
+        priorSessionsCost: acc.priorSessionsCost,
         endedAt: now,
       });
+      closeAttempt(id, acc.delta);
       run = { ...run, status: "paused" };
       save();
       return run; // Checkpoint-and-exit.
@@ -525,10 +589,13 @@ export async function runDag(
 
   // Bug 2: mark any remaining pending nodes as skipped (blocked-by-skipped-dep chains).
   // These are nodes that can never become ready because their only path was cut off.
+  // The marker is what lets `rerunNode` tell them from a `when`/optional skip and
+  // return them to pending (see reenableBlockedDependents).
   for (const [id, ns] of Object.entries(run.nodes)) {
     if (ns.status === "pending") {
       updateNode(id, {
         status: "skipped",
+        skipReason: "blocked-dependency",
         endedAt: new Date().toISOString(),
       });
     }
