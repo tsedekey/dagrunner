@@ -305,4 +305,4 @@ Follow the [lessons protocol](~/.claude/skills/_shared/lessons-protocol.md). **W
 EOF
 ```
 
-Check it is new first (`lessons.sh read ci-babysit --match "<term>"`). In the closing message list the titles written and ask which, if any, Eddie wants to promote; promotion stays a separate, reviewed step.
+Check it is new first (`lessons.sh read ci-babysit --match "<term>"`). **Closing message:** if this branch belongs to a dagrunner run with a driver (`jq -e --arg b "$(git branch --show-current)" 'select(.branch == $b and .companion.sessionId)' ~/.local/share/camunda/dagrunner/runs/*/state.json >/dev/null 2>&1` succeeds; look the run up by branch, because without `DAGRUN_RUN_ID` this skill's own run id is just the branch name), do not ask about promotion: leave the candidates on disk, you may name the titles written, and say that the driver judges them when the case is closed (the exception in the [lessons protocol](~/.claude/skills/_shared/lessons-protocol.md)). Otherwise list the titles written and ask which, if any, Eddie wants to promote; promotion stays a separate, reviewed step.
