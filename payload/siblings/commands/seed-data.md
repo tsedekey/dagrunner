@@ -1,6 +1,6 @@
 ---
 description: Seed a live local Orchestration Cluster from a dagrunner verify-guide seeding-spec.json via c8ctl. All output written to run artifacts dir.
-argument-hint: [path/to/seeding-spec.json] [--profile <c8ctl-profile-name>]
+argument-hint: "[path/to/seeding-spec.json] [--profile <c8ctl-profile-name>]"
 ---
 
 # /seed-data — Seed Live Cluster from seeding-spec.json

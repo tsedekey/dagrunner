@@ -1,6 +1,6 @@
 ---
 description: Generate a human-readable manual verification guide (+ seeding spec, when a live cluster is actually needed) on demand from a completed (or gate-paused) dagrunner run's artifacts — the old read-only verify-guide behavior, relocated out of the autonomous pipeline. Analyzes what the diff actually touches to pick the right verification method (REST API, secondary-storage query, zdb, or an existing automated test) instead of assuming REST/Postman is always reachable. Gates nothing.
-argument-hint: [run-id]
+argument-hint: "[run-id]"
 ---
 
 # /manual-smoke — On-Demand Manual Verification Guide
